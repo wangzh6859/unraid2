@@ -4,7 +4,7 @@ import { Video, ResizeMode } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ChevronLeft, Play, Film, X, Settings2, Info, ExternalLink, Clock, Star, ChevronDown } from 'lucide-react-native';
+import { ChevronLeft, Play, Film, X, Settings2, Info, ExternalLink, Clock, Star, ChevronDown, User, Building, Monitor, Subtitles, Volume2, Mic, Hash, Languages, Calendar } from 'lucide-react-native';
 import * as IntentLauncher from 'expo-intent-launcher';
 
 const { width, height } = Dimensions.get('window');
@@ -26,6 +26,21 @@ function formatRuntime(ticks) {
   return `${min}m`;
 }
 
+function formatBitrate(bps) {
+  if (!bps) return '';
+  const mbps = bps / 1000000;
+  return `${mbps.toFixed(1)} Mbps`;
+}
+
+function getResolution(w, h) {
+  if (!w || !h) return '';
+  if (w >= 3840 || h >= 2160) return '4K';
+  if (w >= 1920 || h >= 1080) return '1080p';
+  if (w >= 1280 || h >= 720) return '720p';
+  if (w >= 720 || h >= 576) return 'SD';
+  return `${w}x${h}`;
+}
+
 export default function MediaDetailScreen({ route, navigation }) {
   const { itemId, type, title: navTitle, imageUrl, backdropUrl } = route?.params || {};
 
@@ -39,6 +54,7 @@ export default function MediaDetailScreen({ route, navigation }) {
   const [activeSeasonId, setActiveSeasonId] = useState(null);
   const [showSeasonPicker, setShowSeasonPicker] = useState(false);
   const [similar, setSimilar] = useState([]);
+  const [mediaSource, setMediaSource] = useState(null);
 
   const [activeVideoUrl, setActiveVideoUrl] = useState(null);
   const [activeVideoId, setActiveVideoId] = useState(null);
@@ -46,9 +62,20 @@ export default function MediaDetailScreen({ route, navigation }) {
   const [showSettings, setShowSettings] = useState(false);
   const [playbackStats, setPlaybackStats] = useState({ position: 0, duration: 0 });
 
+  const [subtitleStreams, setSubtitleStreams] = useState([]);
+  const [audioStreams, setAudioStreams] = useState([]);
+  const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState(-1);
+  const [selectedAudioIndex, setSelectedAudioIndex] = useState(0);
+  const [showTrackPicker, setShowTrackPicker] = useState(null);
+
+  const [videoCodec, setVideoCodec] = useState('');
+  const [videoResolution, setVideoResolution] = useState('');
+
   const videoRef = useRef(null);
-  const playbackRef = useRef(null);
+  const initialPositionRef = useRef(0);
+  const playbackStatsRef = useRef({ position: 0, duration: 0 });
   const isMounted = useRef(true);
+  const hasSeekedRef = useRef(false);
 
   useEffect(() => {
     isMounted.current = true;
@@ -77,7 +104,7 @@ export default function MediaDetailScreen({ route, navigation }) {
 
   const fetchItemDetail = async (url, token, uid) => {
     try {
-      const data = await apiGet(url, token, `/Users/${uid}/Items/${itemId}`);
+      const data = await apiGet(url, token, `/Users/${uid}/Items/${itemId}?Fields=MediaSources,Studios,Taglines,People,OfficialRating,ProviderIds,Metascore`);
       if (!data || !isMounted.current) return;
       setItem(data);
       setResumeTicks(data.UserData?.PlaybackPositionTicks || 0);
@@ -96,6 +123,21 @@ export default function MediaDetailScreen({ route, navigation }) {
 
       const similarData = await apiGet(url, token, `/Items/${itemId}/Similar?Limit=10`);
       if (similarData?.Items) setSimilar(similarData.Items.filter(s => s.Id !== itemId).slice(0, 6));
+
+      if (data.MediaSources?.length > 0) {
+        const ms = data.MediaSources[0];
+        setMediaSource(ms);
+        setVideoCodec(ms.VideoCodec || '');
+        setVideoResolution(getResolution(ms.Width, ms.Height));
+        if (ms.MediaStreams) {
+          setSubtitleStreams(ms.MediaStreams.filter(s => s.Type === 'Subtitle'));
+          setAudioStreams(ms.MediaStreams.filter(s => s.Type === 'Audio'));
+          const defaultSub = ms.MediaStreams.find(s => s.Type === 'Subtitle' && s.IsDefault);
+          setSelectedSubtitleIndex(defaultSub ? defaultSub.Index : -1);
+          const defaultAudio = ms.MediaStreams.find(s => s.Type === 'Audio' && s.IsDefault);
+          setSelectedAudioIndex(defaultAudio ? defaultAudio.Index : (ms.MediaStreams.find(s => s.Type === 'Audio')?.Index || 0));
+        }
+      }
     } catch (e) {}
   };
 
@@ -112,11 +154,19 @@ export default function MediaDetailScreen({ route, navigation }) {
     fetchEpisodes(serverUrl, authToken, userId, seasonId);
   };
 
-  const handlePlay = (videoId, startTicks) => {
-    const url = `${serverUrl}/Videos/${videoId}/stream?static=true&api_key=${authToken}`;
+  const buildStreamUrl = (videoId, audioIdx, subIdx) => {
+    let url = `${serverUrl}/Videos/${videoId}/stream?static=true&api_key=${authToken}`;
+    if (audioIdx > 0) url += `&AudioStreamIndex=${audioIdx}`;
+    if (subIdx >= 0) url += `&SubtitleMethod=Encode&SubtitleStreamIndex=${subIdx}`;
+    return url;
+  };
+
+  const handlePlay = (videoId, startTicks, audioIdx, subIdx) => {
+    const url = buildStreamUrl(videoId, audioIdx ?? selectedAudioIndex, subIdx ?? selectedSubtitleIndex);
     setActiveVideoUrl(url);
     setActiveVideoId(videoId);
-    playbackRef.current = startTicks > 0 ? startTicks / 10000 : null;
+    initialPositionRef.current = startTicks > 0 ? startTicks / 10000 : 0;
+    hasSeekedRef.current = false;
   };
 
   const handleExternalPlay = async () => {
@@ -129,20 +179,24 @@ export default function MediaDetailScreen({ route, navigation }) {
     } else { Linking.openURL(cleanUrl); }
   };
 
-  const handleVideoRef = (status) => {
+  const handlePlaybackStatusUpdate = (status) => {
     if (status.isLoaded) {
-      playbackRef.current = status;
+      if (initialPositionRef.current > 0 && !hasSeekedRef.current && !status.didJustFinish && status.positionMillis < 100) {
+        videoRef.current?.setPositionAsync(initialPositionRef.current);
+        hasSeekedRef.current = true;
+      }
+      playbackStatsRef.current = { position: status.positionMillis, duration: status.durationMillis };
       setPlaybackStats({ position: status.positionMillis, duration: status.durationMillis });
     }
   };
 
   const closePlayer = async () => {
     await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
-    const st = playbackRef.current;
-    if (st && st.isLoaded && st.durationMillis && activeVideoId) {
-      const pct = (st.positionMillis / st.durationMillis) * 100;
+    const st = playbackStatsRef.current;
+    if (st && st.durationMillis && activeVideoId) {
+      const pct = (st.position / st.duration) * 100;
       if (pct > 1 && pct < 95) {
-        const ticks = st.positionMillis * 10000;
+        const ticks = st.position * 10000;
         try {
           await fetch(`${serverUrl}/Users/${userId}/PlayingItems/${activeVideoId}/Progress`, {
             method: 'POST',
@@ -154,12 +208,42 @@ export default function MediaDetailScreen({ route, navigation }) {
     }
     setActiveVideoUrl(null);
     setActiveVideoId(null);
-    playbackRef.current = null;
     setShowSettings(false);
+  };
+
+  const switchTrack = (type, streamIndex) => {
+    if (type === 'subtitle') setSelectedSubtitleIndex(streamIndex);
+    else setSelectedAudioIndex(streamIndex);
+    setShowTrackPicker(null);
+    if (activeVideoId) {
+      const url = buildStreamUrl(activeVideoId,
+        type === 'audio' ? streamIndex : selectedAudioIndex,
+        type === 'subtitle' ? streamIndex : selectedSubtitleIndex);
+      setActiveVideoUrl(url);
+      hasSeekedRef.current = false;
+      initialPositionRef.current = playbackStatsRef.current.position || 0;
+    }
   };
 
   const safeLockLandscape = async () => { try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE); } catch (e) {} };
   const safeLockPortrait = async () => { try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP); } catch (e) {} };
+
+  const directors = item?.People?.filter(p => p.Type === 'Director') || [];
+  const cast = item?.People?.filter(p => p.Type === 'Actor' || p.Type === 'Performer') || [];
+  const studios = item?.Studios || [];
+  const tagline = item?.Taglines?.[0] || '';
+  const officialRating = item?.OfficialRating || '';
+
+  const streamInfo = [];
+  if (videoCodec) streamInfo.push({ icon: <Monitor color="#3b82f6" size={14} />, label: `${videoCodec.toUpperCase()} ${videoResolution}` });
+  const primaryAudio = audioStreams.find(s => s.Index === selectedAudioIndex) || audioStreams[0];
+  if (primaryAudio) {
+    let audLabel = primaryAudio.Codec?.toUpperCase() || '';
+    if (primaryAudio.ChannelCount) audLabel += ` ${primaryAudio.ChannelCount}ch`;
+    if (primaryAudio.DisplayTitle) audLabel = primaryAudio.DisplayTitle;
+    streamInfo.push({ icon: <Mic color="#3b82f6" size={14} />, label: audLabel });
+  }
+  if (mediaSource?.Bitrate) streamInfo.push({ icon: <ActivityIndicator size={14} color="#3b82f6" />, label: formatBitrate(mediaSource.Bitrate) });
 
   if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View>;
   if (!item) return (
@@ -178,7 +262,21 @@ export default function MediaDetailScreen({ route, navigation }) {
           <View style={styles.playerInner}>
             <View style={styles.playerTopBar}>
               <TouchableOpacity style={styles.iconBtnLayer} onPress={closePlayer}><X color="#ffffff" size={26} /></TouchableOpacity>
-              <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowSettings(true)}><Settings2 color="#ffffff" size={24} /></TouchableOpacity>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                {subtitleStreams.length > 0 && (
+                  <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowTrackPicker('subtitle')}>
+                    <Subtitles color={selectedSubtitleIndex >= 0 ? '#fbbf24' : '#ffffff'} size={22} />
+                  </TouchableOpacity>
+                )}
+                {audioStreams.length > 1 && (
+                  <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowTrackPicker('audio')}>
+                    <Volume2 color="#ffffff" size={22} />
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowSettings(true)}>
+                  <Info color="#ffffff" size={22} />
+                </TouchableOpacity>
+              </View>
             </View>
             <Video
               ref={videoRef} style={styles.video} source={{ uri: activeVideoUrl }}
@@ -187,22 +285,34 @@ export default function MediaDetailScreen({ route, navigation }) {
                 if (fullscreenUpdate === 0 || fullscreenUpdate === 1) safeLockLandscape();
                 else if (fullscreenUpdate === 2 || fullscreenUpdate === 3) safeLockPortrait();
               }}
-              onPlaybackStatusUpdate={handleVideoRef}
-              positionMillis={playbackRef.current || 0}
+              onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
             />
+            <View style={styles.playerInfoBar}>
+              <Text style={styles.playerInfoText}>
+                {formatTime(playbackStats.position)} / {formatTime(playbackStats.duration)}
+              </Text>
+              {videoCodec ? (
+                <Text style={styles.playerInfoText}>
+                  {videoCodec.toUpperCase()} {videoResolution}
+                </Text>
+              ) : null}
+            </View>
           </View>
+
           <Modal visible={showSettings} transparent animationType="slide">
             <View style={styles.settingsOverlay}>
               <View style={styles.settingsPanel}>
                 <View style={styles.settingsHeader}>
-                  <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>播放设置</Text>
+                  <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>播放信息</Text>
                   <TouchableOpacity onPress={() => setShowSettings(false)}><X color="#9ca3af" size={24} /></TouchableOpacity>
                 </View>
                 <View style={{ padding: 20 }}>
-                  <View style={styles.statBox}>
-                    <Info color="#3b82f6" size={18} /><Text style={styles.statLabel}>实时状态</Text>
-                  </View>
-                  <Text style={styles.statText}>进度: {formatTime(playbackStats.position)} / {formatTime(playbackStats.duration)}</Text>
+                  <View style={styles.statBox}><Info color="#3b82f6" size={16} /><Text style={styles.statLabel}>进度</Text></View>
+                  <Text style={styles.statText}>{formatTime(playbackStats.position)} / {formatTime(playbackStats.duration)}</Text>
+                  {videoCodec ? <><View style={{ height: 1, backgroundColor: '#374151', marginVertical: 12 }} /><View style={styles.statBox}><Monitor color="#3b82f6" size={16} /><Text style={styles.statLabel}>视频</Text></View><Text style={styles.statText}>{videoCodec.toUpperCase()} {videoResolution}</Text></> : null}
+                  {primaryAudio ? <><View style={{ height: 1, backgroundColor: '#374151', marginVertical: 12 }} /><View style={styles.statBox}><Mic color="#3b82f6" size={16} /><Text style={styles.statLabel}>音频</Text></View><Text style={styles.statText}>{primaryAudio.DisplayTitle || `${primaryAudio.Codec?.toUpperCase() || ''} ${primaryAudio.ChannelCount ? primaryAudio.ChannelCount + 'ch' : ''}`.trim()}</Text></> : null}
+                  {mediaSource?.Container ? <><View style={{ height: 1, backgroundColor: '#374151', marginVertical: 12 }} /><View style={styles.statBox}><Hash color="#3b82f6" size={16} /><Text style={styles.statLabel}>封装</Text></View><Text style={styles.statText}>{mediaSource.Container.toUpperCase()}</Text></> : null}
+                  {mediaSource?.Bitrate ? <><View style={{ height: 1, backgroundColor: '#374151', marginVertical: 12 }} /><View style={styles.statBox}><ActivityIndicator size={14} color="#3b82f6" /><Text style={styles.statLabel}>码率</Text></View><Text style={styles.statText}>{formatBitrate(mediaSource.Bitrate)}</Text></> : null}
                   <View style={{ height: 1, backgroundColor: '#374151', marginVertical: 16 }} />
                   <TouchableOpacity style={styles.externalBtn} onPress={handleExternalPlay}>
                     <ExternalLink color="#fff" size={16} style={{ marginRight: 8 }} />
@@ -211,6 +321,38 @@ export default function MediaDetailScreen({ route, navigation }) {
                 </View>
               </View>
             </View>
+          </Modal>
+
+          <Modal visible={showTrackPicker !== null} transparent animationType="fade">
+            <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowTrackPicker(null)}>
+              <View style={styles.pickerPanel}>
+                <Text style={{ color: '#9ca3af', fontSize: 13, fontWeight: 'bold', marginBottom: 12 }}>
+                  {showTrackPicker === 'subtitle' ? '选择字幕' : '选择音轨'}
+                </Text>
+                {showTrackPicker === 'subtitle' ? (
+                  <>
+                    <TouchableOpacity style={[styles.pickerItem, selectedSubtitleIndex === -1 && styles.pickerItemActive]} onPress={() => switchTrack('subtitle', -1)}>
+                      <Text style={{ color: selectedSubtitleIndex === -1 ? '#3b82f6' : '#e5e7eb', fontWeight: selectedSubtitleIndex === -1 ? 'bold' : 'normal' }}>关闭字幕</Text>
+                    </TouchableOpacity>
+                    {subtitleStreams.map(s => (
+                      <TouchableOpacity key={s.Index} style={[styles.pickerItem, selectedSubtitleIndex === s.Index && styles.pickerItemActive]} onPress={() => switchTrack('subtitle', s.Index)}>
+                        <Text style={{ color: selectedSubtitleIndex === s.Index ? '#3b82f6' : '#e5e7eb', fontWeight: selectedSubtitleIndex === s.Index ? 'bold' : 'normal' }}>
+                          {s.DisplayTitle || `${s.Language || ''} ${s.Codec?.toUpperCase() || ''}`}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </>
+                ) : (
+                  audioStreams.map(s => (
+                    <TouchableOpacity key={s.Index} style={[styles.pickerItem, selectedAudioIndex === s.Index && styles.pickerItemActive]} onPress={() => switchTrack('audio', s.Index)}>
+                      <Text style={{ color: selectedAudioIndex === s.Index ? '#3b82f6' : '#e5e7eb', fontWeight: selectedAudioIndex === s.Index ? 'bold' : 'normal' }}>
+                        {s.DisplayTitle || `${s.Language || ''} ${s.Codec?.toUpperCase() || ''} ${s.ChannelCount ? s.ChannelCount + 'ch' : ''}`}
+                      </Text>
+                    </TouchableOpacity>
+                  ))
+                )}
+              </View>
+            </TouchableOpacity>
           </Modal>
         </View>
       )}
@@ -225,6 +367,7 @@ export default function MediaDetailScreen({ route, navigation }) {
             <Image source={{ uri: imageUrl || img(itemId, 'Primary', 240) }} style={styles.poster} />
             <View style={styles.heroText}>
               <Text style={styles.title} numberOfLines={2}>{item.Name || navTitle}</Text>
+              {tagline ? <Text style={{ color: '#9ca3af', fontSize: 12, fontStyle: 'italic', marginBottom: 4 }}>{tagline}</Text> : null}
               <View style={styles.metaRow}>
                 {item.ProductionYear ? <Text style={styles.meta}>{item.ProductionYear}</Text> : null}
                 {item.CommunityRating ? (
@@ -233,6 +376,7 @@ export default function MediaDetailScreen({ route, navigation }) {
                     <Text style={styles.ratingText}>{item.CommunityRating.toFixed(1)}</Text>
                   </View>
                 ) : null}
+                {officialRating ? <Text style={styles.meta}>{officialRating}</Text> : null}
                 {item.RunTimeTicks ? <Text style={styles.meta}>{formatRuntime(item.RunTimeTicks)}</Text> : null}
               </View>
             </View>
@@ -268,12 +412,64 @@ export default function MediaDetailScreen({ route, navigation }) {
           </TouchableOpacity>
         )}
 
+        {streamInfo.length > 0 && (
+          <View style={styles.streamInfoRow}>
+            {streamInfo.map((s, i) => (
+              <View key={i} style={styles.streamInfoChip}>
+                {s.icon}
+                <Text style={styles.streamInfoText}>{s.label}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
         {item.Overview ? (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>简介</Text>
             <Text style={styles.overview}>{item.Overview}</Text>
           </View>
         ) : null}
+
+        {(directors.length > 0 || studios.length > 0 || cast.length > 0) && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>详细信息</Text>
+            {directors.length > 0 ? (
+              <View style={styles.metaLine}>
+                <User color="#6b7280" size={14} />
+                <Text style={styles.metaLineLabel}>导演</Text>
+                <Text style={styles.metaLineValue}>{directors.map(d => d.Name).join('、')}</Text>
+              </View>
+            ) : null}
+            {studios.length > 0 ? (
+              <View style={styles.metaLine}>
+                <Building color="#6b7280" size={14} />
+                <Text style={styles.metaLineLabel}>出品</Text>
+                <Text style={styles.metaLineValue}>{studios.map(s => s.Name).join('、')}</Text>
+              </View>
+            ) : null}
+            {cast.length > 0 ? (
+              <View style={styles.metaLine}>
+                <Star color="#6b7280" size={14} />
+                <Text style={styles.metaLineLabel}>主演</Text>
+                <Text style={styles.metaLineValue}>{cast.slice(0, 6).map(p => p.Name).join('、')}</Text>
+              </View>
+            ) : null}
+            {streamInfo.length > 0 ? (
+              <View style={styles.metaLine}>
+                <Monitor color="#6b7280" size={14} />
+                <Text style={styles.metaLineLabel}>画质</Text>
+                <Text style={styles.metaLineValue}>{streamInfo.map(s => s.label).join(' | ')}</Text>
+              </View>
+            ) : null}
+            {subtitleStreams.length > 0 ? (
+              <View style={styles.metaLine}>
+                <Languages color="#6b7280" size={14} />
+                <Text style={styles.metaLineLabel}>字幕</Text>
+                <Text style={styles.metaLineValue}>{subtitleStreams.map(s => s.Language || s.Codec || '未知').join('、')}</Text>
+              </View>
+            ) : null}
+          </View>
+        )}
 
         {item.Type === 'Series' && (
           <View style={styles.section}>
@@ -345,7 +541,7 @@ const styles = StyleSheet.create({
   heroContent: { flexDirection: 'row', alignItems: 'flex-end', zIndex: 5 },
   poster: { width: 100, height: 150, borderRadius: 10, borderWidth: 2, borderColor: '#374151', elevation: 8 },
   heroText: { flex: 1, marginLeft: 14 },
-  title: { color: '#ffffff', fontSize: 20, fontWeight: 'bold', marginBottom: 6 },
+  title: { color: '#ffffff', fontSize: 20, fontWeight: 'bold', marginBottom: 4 },
   metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
   meta: { color: '#d1d5db', fontSize: 13, marginRight: 10, fontWeight: '500' },
   ratingBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(245, 158, 11, 0.2)', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 4, marginRight: 10 },
@@ -355,9 +551,15 @@ const styles = StyleSheet.create({
   genreText: { color: '#60a5fa', fontSize: 12, fontWeight: '600' },
   playBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#e50914', marginHorizontal: 20, marginTop: 14, paddingVertical: 13, borderRadius: 8, elevation: 3 },
   playText: { color: '#ffffff', fontSize: 17, fontWeight: 'bold', marginLeft: 8 },
+  streamInfoRow: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: 20, marginTop: 12, gap: 8 },
+  streamInfoChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(59, 130, 246, 0.1)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(59, 130, 246, 0.2)' },
+  streamInfoText: { color: '#93c5fd', fontSize: 11, fontWeight: '600', marginLeft: 5 },
   section: { padding: 20, paddingBottom: 0 },
   sectionTitle: { color: '#ffffff', fontSize: 17, fontWeight: 'bold', marginBottom: 12 },
   overview: { color: '#9ca3af', fontSize: 14, lineHeight: 22 },
+  metaLine: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8 },
+  metaLineLabel: { color: '#6b7280', fontSize: 13, fontWeight: 'bold', marginLeft: 6, width: 40 },
+  metaLineValue: { color: '#d1d5db', fontSize: 13, flex: 1 },
   seasonPicker: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1f2937', padding: 14, borderRadius: 10, marginBottom: 14 },
   episodeCard: { flexDirection: 'row', backgroundColor: '#1f2937', padding: 12, borderRadius: 10, marginBottom: 10 },
   episodePoster: { width: 80, height: 45, borderRadius: 6, backgroundColor: '#374151' },
@@ -366,9 +568,11 @@ const styles = StyleSheet.create({
   epOverview: { color: '#6b7280', fontSize: 11, marginTop: 4, lineHeight: 16 },
   playerWrap: { position: 'absolute', top: 0, left: 0, width, height, zIndex: 999, backgroundColor: '#000', justifyContent: 'center' },
   playerInner: { flex: 1, justifyContent: 'center', position: 'relative' },
-  playerTopBar: { position: 'absolute', top: Platform.OS === 'ios' ? 50 : 30, left: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, zIndex: 1000 },
+  playerTopBar: { position: 'absolute', top: Platform.OS === 'ios' ? 50 : 30, left: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, zIndex: 1000 },
   iconBtnLayer: { padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 },
   video: { width: '100%', height: height * 0.4 },
+  playerInfoBar: { position: 'absolute', bottom: 0, left: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8, zIndex: 1000 },
+  playerInfoText: { color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: '500', textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 4 },
   settingsOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   settingsPanel: { backgroundColor: '#1f2937', borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   settingsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#374151' },
