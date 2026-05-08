@@ -53,6 +53,9 @@ jobs:
       - name: Build Release APK
         run: cd android && ./gradlew assembleRelease
 
+      - name: List SDK build tools
+        run: ls /usr/local/lib/android/sdk/build-tools/
+
       - name: Sign APK
         uses: r0adkll/sign-android-release@v1
         id: sign_app
@@ -62,6 +65,8 @@ jobs:
           alias: ${{ env.KEY_ALIAS }}
           keyStorePassword: ${{ env.KEY_STORE_PASS }}
           keyPassword: ${{ env.KEY_PASS }}
+        env:
+          BUILD_TOOLS_VERSION: "34.0.0"
 
       - name: Upload APK
         uses: softprops/action-gh-release@v1
