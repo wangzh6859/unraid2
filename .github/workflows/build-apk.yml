@@ -24,8 +24,7 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      # 【关键修复】：必须先修改 app.json 里的版本号！
-      - name: Auto Bump Version Code
+      - name: Auto Bump Version
         run: |
           node -e "
             const fs = require('fs');
@@ -33,14 +32,24 @@ jobs:
             data.expo.android.versionCode = ${{ github.run_number }};
             data.expo.version = '1.1.${{ github.run_number }}';
             fs.writeFileSync('app.json', JSON.stringify(data, null, 2));
-            console.log('✅ 版本号已自动更新为: v' + data.expo.version + ' (Code: ' + data.expo.android.versionCode + ')');
+            console.log('v' + data.expo.version + ' (code: ' + data.expo.android.versionCode + ')');
           "
 
-      # 【关键修复】：然后再生成原生代码！这样系统才会把刚才改好的新版本号写进安卓底层去！
-      - name: Generate Native Code (Prebuild)
+      - name: Prebuild
         run: npx expo prebuild --platform android --clean --no-install
 
-      - name: Build Android Release
+      - name: Configure APK Signing
+        run: |
+          keytool -genkey -v -keystore release.keystore \
+            -alias unraid_alias -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "UnraidApp2024!" -keypass "UnraidApp2024!" \
+            -dname "CN=UnraidManager, OU=Dev, O=Personal, L=Unknown, S=Unknown, C=US"
+          echo "KEY_ALIAS=unraid_alias" >> $GITHUB_ENV
+          echo "KEY_STORE_PASS=UnraidApp2024!" >> $GITHUB_ENV
+          echo "KEY_PASS=UnraidApp2024!" >> $GITHUB_ENV
+          echo "KEY_BASE64=$(base64 -w 0 release.keystore)" >> $GITHUB_ENV
+
+      - name: Build Release APK
         run: cd android && ./gradlew assembleRelease
 
       - name: Sign APK
@@ -48,14 +57,12 @@ jobs:
         id: sign_app
         with:
           releaseDirectory: android/app/build/outputs/apk/release
-          signingKeyBase64: ${{ secrets.ANDROID_SIGNING_KEY }}
-          alias: ${{ secrets.ANDROID_ALIAS }}
-          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        env:
-          BUILD_TOOLS_VERSION: "34.0.0"
+          signingKeyBase64: ${{ env.KEY_BASE64 }}
+          alias: ${{ env.KEY_ALIAS }}
+          keyStorePassword: ${{ env.KEY_STORE_PASS }}
+          keyPassword: ${{ env.KEY_PASS }}
 
-      - name: Upload to Releases
+      - name: Upload APK
         uses: softprops/action-gh-release@v1
         with:
           files: ${{ steps.sign_app.outputs.signedReleaseFile }}
