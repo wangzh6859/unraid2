@@ -1,480 +1,382 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Linking, Alert } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Linking, Alert, FlatList } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { XMLParser } from 'fast-xml-parser';
-import base64 from 'base-64';
-import { ChevronLeft, Play, Film, MonitorPlay, X, Settings2, Video as VideoIcon, AudioLines, Subtitles, Info, ExternalLink, Clock } from 'lucide-react-native';
+import { ChevronLeft, Play, Film, X, Settings2, Info, ExternalLink, Clock, Star, ChevronDown } from 'lucide-react-native';
 import * as IntentLauncher from 'expo-intent-launcher';
 
 const { width, height } = Dimensions.get('window');
-const VIDEO_FORMATS = /\.(mkv|mp4|avi|ts|rmvb|flv|wmv|m2ts|vob|mov|webm|iso)$/i;
+
+function formatTime(millis) {
+  if (!millis) return '00:00';
+  const s = Math.floor(millis / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
+function formatRuntime(ticks) {
+  if (!ticks) return '';
+  const min = Math.round(ticks / 600000000);
+  if (min >= 60) return `${Math.floor(min / 60)}h ${min % 60}m`;
+  return `${min}m`;
+}
 
 export default function MediaDetailScreen({ route, navigation }) {
-  const movie = route?.params?.movie || {}; 
-  
-  const [authHeader, setAuthHeader] = useState('');
-  const [davOrigin, setDavOrigin] = useState('');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const { itemId, type, title: navTitle, imageUrl, backdropUrl } = route?.params || {};
+
+  const [serverUrl, setServerUrl] = useState('');
+  const [authToken, setAuthToken] = useState('');
+  const [userId, setUserId] = useState('');
+  const [item, setItem] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [seasons, setSeasons] = useState([]);
   const [episodes, setEpisodes] = useState([]);
-  const [loadingEpisodes, setLoadingEpisodes] = useState(false);
-  const [nfoDetails, setNfoDetails] = useState(movie.nfo || null);
-  
-  // 💡 记忆播放状态
-  const [resumeInfo, setResumeInfo] = useState(null); 
-  
+  const [activeSeasonId, setActiveSeasonId] = useState(null);
+  const [showSeasonPicker, setShowSeasonPicker] = useState(false);
+  const [similar, setSimilar] = useState([]);
+
   const [activeVideoUrl, setActiveVideoUrl] = useState(null);
+  const [activeVideoId, setActiveVideoId] = useState(null);
+  const [resumeTicks, setResumeTicks] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
-  const [playbackStats, setPlaybackStats] = useState({ position: 0, duration: 0, isBuffering: false });
-  
+  const [playbackStats, setPlaybackStats] = useState({ position: 0, duration: 0 });
+
   const videoRef = useRef(null);
-  const playbackStatusRef = useRef(null);
+  const playbackRef = useRef(null);
   const isMounted = useRef(true);
 
-  useEffect(() => { 
+  useEffect(() => {
     isMounted.current = true;
-    if (movie.path || movie.videoUrl) loadData(); 
+    loadAndFetch();
     return () => { isMounted.current = false; };
   }, []);
 
-  const loadData = async () => {
+  const loadAndFetch = async () => {
     try {
-      const url = await AsyncStorage.getItem('@media_dav_url');
-      const user = await AsyncStorage.getItem('@media_dav_user');
-      const pass = await AsyncStorage.getItem('@media_dav_pass');
-      
-      // 💡 读取本地播放历史，看看这部片子以前看过没
-      const historyStr = await AsyncStorage.getItem('@media_playback_progress');
-      if (historyStr) {
-        const history = JSON.parse(historyStr);
-        const pastRecord = history.find(h => h.id === movie.id);
-        if (pastRecord) setResumeInfo(pastRecord); // 找到了历史记录！
-      }
+      const [url, token, uid] = await Promise.all([
+        AsyncStorage.getItem('@emby_url'),
+        AsyncStorage.getItem('@emby_token'),
+        AsyncStorage.getItem('@emby_user_id'),
+      ]);
+      if (!url || !token || !uid) return;
+      setServerUrl(url); setAuthToken(token); setUserId(uid);
+      await fetchItemDetail(url, token, uid);
+    } catch (e) {} finally { if (isMounted.current) setLoading(false); }
+  };
 
-      if (url && user && pass) {
-        setUsername(user); setPassword(pass);
-        const auth = `Basic ${base64.encode(`${user}:${pass}`)}`;
-        setAuthHeader(auth); 
-        const origin = url.match(/^(https?:\/\/[^\/]+)/)?.[1] || '';
-        setDavOrigin(origin);
-        
-        if (movie.path) {
-          scanEpisodes(origin, auth, movie.path);
-          if (!movie.nfo?.fileinfo) fetchDetailedNfo(origin, auth, movie.path);
-        } else if (movie.videoUrl) {
-          setEpisodes([{ title: movie.title, url: movie.videoUrl, size: 0 }]);
+  const apiGet = async (url, token, path) => {
+    const res = await fetch(`${url}${path}${path.includes('?') ? '&' : '?'}api_key=${token}`);
+    if (!res.ok) return null;
+    return res.json();
+  };
+
+  const fetchItemDetail = async (url, token, uid) => {
+    try {
+      const data = await apiGet(url, token, `/Users/${uid}/Items/${itemId}`);
+      if (!data || !isMounted.current) return;
+      setItem(data);
+      setResumeTicks(data.UserData?.PlaybackPositionTicks || 0);
+
+      if (data.Type === 'Series') {
+        const seasonsData = await apiGet(url, token, `/Users/${uid}/Items?ParentId=${itemId}&IncludeItemTypes=Season&SortBy=SortName&SortOrder=Ascending`);
+        if (seasonsData?.Items) {
+          const validSeasons = seasonsData.Items.filter(s => s.Name !== 'Placeholder');
+          setSeasons(validSeasons);
+          if (validSeasons.length > 0) {
+            setActiveSeasonId(validSeasons[0].Id);
+            fetchEpisodes(url, token, uid, validSeasons[0].Id);
+          }
         }
       }
-    } catch (error) { console.log('加载凭证失败', error); }
+
+      const similarData = await apiGet(url, token, `/Items/${itemId}/Similar?Limit=10&api_key=${token}`);
+      if (similarData?.Items) setSimilar(similarData.Items.filter(s => s.Id !== itemId).slice(0, 6));
+    } catch (e) {}
   };
 
-  const fetchDetailedNfo = async (origin, auth, rootPath) => {
+  const fetchEpisodes = async (url, token, uid, seasonId) => {
     try {
-      const res = await fetch(origin + rootPath, { method: 'PROPFIND', headers: { 'Authorization': auth, 'Depth': '1' } });
-      const items = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true }).parse(await res.text())?.multistatus?.response || [];
-      const files = Array.isArray(items) ? items : [items];
-      const nfoFile = files.find(i => i.href?.toLowerCase().endsWith('.nfo'));
-      if (nfoFile) {
-        const nfoRes = await fetch(origin + nfoFile.href, { headers: { 'Authorization': auth }});
-        const parsed = new XMLParser({ ignoreAttributes: true }).parse(await nfoRes.text());
-        if (isMounted.current) setNfoDetails(parsed.movie || parsed.tvshow || parsed.episodedetails || parsed.video || movie.nfo);
-      }
-    } catch(e) {}
+      const data = await apiGet(url, token, `/Users/${uid}/Items?ParentId=${seasonId}&IncludeItemTypes=Episode&SortBy=SortName&SortOrder=Ascending`);
+      if (data?.Items && isMounted.current) setEpisodes(data.Items);
+    } catch (e) {}
   };
 
-  const scanEpisodes = async (origin, auth, rootPath) => {
-    setLoadingEpisodes(true); let found = []; let queue = [rootPath]; let depthMap = { [rootPath]: 0 }; 
-    try {
-      while (queue.length > 0) {
-        const currentPath = queue.shift(); 
-        if (!currentPath) continue;
-        const currentDepth = depthMap[currentPath] || 0;
-        if (currentDepth > 2) continue; 
-
-        const res = await fetch(origin + currentPath, { method: 'PROPFIND', headers: { 'Authorization': auth, 'Depth': '1' } });
-        const items = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true }).parse(await res.text())?.multistatus?.response || [];
-        const files = Array.isArray(items) ? items : [items];
-
-        files.forEach(i => {
-          if (!i.href) return;
-          let href = i.href.replace(/https?:\/\/[^\/]+/, '');
-          let props = i.propstat?.prop || {}; let isFolder = props.resourcetype?.collection === '';
-          
-          if (isFolder && href !== currentPath && href !== currentPath.slice(0, -1)) {
-            const cleanHref = href.endsWith('/') ? href : href + '/'; 
-            queue.push(cleanHref); depthMap[cleanHref] = currentDepth + 1;
-          } else if (VIDEO_FORMATS.test(href)) {
-            const size = Number(props.getcontentlength || 0);
-            if (size >= 100 * 1024 * 1024) { 
-              found.push({ title: decodeURIComponent(href.split('/').pop() || '').replace(VIDEO_FORMATS, ''), url: origin + href, size: size });
-            }
-          }
-        });
-      }
-      if (isMounted.current) setEpisodes(found.sort((a, b) => a.title.localeCompare(b.title)));
-    } catch (e) {} finally { if (isMounted.current) setLoadingEpisodes(false); }
+  const handleSeasonChange = (seasonId) => {
+    setActiveSeasonId(seasonId);
+    setShowSeasonPicker(false);
+    fetchEpisodes(serverUrl, authToken, userId, seasonId);
   };
 
-  const safeLockLandscape = async () => { try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE); } catch(e){} };
-  const safeLockPortrait = async () => { try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP); } catch(e){} };
-
-  const onFullscreenUpdate = async ({ fullscreenUpdate }) => {
-    if (fullscreenUpdate === 0 || fullscreenUpdate === 1) await safeLockLandscape();
-    else if (fullscreenUpdate === 2 || fullscreenUpdate === 3) await safeLockPortrait();
+  const handlePlay = (videoId, startTicks) => {
+    const url = `${serverUrl}/Videos/${videoId}/stream?static=true&api_key=${authToken}`;
+    setActiveVideoUrl(url);
+    setActiveVideoId(videoId);
+    playbackRef.current = startTicks > 0 ? startTicks / 10000 : null;
   };
 
-  const closePlayerAndSaveProgress = async () => {
-    await safeLockPortrait(); 
-    const status = playbackStatusRef.current;
-    if (status && activeVideoUrl) {
-      const percent = (status.positionMillis / status.durationMillis) * 100;
-      // 记录进度
-      const progressRecord = { id: movie.id, title: movie.title, posterUrl: movie.posterUrl, percent: percent.toFixed(1), positionMillis: status.positionMillis, videoUrl: activeVideoUrl };
-      try {
-        let history = JSON.parse(await AsyncStorage.getItem('@media_playback_progress') || '[]');
-        history = history.filter(h => h.id !== movie.id); 
-        if (percent > 1 && percent < 95) history.unshift(progressRecord); // 没看完，放进进度里
-        if (history.length > 15) history.pop(); 
-        await AsyncStorage.setItem('@media_playback_progress', JSON.stringify(history));
-        if (isMounted.current) setResumeInfo(progressRecord); // 实时更新页面按钮
-      } catch(e) {}
-    }
-    setActiveVideoUrl(null); playbackStatusRef.current = null; setShowSettings(false);
-  };
-
-  // 💡 智能的主播放按钮逻辑
-  const handleMainPlay = () => {
-    if (resumeInfo && resumeInfo.videoUrl) {
-      setActiveVideoUrl(resumeInfo.videoUrl); // 从历史记录的视频接着播
-    } else if (movie.videoUrl) {
-      setActiveVideoUrl(movie.videoUrl);
-    } else if (episodes.length > 0) {
-      setActiveVideoUrl(episodes[0].url); 
-    } else {
-      Alert.alert('提示', '未找到可播放的视频源');
-    }
-  };
-
-  // 💡 终极一键唤醒：砍掉中间弹窗，直接呼出系统原生的“打开方式”面板
   const handleExternalPlay = async () => {
     if (!activeVideoUrl) return;
-    
-    // 生成带 Basic Auth 认证的直链
-    const safeUser = encodeURIComponent(username);
-    const safePass = encodeURIComponent(password);
-    const cleanOrigin = davOrigin.replace(/^https?:\/\//, '');
-    const protocol = davOrigin.startsWith('https') ? 'https://' : 'http://';
-    const authOrigin = `${protocol}${safeUser}:${safePass}@${cleanOrigin}`;
-    const fullUrl = activeVideoUrl.replace(davOrigin, authOrigin);
-
+    const cleanUrl = activeVideoUrl;
     if (Platform.OS === 'android') {
       try {
-        // 🔥 直接向安卓底层下达 VIEW 视频的死命令，强制唤出你截图里的原生面板！
-        await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
-          data: fullUrl,
-          type: 'video/*',
-        });
-      } catch (e) {
-        Linking.openURL(fullUrl);
-      }
-    } else {
-      // iOS 设备默认交由系统处理
-      Linking.openURL(fullUrl);
+        await IntentLauncher.startActivityAsync('android.intent.action.VIEW', { data: cleanUrl, type: 'video/*' });
+      } catch (e) { Linking.openURL(cleanUrl); }
+    } else { Linking.openURL(cleanUrl); }
+  };
+
+  const handleVideoRef = (status) => {
+    if (status.isLoaded) {
+      playbackRef.current = status;
+      setPlaybackStats({ position: status.positionMillis, duration: status.durationMillis });
     }
   };
 
-  const handleTrackSelect = (type, name) => {
-    Alert.alert(
-      `切换${type === 'audio' ? '音轨' : '字幕'}`,
-      `您选择了: ${name}\n\n由于系统原生引擎限制，直接在 App 内切换 MKV 内嵌流可能会失效。请点击【呼叫外部播放器】直接进入系统播放器选择面板。`,
-      [
-        { text: '取消', style: 'cancel' },
-        { text: '呼叫外部播放器', onPress: handleExternalPlay, style: 'default' }
-      ]
-    );
+  const closePlayer = async () => {
+    await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+    const st = playbackRef.current;
+    if (st && st.isLoaded && st.durationMillis && activeVideoId) {
+      const pct = (st.positionMillis / st.durationMillis) * 100;
+      if (pct > 1 && pct < 95) {
+        const ticks = st.positionMillis * 10000;
+        try {
+          await fetch(`${serverUrl}/Users/${userId}/PlayingItems/${activeVideoId}/Progress?api_key=${authToken}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ PositionTicks: ticks, IsPaused: false, IsMuted: false }),
+          });
+        } catch (e) {}
+      }
+    }
+    setActiveVideoUrl(null);
+    setActiveVideoId(null);
+    playbackRef.current = null;
+    setShowSettings(false);
   };
 
-  const formatBytes = (bytes) => {
-    if (!bytes || bytes === 0) return '0 B'; const k = 1024; const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k)); return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
+  const safeLockLandscape = async () => { try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE); } catch (e) {} };
+  const safeLockPortrait = async () => { try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP); } catch (e) {} };
 
-  const formatTime = (millis) => {
-    if (!millis) return "00:00";
-    const totalSeconds = Math.floor(millis / 1000);
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    if (hours > 0) return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-  };
+  if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View>;
+  if (!item) return (
+    <View style={styles.center}>
+      <Text style={{ color: '#9ca3af', marginBottom: 16 }}>无法加载影片信息</Text>
+      <TouchableOpacity style={styles.backBtnTop} onPress={() => navigation.goBack()}><ChevronLeft color="#fff" size={28} /></TouchableOpacity>
+    </View>
+  );
 
-  const renderGeekPanel = () => {
-    const stream = nfoDetails?.fileinfo?.streamdetails;
-    if (!stream) return null;
-    const v = stream.video;
-    const aList = Array.isArray(stream.audio) ? stream.audio : (stream.audio ? [stream.audio] : []);
-    const sList = Array.isArray(stream.subtitle) ? stream.subtitle : (stream.subtitle ? [stream.subtitle] : []);
-
-    const renderInfoRow = (label, value) => {
-      if (!value) return null;
-      return (
-        <View style={{ flexDirection: 'row', marginBottom: 6 }}>
-          <Text style={{ color: '#9ca3af', width: 80, fontSize: 13 }}>{label}</Text><Text style={{ color: '#e5e7eb', flex: 1, fontSize: 13 }}>{value}</Text>
-        </View>
-      );
-    };
-
-    return (
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 15 }}>
-        {v && (
-          <View style={styles.geekCard}>
-            <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 15}}><VideoIcon color="#ffffff" size={18} /><Text style={styles.geekTitle}>视频</Text></View>
-            {renderInfoRow('分辨率', `${v.width}x${v.height}`)}
-            {renderInfoRow('编码格式', v.codec?.toUpperCase())}
-            {renderInfoRow('比特率', v.bitrate ? `${(v.bitrate/1000).toFixed(1)} Mbps` : null)}
-            {renderInfoRow('帧速率', v.framerate ? `${v.framerate} fps` : null)}
-            {renderInfoRow('宽高比', v.aspect)}
-          </View>
-        )}
-        {aList.length > 0 && (
-          <View style={styles.geekCard}>
-            <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 15}}><AudioLines color="#ffffff" size={18} /><Text style={styles.geekTitle}>音频</Text></View>
-            {aList.map((a, i) => (
-              <View key={i} style={{marginBottom: 10, paddingBottom: 10, borderBottomWidth: i===aList.length-1?0:1, borderBottomColor:'#374151'}}>
-                {renderInfoRow(`音轨 ${i+1}`, a.language || '未知语言')}
-                {renderInfoRow('编码', a.codec?.toUpperCase())}
-                {renderInfoRow('声道', a.channels ? `${a.channels} ch` : null)}
-              </View>
-            ))}
-          </View>
-        )}
-        {sList.length > 0 && (
-          <View style={styles.geekCard}>
-            <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 15}}><Subtitles color="#ffffff" size={18} /><Text style={styles.geekTitle}>字幕</Text></View>
-            {sList.map((s, i) => <View key={i} style={{marginBottom: 4}}>{renderInfoRow(`字幕 ${i+1}`, s.language || '未知')}</View>)}
-          </View>
-        )}
-      </ScrollView>
-    );
-  };
-
-  const renderTrackSelectors = () => {
-    const stream = nfoDetails?.fileinfo?.streamdetails;
-    if (!stream) return <Text style={styles.consoleText}>当前视频未提供轨道数据</Text>;
-    
-    const audios = Array.isArray(stream.audio) ? stream.audio : (stream.audio ? [stream.audio] : []);
-    const subs = Array.isArray(stream.subtitle) ? stream.subtitle : (stream.subtitle ? [stream.subtitle] : []);
-
-    return (
-      <View>
-        <View style={styles.consoleRow}><AudioLines color="#9ca3af" size={18} /><Text style={styles.consoleTitle}>选择音轨 ({audios.length})</Text></View>
-        {audios.length > 0 ? audios.map((a, i) => (
-          <TouchableOpacity key={i} style={styles.trackItem} onPress={() => handleTrackSelect('audio', a.language || `Track ${i+1}`)}>
-            <View style={styles.radioCircle}>{i === 0 && <View style={styles.radioInner} />}</View>
-            <Text style={styles.trackText}>Track {i+1}: {a.language || '未知语言'} ({a.codec?.toUpperCase()})</Text>
-          </TouchableOpacity>
-        )) : <Text style={styles.consoleText}>无独立音轨</Text>}
-
-        <View style={[styles.consoleRow, { marginTop: 24 }]}><Subtitles color="#9ca3af" size={18} /><Text style={styles.consoleTitle}>选择字幕 ({subs.length})</Text></View>
-        {subs.length > 0 ? (
-          <>
-            <TouchableOpacity style={styles.trackItem} onPress={() => {}}>
-              <View style={styles.radioCircle}></View><Text style={styles.trackText}>关闭字幕</Text>
-            </TouchableOpacity>
-            {subs.map((s, i) => (
-              <TouchableOpacity key={i} style={styles.trackItem} onPress={() => handleTrackSelect('sub', s.language || `Sub ${i+1}`)}>
-                <View style={styles.radioCircle}>{i === 0 && <View style={styles.radioInner} />}</View>
-                <Text style={styles.trackText}>字幕 {i+1}: {s.language || '未知'} </Text>
-              </TouchableOpacity>
-            ))}
-          </>
-        ) : <Text style={styles.consoleText}>无内嵌字幕</Text>}
-      </View>
-    );
-  };
+  const img = (id, type, w = width) => `${serverUrl}/Items/${id}/Images/${type}?api_key=${authToken}&width=${Math.round(w)}`;
 
   return (
     <View style={styles.container}>
       {activeVideoUrl && (
-        <View style={styles.playerWrapper}>
-          <View style={styles.playerContainer}>
+        <View style={styles.playerWrap}>
+          <View style={styles.playerInner}>
             <View style={styles.playerTopBar}>
-              <TouchableOpacity style={styles.iconBtnLayer} onPress={closePlayerAndSaveProgress}><X color="#ffffff" size={28} /></TouchableOpacity>
-              <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowSettings(true)}><Settings2 color="#ffffff" size={26} /></TouchableOpacity>
+              <TouchableOpacity style={styles.iconBtnLayer} onPress={closePlayer}><X color="#ffffff" size={26} /></TouchableOpacity>
+              <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowSettings(true)}><Settings2 color="#ffffff" size={24} /></TouchableOpacity>
             </View>
             <Video
-              ref={videoRef} style={styles.videoView} source={{ uri: activeVideoUrl, headers: { 'Authorization': authHeader } }}
+              ref={videoRef} style={styles.video} source={{ uri: activeVideoUrl }}
               useNativeControls resizeMode={ResizeMode.CONTAIN} shouldPlay
-              onFullscreenUpdate={onFullscreenUpdate}
-              onPlaybackStatusUpdate={(status) => { 
-                if (status.isLoaded) {
-                  playbackStatusRef.current = status;
-                  setPlaybackStats({ position: status.positionMillis, duration: status.durationMillis, isBuffering: status.isBuffering });
-                } 
+              onFullscreenUpdate={({ fullscreenUpdate }) => {
+                if (fullscreenUpdate === 0 || fullscreenUpdate === 1) safeLockLandscape();
+                else if (fullscreenUpdate === 2 || fullscreenUpdate === 3) safeLockPortrait();
               }}
-              // 💡 核心记忆读取点：如果是断点续播，直接跳到上次的位置
-              positionMillis={resumeInfo?.positionMillis || movie.positionMillis || 0} 
+              onPlaybackStatusUpdate={handleVideoRef}
+              positionMillis={playbackRef.current || 0}
             />
           </View>
-
-          <Modal visible={showSettings} transparent={true} animationType="slide">
-            <View style={styles.modalOverlay}>
-              <View style={styles.consolePanel}>
-                <View style={styles.consoleHeader}>
-                  <Text style={{color:'#fff', fontSize:18, fontWeight:'bold'}}>播放设置</Text>
+          <Modal visible={showSettings} transparent animationType="slide">
+            <View style={styles.settingsOverlay}>
+              <View style={styles.settingsPanel}>
+                <View style={styles.settingsHeader}>
+                  <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>播放设置</Text>
                   <TouchableOpacity onPress={() => setShowSettings(false)}><X color="#9ca3af" size={24} /></TouchableOpacity>
                 </View>
-                <ScrollView style={{ padding: 20 }}>
-                  <View style={styles.statsCard}>
-                    <View style={styles.consoleRow}><Info color="#3b82f6" size={18} /><Text style={styles.consoleTitle}>实时状态</Text></View>
-                    <Text style={styles.consoleText}>播放进度: {formatTime(playbackStats.position)} / {formatTime(playbackStats.duration)}</Text>
-                    <Text style={styles.consoleText}>网络缓冲: {playbackStats.isBuffering ? '🔄 缓冲中...' : '✅ 稳定'}</Text>
+                <View style={{ padding: 20 }}>
+                  <View style={styles.statBox}>
+                    <Info color="#3b82f6" size={18} /><Text style={styles.statLabel}>实时状态</Text>
                   </View>
-
-                  {renderTrackSelectors()}
-
-                  <View style={styles.divider} />
-                  
+                  <Text style={styles.statText}>进度: {formatTime(playbackStats.position)} / {formatTime(playbackStats.duration)}</Text>
+                  <View style={{ height: 1, backgroundColor: '#374151', marginVertical: 16 }} />
                   <TouchableOpacity style={styles.externalBtn} onPress={handleExternalPlay}>
-                    <ExternalLink color="#ffffff" size={18} style={{marginRight: 8}}/>
-                    <Text style={{color:'#fff', fontWeight:'bold'}}>使用第三方播放器接管播放</Text>
+                    <ExternalLink color="#fff" size={16} style={{ marginRight: 8 }} />
+                    <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 15 }}>使用第三方播放器</Text>
                   </TouchableOpacity>
-                  <Text style={{color:'#6b7280', fontSize: 11, textAlign:'center', marginTop:8, marginBottom:40}}>* 受限于原生流媒体解码器能力，如遇切换失效或无声音，请呼叫第三方专业播放器。</Text>
-                </ScrollView>
+                </View>
               </View>
             </View>
           </Modal>
         </View>
       )}
 
-      <ScrollView style={styles.scrollView} bounces={false}>
-        <View style={styles.heroSection}>
-          {movie.posterUrl ? <Image source={{ uri: movie.posterUrl, headers: { 'Authorization': authHeader } }} style={styles.backdropImage} /> : <View style={[styles.backdropImage, { backgroundColor: '#1f2937' }]} />}
-          <BlurView intensity={80} tint="dark" style={styles.blurOverlay} />
-          <View style={styles.heroGradient} />
-          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}><ChevronLeft color="#ffffff" size={32} /></TouchableOpacity>
-
+      <ScrollView style={styles.scroll}>
+        <View style={styles.hero}>
+          <Image source={{ uri: backdropUrl || img(itemId, 'Backdrop', width) }} style={styles.backdrop} />
+          <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+          <View style={styles.heroOverlay} />
+          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}><ChevronLeft color="#ffffff" size={30} /></TouchableOpacity>
           <View style={styles.heroContent}>
-            {movie.posterUrl ? <Image source={{ uri: movie.posterUrl, headers: { 'Authorization': authHeader } }} style={styles.mainPoster} /> : <View style={[styles.mainPoster, styles.fallbackPoster]}><Film color="#4b5563" size={48} /></View>}
-            <View style={styles.heroTextContainer}>
-              <Text style={styles.title} numberOfLines={2}>{nfoDetails?.title || movie.title || '未知影片'}</Text>
+            <Image source={{ uri: imageUrl || img(itemId, 'Primary', 240) }} style={styles.poster} />
+            <View style={styles.heroText}>
+              <Text style={styles.title} numberOfLines={2}>{item.Name || navTitle}</Text>
               <View style={styles.metaRow}>
-                {nfoDetails?.year && <Text style={styles.metaText}>{nfoDetails.year}</Text>}
-                {nfoDetails?.rating && nfoDetails.rating !== '0.0' && <View style={styles.ratingBadge}><Text style={styles.ratingText}>{nfoDetails.rating}</Text></View>}
-                <Text style={styles.typeBadge}>{movie.type === 'movie' ? '电影' : movie.type === 'tv' ? '剧集' : '动漫'}</Text>
+                {item.ProductionYear ? <Text style={styles.meta}>{item.ProductionYear}</Text> : null}
+                {item.CommunityRating ? (
+                  <View style={styles.ratingBadge}>
+                    <Star color="#fff" size={11} fill="#fff" style={{ marginRight: 2 }} />
+                    <Text style={styles.ratingText}>{item.CommunityRating.toFixed(1)}</Text>
+                  </View>
+                ) : null}
+                {item.RunTimeTicks ? <Text style={styles.meta}>{formatRuntime(item.RunTimeTicks)}</Text> : null}
               </View>
             </View>
           </View>
         </View>
 
-        {/* 💡 进化后的播放按钮：带记忆功能的“继续播放” */}
-        <View style={styles.actionSection}>
-          <TouchableOpacity style={styles.mainPlayBtn} onPress={handleMainPlay}>
-            {resumeInfo ? (
-              <>
-                <Clock color="#ffffff" size={22} />
-                <Text style={styles.mainPlayText}>继续播放 ({formatTime(resumeInfo.positionMillis)})</Text>
-              </>
+        {item.Genres?.length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.genreRow} contentContainerStyle={{ paddingHorizontal: 20 }}>
+            {item.Genres.map((g, i) => (
+              <View key={i} style={styles.genreChip}><Text style={styles.genreText}>{g}</Text></View>
+            ))}
+          </ScrollView>
+        )}
+
+        {item.Type === 'Series' ? (
+          <View style={{ marginHorizontal: 20, marginTop: 14 }}>
+            <TouchableOpacity style={styles.playBtn} onPress={() => {
+              const nextEp = episodes.find(e => !e.UserData?.Played);
+              if (nextEp) handlePlay(nextEp.Id, nextEp.UserData?.PlaybackPositionTicks || 0);
+              else if (episodes.length > 0) handlePlay(episodes[0].Id, 0);
+            }}>
+              <Play color="#fff" size={20} fill="#fff" /><Text style={styles.playText}>播放下一集</Text>
+            </TouchableOpacity>
+            <Text style={{ color: '#6b7280', fontSize: 11, textAlign: 'center', marginTop: 6 }}>或在下方选择剧集</Text>
+          </View>
+        ) : (
+          <TouchableOpacity style={styles.playBtn} onPress={() => handlePlay(itemId, resumeTicks)}>
+            {resumeTicks > 0 ? (
+              <><Clock color="#fff" size={20} /><Text style={styles.playText}>继续播放 ({formatTime(resumeTicks / 10000)})</Text></>
             ) : (
-              <>
-                <Play color="#ffffff" size={22} fill="#ffffff" />
-                <Text style={styles.mainPlayText}>立即播放</Text>
-              </>
+              <><Play color="#fff" size={20} fill="#fff" /><Text style={styles.playText}>立即播放</Text></>
             )}
           </TouchableOpacity>
-        </View>
+        )}
 
-        <View style={styles.infoSection}>
-          <Text style={styles.plotTitle}>剧情简介</Text>
-          <Text style={styles.plotText}>{nfoDetails?.plot || '暂无简介'}</Text>
-          {renderGeekPanel()}
-        </View>
+        {item.Overview ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>简介</Text>
+            <Text style={styles.overview}>{item.Overview}</Text>
+          </View>
+        ) : null}
 
-        <View style={styles.episodesSection}>
-          <Text style={styles.plotTitle}>{movie.type === 'movie' ? '影片源' : '选集播放'}</Text>
-          {loadingEpisodes ? (
-            <View style={styles.centerBox}><ActivityIndicator color="#3b82f6" size="large" /><Text style={{color:'#9ca3af', marginTop:10}}>正在匹配媒体流...</Text></View>
-          ) : episodes.length === 0 ? (
-            <View style={styles.centerBox}><MonitorPlay color="#4b5563" size={48} /><Text style={{color:'#9ca3af', marginTop:10}}>未找到支持的视频文件 (可能小于100MB或格式不支持)</Text></View>
-          ) : (
-            episodes.map((ep, index) => (
-              <TouchableOpacity key={index} style={styles.episodeCard} onPress={() => {
-                setActiveVideoUrl(ep.url);
-                setResumeInfo(null); // 点下面的集数，代表重新开始播这一集
-              }}>
-                <View style={styles.episodeIconBox}><Play color="#ffffff" size={20} fill="#ffffff" /></View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.episodeTitle} numberOfLines={2}>{ep.title}</Text>
-                  <Text style={styles.episodeSub}>{formatBytes(ep.size)}</Text>
+        {item.Type === 'Series' && (
+          <View style={styles.section}>
+            <TouchableOpacity style={styles.seasonPicker} onPress={() => setShowSeasonPicker(true)}>
+              <Text style={{ color: '#fff', fontWeight: 'bold' }}>
+                季度 {seasons.findIndex(s => s.Id === activeSeasonId) + 1}: {seasons.find(s => s.Id === activeSeasonId)?.Name || '未知'}
+              </Text>
+              <ChevronDown color="#9ca3af" size={20} />
+            </TouchableOpacity>
+            {episodes.map(ep => (
+              <TouchableOpacity key={ep.Id} style={styles.episodeCard} onPress={() => handlePlay(ep.Id, ep.UserData?.PlaybackPositionTicks || 0)}>
+                <Image source={{ uri: img(ep.Id, 'Primary', 160) }} style={styles.episodePoster} />
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={styles.epTitle} numberOfLines={1}>{ep.IndexNumber ? `${ep.IndexNumber}. ` : ''}{ep.Name}</Text>
+                  <Text style={styles.epSub}>{formatRuntime(ep.RunTimeTicks)}</Text>
+                  {ep.Overview ? <Text style={styles.epOverview} numberOfLines={2}>{ep.Overview}</Text> : null}
                 </View>
               </TouchableOpacity>
-            ))
-          )}
-        </View>
+            ))}
+          </View>
+        )}
+
+        {similar.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>相似推荐</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {similar.map(s => (
+                <TouchableOpacity key={s.Id} style={{ width: 110, marginRight: 12 }} onPress={() => navigation.replace('MediaDetail', {
+                  itemId: s.Id, type: s.Type, title: s.Name, imageUrl: img(s.Id, 'Primary', 220), backdropUrl: img(s.Id, 'Backdrop', 800)
+                })}>
+                  <Image source={{ uri: img(s.Id, 'Primary', 220) }} style={{ width: 110, height: 165, borderRadius: 8, backgroundColor: '#374151' }} />
+                  <Text style={{ color: '#e5e7eb', fontSize: 11, marginTop: 4, fontWeight: '500' }} numberOfLines={1}>{s.Name}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+
+        <View style={{ height: 50 }} />
       </ScrollView>
+
+      <Modal visible={showSeasonPicker} transparent animationType="fade">
+        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowSeasonPicker(false)}>
+          <View style={styles.pickerPanel}>
+            <Text style={{ color: '#9ca3af', fontSize: 13, fontWeight: 'bold', marginBottom: 12 }}>选择季度</Text>
+            {seasons.map((s, i) => (
+              <TouchableOpacity key={s.Id} style={[styles.pickerItem, activeSeasonId === s.Id && styles.pickerItemActive]} onPress={() => handleSeasonChange(s.Id)}>
+                <Text style={{ color: activeSeasonId === s.Id ? '#3b82f6' : '#e5e7eb', fontWeight: activeSeasonId === s.Id ? 'bold' : 'normal' }}>
+                  季度 {i + 1}: {s.Name}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#111827' }, scrollView: { flex: 1 },
-  heroSection: { height: 350, position: 'relative', justifyContent: 'flex-end', padding: 20, paddingBottom: 10 },
-  backdropImage: { position: 'absolute', top: 0, left: 0, width: width, height: 350, resizeMode: 'cover' },
-  blurOverlay: { position: 'absolute', top: 0, left: 0, width: width, height: 350 },
-  heroGradient: { position: 'absolute', bottom: 0, left: 0, width: width, height: 150, backgroundColor: 'rgba(17, 24, 39, 0.8)' }, 
+  container: { flex: 1, backgroundColor: '#111827' },
+  center: { flex: 1, backgroundColor: '#111827', justifyContent: 'center', alignItems: 'center' },
+  scroll: { flex: 1 },
+  hero: { height: 300, justifyContent: 'flex-end', padding: 20, paddingBottom: 10, position: 'relative' },
+  backdrop: { position: 'absolute', top: 0, left: 0, width, height: 300, resizeMode: 'cover' },
+  heroOverlay: { position: 'absolute', bottom: 0, left: 0, width, height: 120, backgroundColor: 'rgba(17, 24, 39, 0.7)' },
   backBtn: { position: 'absolute', top: Platform.OS === 'ios' ? 50 : 30, left: 16, zIndex: 10, padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 },
+  backBtnTop: { position: 'absolute', top: Platform.OS === 'ios' ? 50 : 30, left: 16, padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 },
   heroContent: { flexDirection: 'row', alignItems: 'flex-end', zIndex: 5 },
-  mainPoster: { width: 120, height: 180, borderRadius: 12, borderWidth: 2, borderColor: '#374151', elevation: 10 },
-  fallbackPoster: { backgroundColor: '#1f2937', justifyContent: 'center', alignItems: 'center' },
-  heroTextContainer: { flex: 1, marginLeft: 16, marginBottom: 0 },
-  title: { color: '#ffffff', fontSize: 22, fontWeight: 'bold', marginBottom: 8 },
-  metaRow: { flexDirection: 'row', alignItems: 'center' },
-  metaText: { color: '#e5e7eb', fontSize: 14, marginRight: 12, fontWeight: 'bold' },
-  ratingBadge: { backgroundColor: '#f59e0b', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginRight: 12 },
-  ratingText: { color: '#ffffff', fontSize: 12, fontWeight: 'bold' },
-  typeBadge: { borderWidth: 1, borderColor: '#6b7280', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, color: '#9ca3af', fontSize: 12 },
-  
-  actionSection: { paddingHorizontal: 20, marginTop: 15, marginBottom: 10 },
-  mainPlayBtn: { backgroundColor: '#e50914', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 8, elevation: 3 },
-  mainPlayText: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
-
-  infoSection: { padding: 20, paddingTop: 10 },
-  plotTitle: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginBottom: 12 },
-  plotText: { color: '#9ca3af', fontSize: 14, lineHeight: 22 },
-  
-  geekCard: { backgroundColor: 'rgba(31, 41, 55, 0.6)', padding: 16, borderRadius: 12, width: 220, marginRight: 12, borderWidth: 1, borderColor: 'rgba(55, 65, 81, 0.8)' },
-  geekTitle: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', marginLeft: 8 },
-
-  episodesSection: { padding: 20, paddingTop: 0, paddingBottom: 50 },
-  centerBox: { padding: 40, alignItems: 'center' },
-  episodeCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1f2937', padding: 16, borderRadius: 12, marginBottom: 12, elevation: 3 },
-  episodeIconBox: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
-  episodeTitle: { color: '#e5e7eb', fontSize: 15, fontWeight: 'bold', marginBottom: 4 },
-  episodeSub: { color: '#6b7280', fontSize: 12 },
-  
-  playerWrapper: { position: 'absolute', top: 0, left: 0, width: width, height: height, zIndex: 999, backgroundColor: '#000', justifyContent: 'center' },
-  playerContainer: { flex: 1, justifyContent: 'center', position: 'relative' },
+  poster: { width: 100, height: 150, borderRadius: 10, borderWidth: 2, borderColor: '#374151', elevation: 8 },
+  heroText: { flex: 1, marginLeft: 14 },
+  title: { color: '#ffffff', fontSize: 20, fontWeight: 'bold', marginBottom: 6 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
+  meta: { color: '#d1d5db', fontSize: 13, marginRight: 10, fontWeight: '500' },
+  ratingBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(245, 158, 11, 0.2)', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 4, marginRight: 10 },
+  ratingText: { color: '#f59e0b', fontSize: 12, fontWeight: 'bold' },
+  genreRow: { marginTop: 14, marginBottom: 4 },
+  genreChip: { backgroundColor: 'rgba(59, 130, 246, 0.15)', paddingHorizontal: 12, paddingVertical: 5, borderRadius: 14, marginRight: 8, borderWidth: 1, borderColor: 'rgba(59, 130, 246, 0.3)' },
+  genreText: { color: '#60a5fa', fontSize: 12, fontWeight: '600' },
+  playBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#e50914', marginHorizontal: 20, marginTop: 14, paddingVertical: 13, borderRadius: 8, elevation: 3 },
+  playText: { color: '#ffffff', fontSize: 17, fontWeight: 'bold', marginLeft: 8 },
+  section: { padding: 20, paddingBottom: 0 },
+  sectionTitle: { color: '#ffffff', fontSize: 17, fontWeight: 'bold', marginBottom: 12 },
+  overview: { color: '#9ca3af', fontSize: 14, lineHeight: 22 },
+  seasonPicker: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1f2937', padding: 14, borderRadius: 10, marginBottom: 14 },
+  episodeCard: { flexDirection: 'row', backgroundColor: '#1f2937', padding: 12, borderRadius: 10, marginBottom: 10 },
+  episodePoster: { width: 80, height: 45, borderRadius: 6, backgroundColor: '#374151' },
+  epTitle: { color: '#e5e7eb', fontSize: 14, fontWeight: 'bold' },
+  epSub: { color: '#6b7280', fontSize: 11, marginTop: 2 },
+  epOverview: { color: '#6b7280', fontSize: 11, marginTop: 4, lineHeight: 16 },
+  playerWrap: { position: 'absolute', top: 0, left: 0, width, height, zIndex: 999, backgroundColor: '#000', justifyContent: 'center' },
+  playerInner: { flex: 1, justifyContent: 'center', position: 'relative' },
   playerTopBar: { position: 'absolute', top: Platform.OS === 'ios' ? 50 : 30, left: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, zIndex: 1000 },
   iconBtnLayer: { padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 },
-  videoView: { width: '100%', height: height * 0.4 }, 
-  
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  consolePanel: { backgroundColor: '#1f2937', height: height * 0.7, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
-  consoleHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#374151' },
-  statsCard: { backgroundColor: '#111827', padding: 16, borderRadius: 12, marginBottom: 20 },
-  consoleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
-  consoleTitle: { color: '#e5e7eb', fontSize: 16, fontWeight: 'bold', marginLeft: 8 },
-  consoleText: { color: '#9ca3af', fontSize: 14, marginBottom: 6 },
-  
-  trackItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#374151' },
-  radioCircle: { height: 20, width: 20, borderRadius: 10, borderWidth: 2, borderColor: '#3b82f6', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
-  radioInner: { height: 10, width: 10, borderRadius: 5, backgroundColor: '#3b82f6' },
-  trackText: { color: '#e5e7eb', fontSize: 15 },
-  divider: { height: 1, backgroundColor: '#374151', marginVertical: 20 },
-  
-  externalBtn: { flexDirection: 'row', backgroundColor: '#8b5cf6', padding: 16, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }
+  video: { width: '100%', height: height * 0.4 },
+  settingsOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  settingsPanel: { backgroundColor: '#1f2937', borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  settingsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#374151' },
+  statBox: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  statLabel: { color: '#e5e7eb', fontSize: 15, fontWeight: 'bold', marginLeft: 8 },
+  statText: { color: '#9ca3af', fontSize: 13, marginBottom: 4 },
+  externalBtn: { flexDirection: 'row', backgroundColor: '#8b5cf6', padding: 14, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
+  pickerPanel: { backgroundColor: '#1f2937', borderRadius: 16, padding: 20, elevation: 10 },
+  pickerItem: { paddingVertical: 13, paddingHorizontal: 12, borderRadius: 8, marginBottom: 4 },
+  pickerItemActive: { backgroundColor: 'rgba(59, 130, 246, 0.15)' },
 });

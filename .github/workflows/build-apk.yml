@@ -31,7 +31,7 @@ jobs:
             const fs = require('fs');
             const data = JSON.parse(fs.readFileSync('app.json'));
             data.expo.android.versionCode = ${{ github.run_number }};
-            data.expo.version = '1.0.${{ github.run_number }}';
+            data.expo.version = '1.1.${{ github.run_number }}';
             fs.writeFileSync('app.json', JSON.stringify(data, null, 2));
             console.log('✅ 版本号已自动更新为: v' + data.expo.version + ' (Code: ' + data.expo.android.versionCode + ')');
           "
@@ -59,6 +59,26 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: ${{ steps.sign_app.outputs.signedReleaseFile }}
-          tag_name: v1.0.${{ github.run_number }}
+          tag_name: v1.1.${{ github.run_number }}
+          name: "Unraid v1.1.${{ github.run_number }} - 影音中心焕新"
+          body: |
+            ## 更新内容
+
+            ### 🎬 影音板块全面重写
+            - 从 WebDAV 切换为 **Emby 直连**，支持用户名/密码登录
+            - 全新简洁网格布局，3列海报展示
+            - 继续观看、搜索、排序（名称/年份/评分/添加时间）
+            - 无限滚动分页，下拉刷新
+            - 剧集支持季度选择器
+
+            ### 🎯 详情页优化
+            - 毛玻璃背景 + 海报展示
+            - 类型标签、相似推荐
+            - 剧集模式：季度折叠 → 展开集列表
+            - 播放进度上报 Emby，跨设备同步
+
+            ### ⚙️ 其他
+            - 版本号进入 1.1.x 时代
+            - 性能优化与稳定性改进
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
