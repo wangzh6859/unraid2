@@ -40,6 +40,7 @@ jobs:
 
       - name: Configure APK Signing
         run: |
+          rm -f release.keystore
           keytool -genkey -v -keystore release.keystore \
             -alias unraid_alias -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass "UnraidApp2024!" -keypass "UnraidApp2024!" \
