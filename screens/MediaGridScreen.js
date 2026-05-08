@@ -97,7 +97,7 @@ export default function MediaGridScreen({ navigation }) {
 
   const fetchLibraries = async (url, token, uid) => {
     try {
-      const data = await fetch(`${url}/Users/${uid}/Views?api_key=${token}`).then(r => r.json());
+      const data = await fetch(`${url}/Users/${uid}/Views`, { headers: { 'X-Emby-Token': token } }).then(r => r.json());
       const libs = (data.Items || []).filter(l => l.CollectionType === 'movies' || l.CollectionType === 'tvshows' || !l.CollectionType);
       if (isMounted.current) {
         setLibraries(libs);
@@ -113,7 +113,7 @@ export default function MediaGridScreen({ navigation }) {
       let path = `/Users/${uid}/Items?Recursive=true&IncludeItemTypes=Movie,Series&SortBy=${sort}&SortOrder=${order}&Limit=${PER_PAGE}&StartIndex=${start}`;
       if (libId && libId !== 'all') path += `&ParentId=${libId}`;
       if (search.trim()) path += `&SearchTerm=${encodeURIComponent(search.trim())}`;
-      const data = await fetch(`${url}${path}&api_key=${token}`).then(r => r.json());
+      const data = await fetch(`${url}${path}`, { headers: { 'X-Emby-Token': token } }).then(r => r.json());
       const newItems = data.Items || [];
       if (isMounted.current) {
         if (append) {
@@ -131,7 +131,7 @@ export default function MediaGridScreen({ navigation }) {
 
   const fetchContinueWatching = async (url = serverUrl, token = authToken, uid = userId) => {
     try {
-      const data = await fetch(`${url}/Users/${uid}/Items/Resume?Limit=20&api_key=${token}`).then(r => r.json());
+      const data = await fetch(`${url}/Users/${uid}/Items/Resume?Limit=20`, { headers: { 'X-Emby-Token': token } }).then(r => r.json());
       if (isMounted.current) setContinueWatching(data.Items || []);
     } catch (e) {}
   };
@@ -143,7 +143,10 @@ export default function MediaGridScreen({ navigation }) {
       let baseUrl = serverUrl.trim().replace(/\/+$/, '');
       const res = await fetch(`${baseUrl}/Users/AuthenticateByName`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Emby-Authorization': 'MediaBrowser Client="UnraidManager", Device="Phone", DeviceId="unraid-mobile-app", Version="1.1.0"',
+        },
         body: JSON.stringify({ Username: username, Pw: password }),
       });
       if (!res.ok) return Alert.alert('错误', '认证失败，请检查用户名或密码');

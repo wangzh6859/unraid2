@@ -70,7 +70,7 @@ export default function MediaDetailScreen({ route, navigation }) {
   };
 
   const apiGet = async (url, token, path) => {
-    const res = await fetch(`${url}${path}${path.includes('?') ? '&' : '?'}api_key=${token}`);
+    const res = await fetch(`${url}${path}`, { headers: { 'X-Emby-Token': token } });
     if (!res.ok) return null;
     return res.json();
   };
@@ -94,7 +94,7 @@ export default function MediaDetailScreen({ route, navigation }) {
         }
       }
 
-      const similarData = await apiGet(url, token, `/Items/${itemId}/Similar?Limit=10&api_key=${token}`);
+      const similarData = await apiGet(url, token, `/Items/${itemId}/Similar?Limit=10`);
       if (similarData?.Items) setSimilar(similarData.Items.filter(s => s.Id !== itemId).slice(0, 6));
     } catch (e) {}
   };
@@ -144,8 +144,9 @@ export default function MediaDetailScreen({ route, navigation }) {
       if (pct > 1 && pct < 95) {
         const ticks = st.positionMillis * 10000;
         try {
-          await fetch(`${serverUrl}/Users/${userId}/PlayingItems/${activeVideoId}/Progress?api_key=${authToken}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+          await fetch(`${serverUrl}/Users/${userId}/PlayingItems/${activeVideoId}/Progress`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Emby-Token': authToken },
             body: JSON.stringify({ PositionTicks: ticks, IsPaused: false, IsMuted: false }),
           });
         } catch (e) {}
