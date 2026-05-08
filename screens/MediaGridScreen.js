@@ -110,7 +110,7 @@ export default function MediaGridScreen({ navigation }) {
 
   const fetchItems = async (libId, url = serverUrl, token = authToken, uid = userId, start = 0, append = false, search = '', sort = sortBy, order = sortOrder) => {
     try {
-      let path = `/Users/${uid}/Items?Recursive=true&IncludeItemTypes=Movie,Series,Episode,Season&SortBy=${sort}&SortOrder=${order}&Limit=${PER_PAGE}&StartIndex=${start}&Fields=PrimaryImageAspectRatio,MediaSources`;
+      let path = `/Users/${uid}/Items?Recursive=true&IncludeItemTypes=Movie,Series&SortBy=${sort}&SortOrder=${order}&Limit=${PER_PAGE}&StartIndex=${start}&Fields=PrimaryImageAspectRatio,MediaSources`;
       if (libId && libId !== 'all') path += `&ParentId=${libId}`;
       if (search.trim()) path += `&SearchTerm=${encodeURIComponent(search.trim())}`;
       const data = await fetch(`${url}${path}&api_key=${token}`).then(r => r.json());
