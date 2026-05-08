@@ -97,7 +97,7 @@ export default function MediaGridScreen({ navigation }) {
 
   const fetchLibraries = async (url, token, uid) => {
     try {
-      const data = await fetch(`${url}/Users/${uid}/Views`, { headers: { 'X-Emby-Token': token } }).then(r => r.json());
+      const data = await fetch(`${url}/Users/${uid}/Views?api_key=${token}`).then(r => r.json());
       const libs = (data.Items || []).filter(l => l.CollectionType === 'movies' || l.CollectionType === 'tvshows' || !l.CollectionType);
       if (isMounted.current) {
         setLibraries(libs);
@@ -110,10 +110,10 @@ export default function MediaGridScreen({ navigation }) {
 
   const fetchItems = async (libId, url = serverUrl, token = authToken, uid = userId, start = 0, append = false, search = '', sort = sortBy, order = sortOrder) => {
     try {
-      let path = `/Users/${uid}/Items?Recursive=true&IncludeItemTypes=Movie,Series&SortBy=${sort}&SortOrder=${order}&Limit=${PER_PAGE}&StartIndex=${start}`;
+      let path = `/Users/${uid}/Items?Recursive=true&IncludeItemTypes=Movie,Series,Episode,Season&SortBy=${sort}&SortOrder=${order}&Limit=${PER_PAGE}&StartIndex=${start}&Fields=PrimaryImageAspectRatio,MediaSources`;
       if (libId && libId !== 'all') path += `&ParentId=${libId}`;
       if (search.trim()) path += `&SearchTerm=${encodeURIComponent(search.trim())}`;
-      const data = await fetch(`${url}${path}`, { headers: { 'X-Emby-Token': token } }).then(r => r.json());
+      const data = await fetch(`${url}${path}&api_key=${token}`).then(r => r.json());
       const newItems = data.Items || [];
       if (isMounted.current) {
         if (append) {
@@ -131,7 +131,7 @@ export default function MediaGridScreen({ navigation }) {
 
   const fetchContinueWatching = async (url = serverUrl, token = authToken, uid = userId) => {
     try {
-      const data = await fetch(`${url}/Users/${uid}/Items/Resume?Limit=20`, { headers: { 'X-Emby-Token': token } }).then(r => r.json());
+      const data = await fetch(`${url}/Users/${uid}/Items/Resume?Limit=20&api_key=${token}`).then(r => r.json());
       if (isMounted.current) setContinueWatching(data.Items || []);
     } catch (e) {}
   };
@@ -187,17 +187,21 @@ export default function MediaGridScreen({ navigation }) {
   const handleRefresh = async () => {
     setRefreshing(true);
     setStartIndex(0);
-    await Promise.all([
-      fetchContinueWatching(),
-      fetchItems(activeLibId, serverUrl, authToken, userId, 0),
-    ]);
+    try {
+      await Promise.all([
+        fetchContinueWatching(),
+        fetchItems(activeLibId, serverUrl, authToken, userId, 0),
+      ]);
+    } catch (e) {}
     if (isMounted.current) setRefreshing(false);
   };
 
   const handleLoadMore = async () => {
     if (loadingMore || startIndex >= totalItems) return;
     setLoadingMore(true);
-    await fetchItems(activeLibId, serverUrl, authToken, userId, startIndex, true);
+    try {
+      await fetchItems(activeLibId, serverUrl, authToken, userId, startIndex, true);
+    } catch (e) {}
     if (isMounted.current) setLoadingMore(false);
   };
 

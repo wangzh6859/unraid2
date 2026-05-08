@@ -97,7 +97,8 @@ export default function MediaDetailScreen({ route, navigation }) {
   };
 
   const apiGet = async (url, token, path) => {
-    const res = await fetch(`${url}${path}`, { headers: { 'X-Emby-Token': token } });
+    const separator = path.includes('?') ? '&' : '?';
+    const res = await fetch(`${url}${path}${separator}api_key=${token}`);
     if (!res.ok) return null;
     return res.json();
   };
@@ -156,7 +157,7 @@ export default function MediaDetailScreen({ route, navigation }) {
 
   const buildStreamUrl = (videoId, audioIdx, subIdx) => {
     let url = `${serverUrl}/Videos/${videoId}/stream?static=true&api_key=${authToken}`;
-    if (audioIdx > 0) url += `&AudioStreamIndex=${audioIdx}`;
+    if (audioIdx >= 0) url += `&AudioStreamIndex=${audioIdx}`;
     if (subIdx >= 0) url += `&SubtitleMethod=Encode&SubtitleStreamIndex=${subIdx}`;
     return url;
   };
@@ -198,9 +199,9 @@ export default function MediaDetailScreen({ route, navigation }) {
       if (pct > 1 && pct < 95) {
         const ticks = st.position * 10000;
         try {
-          await fetch(`${serverUrl}/Users/${userId}/PlayingItems/${activeVideoId}/Progress`, {
+          await fetch(`${serverUrl}/Users/${userId}/PlayingItems/${activeVideoId}/Progress?api_key=${authToken}`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Emby-Token': authToken },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ PositionTicks: ticks, IsPaused: false, IsMuted: false }),
           });
         } catch (e) {}
