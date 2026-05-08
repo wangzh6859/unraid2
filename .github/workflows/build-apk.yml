@@ -3,6 +3,9 @@ on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -68,8 +71,14 @@ jobs:
         env:
           BUILD_TOOLS_VERSION: "34.0.0"
 
-      - name: Upload APK
-        uses: softprops/action-gh-release@v1
+      - name: Upload APK as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-signed-apk
+          path: ${{ steps.sign_app.outputs.signedReleaseFile }}
+
+      - name: Upload APK to Release
+        uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.sign_app.outputs.signedReleaseFile }}
           tag_name: v1.1.${{ github.run_number }}
