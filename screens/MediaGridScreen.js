@@ -110,7 +110,13 @@ export default function MediaGridScreen({ navigation }) {
 
   const fetchItems = async (libId, url = serverUrl, token = authToken, uid = userId, start = 0, append = false, search = '', sort = sortBy, order = sortOrder) => {
     try {
-      let path = `/Users/${uid}/Items?Recursive=true&IncludeItemTypes=Movie,Series&SortBy=${sort}&SortOrder=${order}&Limit=${PER_PAGE}&StartIndex=${start}`;
+      let includeTypes = 'Movie,Series';
+      if (libId && libId !== 'all') {
+        const lib = libraries.find(l => l.Id === libId);
+        if (lib?.CollectionType === 'movies') includeTypes = 'Movie';
+        else if (lib?.CollectionType === 'tvshows') includeTypes = 'Series';
+      }
+      let path = `/Users/${uid}/Items?Recursive=true&IncludeItemTypes=${includeTypes}&SortBy=${sort}&SortOrder=${order}&Limit=${PER_PAGE}&StartIndex=${start}`;
       if (libId && libId !== 'all') path += `&ParentId=${libId}`;
       if (search.trim()) path += `&SearchTerm=${encodeURIComponent(search.trim())}`;
       const data = await fetch(`${url}${path}`, { headers: { 'X-Emby-Token': token } }).then(r => r.json());
@@ -273,6 +279,7 @@ export default function MediaGridScreen({ navigation }) {
       </View>
 
       <FlatList
+        key={`${activeLibId}-${sortBy}-${sortOrder}`}
         data={items}
         keyExtractor={item => item.Id}
         numColumns={3}
