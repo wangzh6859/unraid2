@@ -187,17 +187,21 @@ export default function MediaGridScreen({ navigation }) {
   const handleRefresh = async () => {
     setRefreshing(true);
     setStartIndex(0);
-    await Promise.all([
-      fetchContinueWatching(),
-      fetchItems(activeLibId, serverUrl, authToken, userId, 0),
-    ]);
+    try {
+      await Promise.all([
+        fetchContinueWatching(),
+        fetchItems(activeLibId, serverUrl, authToken, userId, 0),
+      ]);
+    } catch (e) {}
     if (isMounted.current) setRefreshing(false);
   };
 
   const handleLoadMore = async () => {
     if (loadingMore || startIndex >= totalItems) return;
     setLoadingMore(true);
-    await fetchItems(activeLibId, serverUrl, authToken, userId, startIndex, true);
+    try {
+      await fetchItems(activeLibId, serverUrl, authToken, userId, startIndex, true);
+    } catch (e) {}
     if (isMounted.current) setLoadingMore(false);
   };
 

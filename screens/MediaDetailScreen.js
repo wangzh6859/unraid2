@@ -156,7 +156,7 @@ export default function MediaDetailScreen({ route, navigation }) {
 
   const buildStreamUrl = (videoId, audioIdx, subIdx) => {
     let url = `${serverUrl}/Videos/${videoId}/stream?static=true&api_key=${authToken}`;
-    if (audioIdx > 0) url += `&AudioStreamIndex=${audioIdx}`;
+    if (audioIdx >= 0) url += `&AudioStreamIndex=${audioIdx}`;
     if (subIdx >= 0) url += `&SubtitleMethod=Encode&SubtitleStreamIndex=${subIdx}`;
     return url;
   };
