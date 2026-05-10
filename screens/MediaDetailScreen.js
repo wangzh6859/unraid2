@@ -155,10 +155,10 @@ export default function MediaDetailScreen({ route, navigation }) {
   };
 
   const buildStreamUrl = (videoId, audioIdx, subIdx) => {
-    const useTranscode = audioIdx >= 0 || subIdx >= 0;
-    let url = `${serverUrl}/Videos/${videoId}/stream?static=${!useTranscode}&api_key=${authToken}`;
-    if (audioIdx >= 0) url += `&AudioStreamIndex=${audioIdx}`;
-    if (subIdx >= 0) url += `&SubtitleMethod=Encode&SubtitleStreamIndex=${subIdx}`;
+    const hasSubs = subIdx >= 0;
+    let url = `${serverUrl}/Videos/${videoId}/stream?static=${!hasSubs}&api_key=${authToken}`;
+    if (audioIdx >= 0) url += `&AudioStreamIndex=${audioIdx}&AudioCodec=aac`;
+    if (subIdx >= 0) url += `&SubtitleMethod=Encode&SubtitleStreamIndex=${subIdx}&VideoCodec=h264&AudioCodec=aac`;
     return url;
   };
 
