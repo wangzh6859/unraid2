@@ -38,8 +38,31 @@ jobs:
             console.log('v' + data.expo.version + ' (code: ' + data.expo.android.versionCode + ')');
           "
 
-      - name: Prebuild
-        run: npx expo prebuild --platform android --clean --no-install
+    - name: Prebuild
+      run: npx expo prebuild --platform android --clean --no-install
+
+    - name: Fix libc++_shared.so conflict
+      run: |
+        cat >> android/app/build.gradle << 'EOF'
+        tasks.whenTaskAdded((tas -> {
+            if (tas.name.contains("merge") && tas.name.contains("NativeLibs")) {
+                tasks.named(tas.name) { it doFirst {
+                    java.nio.file.Path notNeededDirectory = it.externalLibNativeLibs
+                        .getFiles()
+                        .stream()
+                        .filter(file -> file.toString().contains("jetified-react-native") || file.toString().contains("jetified-react-android"))
+                        .findAny()
+                        .orElse(null)
+                        .toPath();
+                    java.nio.file.Files.walk(notNeededDirectory).forEach(file -> {
+                        if (file.toString().contains("libc++_shared.so")) {
+                            java.nio.file.Files.delete(file);
+                        }
+                    });
+                } }
+            }
+        })
+        EOF
 
       - name: Configure APK Signing
         run: |

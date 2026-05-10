@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Linking, Alert, FlatList } from 'react-native';
-import { Video, ResizeMode } from 'expo-av';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Linking, FlatList, NativeModules } from 'react-native';
+import { VLCPlayer } from 'react-native-vlc-media-player';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -10,7 +10,7 @@ import * as IntentLauncher from 'expo-intent-launcher';
 const { width, height } = Dimensions.get('window');
 
 function formatTime(millis) {
-  if (!millis) return '00:00';
+  if (!millis && millis !== 0) return '00:00';
   const s = Math.floor(millis / 1000);
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -71,17 +71,23 @@ export default function MediaDetailScreen({ route, navigation }) {
   const [videoCodec, setVideoCodec] = useState('');
   const [videoResolution, setVideoResolution] = useState('');
 
-  const videoRef = useRef(null);
-  const initialPositionRef = useRef(0);
+  const vlcRef = useRef(null);
   const playbackStatsRef = useRef({ position: 0, duration: 0 });
   const isMounted = useRef(true);
-  const hasSeekedRef = useRef(false);
+  const seekPosRef = useRef(-1);
 
   useEffect(() => {
     isMounted.current = true;
     loadAndFetch();
     return () => { isMounted.current = false; };
   }, []);
+
+  useEffect(() => {
+    if (seekPosRef.current >= 0 && vlcRef.current && playbackStatsRef.current.duration > 0) {
+      vlcRef.current.seek(seekPosRef.current);
+      seekPosRef.current = -1;
+    }
+  }, [playbackStats.duration]);
 
   const loadAndFetch = async () => {
     try {
@@ -154,47 +160,81 @@ export default function MediaDetailScreen({ route, navigation }) {
     fetchEpisodes(serverUrl, authToken, userId, seasonId);
   };
 
-  const buildStreamUrl = (videoId, audioIdx, subIdx) => {
-    const hasSubs = subIdx >= 0;
-    let url = `${serverUrl}/Videos/${videoId}/stream?static=${!hasSubs}&api_key=${authToken}`;
-    if (audioIdx >= 0) url += `&AudioStreamIndex=${audioIdx}&AudioCodec=aac`;
-    if (subIdx >= 0) url += `&SubtitleMethod=Encode&SubtitleStreamIndex=${subIdx}&VideoCodec=h264&AudioCodec=aac`;
-    return url;
+  const buildStreamUrl = (videoId) => {
+    return `${serverUrl}/Videos/${videoId}/stream?static=true&api_key=${authToken}`;
   };
 
-  const handlePlay = (videoId, startTicks, audioIdx, subIdx) => {
-    const url = buildStreamUrl(videoId, audioIdx ?? selectedAudioIndex, subIdx ?? selectedSubtitleIndex);
+  const handlePlay = (videoId, startTicks) => {
+    const url = buildStreamUrl(videoId);
     setActiveVideoUrl(url);
     setActiveVideoId(videoId);
-    initialPositionRef.current = startTicks > 0 ? startTicks / 10000 : 0;
-    hasSeekedRef.current = false;
+    safeLockLandscape();
+    if (startTicks && startTicks > 0) {
+      const totalMs = mediaSource?.RunTimeTicks ? mediaSource.RunTimeTicks / 10000 : 0;
+      if (totalMs > 0) {
+        seekPosRef.current = (startTicks / 10000) / totalMs;
+      }
+    } else {
+      seekPosRef.current = -1;
+    }
   };
 
   const handleExternalPlay = async () => {
     if (!activeVideoUrl) return;
-    const cleanUrl = activeVideoUrl;
     if (Platform.OS === 'android') {
       try {
-        await IntentLauncher.startActivityAsync('android.intent.action.VIEW', { data: cleanUrl, type: 'video/*' });
-      } catch (e) { Linking.openURL(cleanUrl); }
-    } else { Linking.openURL(cleanUrl); }
+        await IntentLauncher.startActivityAsync('android.intent.action.VIEW', { data: activeVideoUrl, type: 'video/*' });
+      } catch (e) { Linking.openURL(activeVideoUrl); }
+    } else { Linking.openURL(activeVideoUrl); }
   };
 
-  const handlePlaybackStatusUpdate = (status) => {
-    if (status.isLoaded) {
-      if (initialPositionRef.current > 0 && !hasSeekedRef.current && !status.didJustFinish && status.positionMillis < 100) {
-        videoRef.current?.setPositionAsync(initialPositionRef.current);
-        hasSeekedRef.current = true;
-      }
-      playbackStatsRef.current = { position: status.positionMillis, duration: status.durationMillis };
-      setPlaybackStats({ position: status.positionMillis, duration: status.durationMillis });
+  const onVlcProgress = useCallback((data) => {
+    if (data && data.currentTime !== undefined) {
+      const posMs = data.currentTime;
+      const durMs = data.duration || 0;
+      playbackStatsRef.current = { position: posMs, duration: durMs };
+      setPlaybackStats({ position: posMs, duration: durMs });
     }
-  };
+  }, []);
+
+  const onVlcLoad = useCallback((data) => {
+    if (data && data.audioTracks) {
+      const tracks = data.audioTracks.filter(t => t.id !== -1);
+      if (tracks.length > 0 && isMounted.current) {
+        setAudioStreams(prev => {
+          if (prev.length > 0) return prev;
+          return tracks.map(t => ({
+            Index: t.id,
+            DisplayTitle: t.name || `Track ${t.id}`,
+            Codec: '',
+            ChannelCount: 0,
+            Language: '',
+            Type: 'Audio',
+          }));
+        });
+      }
+    }
+    if (data && data.textTracks) {
+      const tracks = data.textTracks.filter(t => t.id !== -1);
+      if (tracks.length > 0 && isMounted.current) {
+        setSubtitleStreams(prev => {
+          if (prev.length > 0) return prev;
+          return tracks.map(t => ({
+            Index: t.id,
+            DisplayTitle: t.name || `Subtitle ${t.id}`,
+            Codec: '',
+            Language: '',
+            Type: 'Subtitle',
+          }));
+        });
+      }
+    }
+  }, []);
 
   const closePlayer = async () => {
-    await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+    await safeLockPortrait();
     const st = playbackStatsRef.current;
-    if (st && st.durationMillis && activeVideoId) {
+    if (st && st.duration && activeVideoId) {
       const pct = (st.position / st.duration) * 100;
       if (pct > 1 && pct < 95) {
         const ticks = st.position * 10000;
@@ -210,20 +250,23 @@ export default function MediaDetailScreen({ route, navigation }) {
     setActiveVideoUrl(null);
     setActiveVideoId(null);
     setShowSettings(false);
+    seekPosRef.current = -1;
   };
 
-  const switchTrack = (type, streamIndex) => {
-    if (type === 'subtitle') setSelectedSubtitleIndex(streamIndex);
-    else setSelectedAudioIndex(streamIndex);
-    setShowTrackPicker(null);
-    if (activeVideoId) {
-      const url = buildStreamUrl(activeVideoId,
-        type === 'audio' ? streamIndex : selectedAudioIndex,
-        type === 'subtitle' ? streamIndex : selectedSubtitleIndex);
-      setActiveVideoUrl(url);
-      hasSeekedRef.current = false;
-      initialPositionRef.current = playbackStatsRef.current.position || 0;
+  const switchAudioTrack = (trackId) => {
+    if (vlcRef.current) {
+      vlcRef.current.audioTrack = trackId;
     }
+    setSelectedAudioIndex(trackId);
+    setShowTrackPicker(null);
+  };
+
+  const switchSubtitleTrack = (trackId) => {
+    if (vlcRef.current) {
+      vlcRef.current.textTrack = trackId;
+    }
+    setSelectedSubtitleIndex(trackId);
+    setShowTrackPicker(null);
   };
 
   const safeLockLandscape = async () => { try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE); } catch (e) {} };
@@ -279,14 +322,17 @@ export default function MediaDetailScreen({ route, navigation }) {
                 </TouchableOpacity>
               </View>
             </View>
-            <Video
-              ref={videoRef} style={styles.video} source={{ uri: activeVideoUrl }}
-              useNativeControls resizeMode={ResizeMode.CONTAIN} shouldPlay
-              onFullscreenUpdate={({ fullscreenUpdate }) => {
-                if (fullscreenUpdate === 0 || fullscreenUpdate === 1) safeLockLandscape();
-                else if (fullscreenUpdate === 2 || fullscreenUpdate === 3) safeLockPortrait();
-              }}
-              onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
+            <VLCPlayer
+              ref={vlcRef}
+              style={styles.video}
+              source={{ uri: activeVideoUrl }}
+              autoplay={true}
+              autoAspectRatio={true}
+              resizeMode="contain"
+              onProgress={onVlcProgress}
+              onLoad={onVlcLoad}
+              onEnded={closePlayer}
+              onError={(e) => console.warn('VLC Error:', e)}
             />
             <View style={styles.playerInfoBar}>
               <Text style={styles.playerInfoText}>
@@ -332,11 +378,11 @@ export default function MediaDetailScreen({ route, navigation }) {
                 </Text>
                 {showTrackPicker === 'subtitle' ? (
                   <>
-                    <TouchableOpacity style={[styles.pickerItem, selectedSubtitleIndex === -1 && styles.pickerItemActive]} onPress={() => switchTrack('subtitle', -1)}>
+                    <TouchableOpacity style={[styles.pickerItem, selectedSubtitleIndex === -1 && styles.pickerItemActive]} onPress={() => switchSubtitleTrack(-1)}>
                       <Text style={{ color: selectedSubtitleIndex === -1 ? '#3b82f6' : '#e5e7eb', fontWeight: selectedSubtitleIndex === -1 ? 'bold' : 'normal' }}>关闭字幕</Text>
                     </TouchableOpacity>
                     {subtitleStreams.map(s => (
-                      <TouchableOpacity key={s.Index} style={[styles.pickerItem, selectedSubtitleIndex === s.Index && styles.pickerItemActive]} onPress={() => switchTrack('subtitle', s.Index)}>
+                      <TouchableOpacity key={s.Index} style={[styles.pickerItem, selectedSubtitleIndex === s.Index && styles.pickerItemActive]} onPress={() => switchSubtitleTrack(s.Index)}>
                         <Text style={{ color: selectedSubtitleIndex === s.Index ? '#3b82f6' : '#e5e7eb', fontWeight: selectedSubtitleIndex === s.Index ? 'bold' : 'normal' }}>
                           {s.DisplayTitle || `${s.Language || ''} ${s.Codec?.toUpperCase() || ''}`}
                         </Text>
@@ -345,7 +391,7 @@ export default function MediaDetailScreen({ route, navigation }) {
                   </>
                 ) : (
                   audioStreams.map(s => (
-                    <TouchableOpacity key={s.Index} style={[styles.pickerItem, selectedAudioIndex === s.Index && styles.pickerItemActive]} onPress={() => switchTrack('audio', s.Index)}>
+                    <TouchableOpacity key={s.Index} style={[styles.pickerItem, selectedAudioIndex === s.Index && styles.pickerItemActive]} onPress={() => switchAudioTrack(s.Index)}>
                       <Text style={{ color: selectedAudioIndex === s.Index ? '#3b82f6' : '#e5e7eb', fontWeight: selectedAudioIndex === s.Index ? 'bold' : 'normal' }}>
                         {s.DisplayTitle || `${s.Language || ''} ${s.Codec?.toUpperCase() || ''} ${s.ChannelCount ? s.ChannelCount + 'ch' : ''}`}
                       </Text>
