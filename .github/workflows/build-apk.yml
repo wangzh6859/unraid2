@@ -41,38 +41,39 @@ jobs:
     - name: Prebuild
       run: npx expo prebuild --platform android --clean --no-install
 
-    - name: Fix libc++_shared.so conflict for VLC
+    - name: Fix VLC build issues
       run: |
         python3 -c "
+        import re
+
+        # Fix 1: Add packagingOptions to app/build.gradle for libc++_shared.so conflict
         gradle_path = 'android/app/build.gradle'
         with open(gradle_path, 'r') as f:
             content = f.read()
-        fix = '''
-        // Fix libc++_shared.so conflict between react-native and VLC
-        tasks.whenTaskAdded { tas ->
-            if (tas.name.contains('merge') && tas.name.contains('NativeLibs')) {
-                tasks.named(tas.name) { it.doFirst {
-                    def notNeededDir = it.externalLibNativeLibs
-                        .getFiles()
-                        .stream()
-                        .filter(file -> file.toString().contains('jetified-react-android') || file.toString().contains('jetified-react-native'))
-                        .findAny()
-                        .orElse(null)
-                    if (notNeededDir != null) {
-                        def notNeededPath = notNeededDir.toPath()
-                        java.nio.file.Files.walk(notNeededPath).forEach(file -> {
-                            if (file.toString().contains('libc++_shared.so')) {
-                                java.nio.file.Files.delete(file)
-                            }
-                        })
-                    }
-                } }
+        packaging_fix = '''
+        android {
+            packagingOptions {
+                pickFirst 'lib/x86/libc++_shared.so'
+                pickFirst 'lib/x86_64/libc++_shared.so'
+                pickFirst 'lib/armeabi-v7a/libc++_shared.so'
+                pickFirst 'lib/arm64-v8a/libc++_shared.so'
             }
         }
         '''
-        content += fix
+        content += packaging_fix
         with open(gradle_path, 'w') as f:
             f.write(content)
+
+        # Fix 2: Remove conflicting buildscript from VLC's build.gradle
+        vlc_gradle = 'node_modules/react-native-vlc-media-player/android/build.gradle'
+        try:
+            with open(vlc_gradle, 'r') as f:
+                vlc_content = f.read()
+            vlc_content = re.sub(r'buildscript\s*\{[^}]*dependencies\s*\{[^}]*\}\s*\}', '', vlc_content, flags=re.DOTALL)
+            with open(vlc_gradle, 'w') as f:
+                f.write(vlc_content)
+        except FileNotFoundError:
+            pass
         "
 
       - name: Configure APK Signing
