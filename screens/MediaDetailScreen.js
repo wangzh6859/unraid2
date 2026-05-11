@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Linking, FlatList, NativeModules } from 'react-native';
-import { VLCPlayer } from 'react-native-vlc-media-player';
+import Video from 'react-native-video';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -71,7 +71,7 @@ export default function MediaDetailScreen({ route, navigation }) {
   const [videoCodec, setVideoCodec] = useState('');
   const [videoResolution, setVideoResolution] = useState('');
 
-  const vlcRef = useRef(null);
+  const videoRef = useRef(null);
   const playbackStatsRef = useRef({ position: 0, duration: 0 });
   const isMounted = useRef(true);
   const seekPosRef = useRef(-1);
@@ -83,8 +83,8 @@ export default function MediaDetailScreen({ route, navigation }) {
   }, []);
 
   useEffect(() => {
-    if (seekPosRef.current >= 0 && vlcRef.current && playbackStatsRef.current.duration > 0) {
-      vlcRef.current.seek(seekPosRef.current);
+    if (seekPosRef.current >= 0 && videoRef.current && playbackStatsRef.current.duration > 0) {
+      videoRef.current.seek(seekPosRef.current * playbackStatsRef.current.duration);
       seekPosRef.current = -1;
     }
   }, [playbackStats.duration]);
@@ -188,47 +188,19 @@ export default function MediaDetailScreen({ route, navigation }) {
     } else { Linking.openURL(activeVideoUrl); }
   };
 
-  const onVlcProgress = useCallback((data) => {
+  const onVideoProgress = useCallback((data) => {
     if (data && data.currentTime !== undefined) {
-      const posMs = data.currentTime;
-      const durMs = data.duration || 0;
+      const posMs = data.currentTime * 1000;
+      const durMs = (data.seekableDuration || 0) * 1000;
       playbackStatsRef.current = { position: posMs, duration: durMs };
       setPlaybackStats({ position: posMs, duration: durMs });
     }
   }, []);
 
-  const onVlcLoad = useCallback((data) => {
-    if (data && data.audioTracks) {
-      const tracks = data.audioTracks.filter(t => t.id !== -1);
-      if (tracks.length > 0 && isMounted.current) {
-        setAudioStreams(prev => {
-          if (prev.length > 0) return prev;
-          return tracks.map(t => ({
-            Index: t.id,
-            DisplayTitle: t.name || `Track ${t.id}`,
-            Codec: '',
-            ChannelCount: 0,
-            Language: '',
-            Type: 'Audio',
-          }));
-        });
-      }
-    }
-    if (data && data.textTracks) {
-      const tracks = data.textTracks.filter(t => t.id !== -1);
-      if (tracks.length > 0 && isMounted.current) {
-        setSubtitleStreams(prev => {
-          if (prev.length > 0) return prev;
-          return tracks.map(t => ({
-            Index: t.id,
-            DisplayTitle: t.name || `Subtitle ${t.id}`,
-            Codec: '',
-            Language: '',
-            Type: 'Subtitle',
-          }));
-        });
-      }
-    }
+  const onVideoLoad = useCallback((data) => {
+    const durMs = (data.duration || 0) * 1000;
+    playbackStatsRef.current = { ...playbackStatsRef.current, duration: durMs };
+    setPlaybackStats(prev => ({ ...prev, duration: durMs }));
   }, []);
 
   const closePlayer = async () => {
@@ -254,17 +226,11 @@ export default function MediaDetailScreen({ route, navigation }) {
   };
 
   const switchAudioTrack = (trackId) => {
-    if (vlcRef.current) {
-      vlcRef.current.audioTrack = trackId;
-    }
     setSelectedAudioIndex(trackId);
     setShowTrackPicker(null);
   };
 
   const switchSubtitleTrack = (trackId) => {
-    if (vlcRef.current) {
-      vlcRef.current.textTrack = trackId;
-    }
     setSelectedSubtitleIndex(trackId);
     setShowTrackPicker(null);
   };
@@ -322,17 +288,18 @@ export default function MediaDetailScreen({ route, navigation }) {
                 </TouchableOpacity>
               </View>
             </View>
-            <VLCPlayer
-              ref={vlcRef}
+            <Video
+              ref={videoRef}
               style={styles.video}
               source={{ uri: activeVideoUrl }}
-              autoplay={true}
-              autoAspectRatio={true}
+              paused={false}
               resizeMode="contain"
-              onProgress={onVlcProgress}
-              onLoad={onVlcLoad}
-              onEnded={closePlayer}
-              onError={(e) => console.warn('VLC Error:', e)}
+              onProgress={onVideoProgress}
+              onLoad={onVideoLoad}
+              onEnd={closePlayer}
+              onError={(e) => console.warn('Video Error:', JSON.stringify(e))}
+              selectedAudioTrack={audioStreams.length > 1 ? { type: 'index', value: selectedAudioIndex } : undefined}
+              selectedTextTrack={selectedSubtitleIndex >= 0 ? { type: 'index', value: selectedSubtitleIndex } : { type: 'disabled' }}
             />
             <View style={styles.playerInfoBar}>
               <Text style={styles.playerInfoText}>
