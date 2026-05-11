@@ -35,16 +35,6 @@
       "foregroundImage": "./assets/adaptive-icon.png",
       "backgroundColor": "#111827"
     }
-  },
-  "plugins": [
-    [
-      "react-native-vlc-media-player",
-      {
-        "android": {
-          "legacyJetifier": false
-        }
-      }
-    ]
-  ]
+  }
 }
 }

@@ -41,28 +41,39 @@ jobs:
     - name: Prebuild
       run: npx expo prebuild --platform android --clean --no-install
 
-    - name: Fix libc++_shared.so conflict
+    - name: Fix libc++_shared.so conflict for VLC
       run: |
-        cat >> android/app/build.gradle << 'EOF'
-        tasks.whenTaskAdded((tas -> {
-            if (tas.name.contains("merge") && tas.name.contains("NativeLibs")) {
-                tasks.named(tas.name) { it doFirst {
-                    java.nio.file.Path notNeededDirectory = it.externalLibNativeLibs
+        python3 -c "
+        gradle_path = 'android/app/build.gradle'
+        with open(gradle_path, 'r') as f:
+            content = f.read()
+        fix = '''
+        // Fix libc++_shared.so conflict between react-native and VLC
+        tasks.whenTaskAdded { tas ->
+            if (tas.name.contains('merge') && tas.name.contains('NativeLibs')) {
+                tasks.named(tas.name) { it.doFirst {
+                    def notNeededDir = it.externalLibNativeLibs
                         .getFiles()
                         .stream()
-                        .filter(file -> file.toString().contains("jetified-react-native") || file.toString().contains("jetified-react-android"))
+                        .filter(file -> file.toString().contains('jetified-react-android') || file.toString().contains('jetified-react-native'))
                         .findAny()
                         .orElse(null)
-                        .toPath();
-                    java.nio.file.Files.walk(notNeededDirectory).forEach(file -> {
-                        if (file.toString().contains("libc++_shared.so")) {
-                            java.nio.file.Files.delete(file);
-                        }
-                    });
+                    if (notNeededDir != null) {
+                        def notNeededPath = notNeededDir.toPath()
+                        java.nio.file.Files.walk(notNeededPath).forEach(file -> {
+                            if (file.toString().contains('libc++_shared.so')) {
+                                java.nio.file.Files.delete(file)
+                            }
+                        })
+                    }
                 } }
             }
-        })
-        EOF
+        }
+        '''
+        content += fix
+        with open(gradle_path, 'w') as f:
+            f.write(content)
+        "
 
       - name: Configure APK Signing
         run: |
