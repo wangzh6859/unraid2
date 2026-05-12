@@ -161,7 +161,7 @@ export default function MediaDetailScreen({ route, navigation }) {
   };
 
   const buildStreamUrl = (videoId) => {
-    return `${serverUrl}/Videos/${videoId}/stream?static=true&api_key=${authToken}`;
+    return `${serverUrl}/Videos/${videoId}/stream?static=true`;
   };
 
   const handlePlay = (videoId, startTicks) => {
@@ -291,7 +291,7 @@ export default function MediaDetailScreen({ route, navigation }) {
             <Video
               ref={videoRef}
               style={styles.video}
-              source={{ uri: activeVideoUrl }}
+              source={{ uri: activeVideoUrl, headers: { 'X-Emby-Token': authToken } }}
               paused={false}
               resizeMode="contain"
               onProgress={onVideoProgress}
