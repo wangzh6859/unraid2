@@ -40,11 +40,13 @@ export default function MediaDetailScreen({ route, navigation }) {
   const [showSeasonPicker, setShowSeasonPicker] = useState(false);
   const [similar, setSimilar] = useState([]);
 
-  const [activeVideoUrl, setActiveVideoUrl] = useState(null);
-  const [activeVideoId, setActiveVideoId] = useState(null);
-  const [resumeTicks, setResumeTicks] = useState(0);
-  const [showSettings, setShowSettings] = useState(false);
-  const [playbackStats, setPlaybackStats] = useState({ position: 0, duration: 0 });
+   const [activeVideoUrl, setActiveVideoUrl] = useState(null);
+   const [activeVideoId, setActiveVideoId] = useState(null);
+   const [resumeTicks, setResumeTicks] = useState(0);
+   const [showSettings, setShowSettings] = useState(false);
+   const [playbackStats, setPlaybackStats] = useState({ position: 0, duration: 0 });
+   const [initialPositionMillis, setInitialPositionMillis] = useState(0);
+   const hasSeeked = useRef(false);
 
   const videoRef = useRef(null);
   const playbackRef = useRef(null);
@@ -112,12 +114,14 @@ export default function MediaDetailScreen({ route, navigation }) {
     fetchEpisodes(serverUrl, authToken, userId, seasonId);
   };
 
-  const handlePlay = (videoId, startTicks) => {
-    const url = `${serverUrl}/Videos/${videoId}/stream?static=true&api_key=${authToken}`;
-    setActiveVideoUrl(url);
-    setActiveVideoId(videoId);
-    playbackRef.current = startTicks > 0 ? startTicks / 10000 : null;
-  };
+   const handlePlay = (videoId, startTicks) => {
+     const url = `${serverUrl}/Videos/${videoId}/stream?static=true&api_key=${authToken}`;
+     setActiveVideoUrl(url);
+     setActiveVideoId(videoId);
+     const initialPos = startTicks > 0 ? startTicks / 10000 : 0;
+     setInitialPosition(initialPos);
+     playbackRef.current = startTicks > 0 ? startTicks / 10000 : null;
+   };
 
   const handleExternalPlay = async () => {
     if (!activeVideoUrl) return;
@@ -129,12 +133,20 @@ export default function MediaDetailScreen({ route, navigation }) {
     } else { Linking.openURL(cleanUrl); }
   };
 
-  const handleVideoRef = (status) => {
-    if (status.isLoaded) {
-      playbackRef.current = status;
-      setPlaybackStats({ position: status.positionMillis, duration: status.durationMillis });
-    }
-  };
+   const handleVideoRef = async (status) => {
+     if (status.isLoaded) {
+       playbackRef.current = status;
+       setPlaybackStats({ position: status.positionMillis, duration: status.durationMillis });
+       if (!hasSeeked.current && initialPositionMillis > 0) {
+         try {
+           await videoRef.current?.seekAsync(initialPositionMillis);
+           hasSeeked.current = true;
+         } catch (e) {
+           console.warn('Seek failed:', e);
+         }
+       }
+     }
+   };
 
   const closePlayer = async () => {
     await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
@@ -180,15 +192,15 @@ export default function MediaDetailScreen({ route, navigation }) {
               <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowSettings(true)}><Settings2 color="#ffffff" size={24} /></TouchableOpacity>
             </View>
             <Video
-              ref={videoRef} style={styles.video} source={{ uri: activeVideoUrl }}
-              useNativeControls resizeMode={ResizeMode.CONTAIN} shouldPlay
-              onFullscreenUpdate={({ fullscreenUpdate }) => {
-                if (fullscreenUpdate === 0 || fullscreenUpdate === 1) safeLockLandscape();
-                else if (fullscreenUpdate === 2 || fullscreenUpdate === 3) safeLockPortrait();
-              }}
-              onPlaybackStatusUpdate={handleVideoRef}
-              positionMillis={playbackRef.current || 0}
-            />
+               ref={videoRef} style={styles.video} source={{ uri: activeVideoUrl }}
+               useNativeControls resizeMode={ResizeMode.CONTAIN} shouldPlay
+               onFullscreenUpdate={({ fullscreenUpdate }) => {
+                 if (fullscreenUpdate === 0 || fullscreenUpdate === 1) safeLockLandscape();
+                 else if (fullscreenUpdate === 2 || fullscreenUpdate === 3) safeLockPortrait();
+               }}
+               onPlaybackStatusUpdate={handleVideoRef}
+               positionMillis={hasSeeked.current ? (playbackRef.current && playbackRef.current.isLoaded ? playbackRef.current.positionMillis : 0) : initialPositionMillis}
+             />
           </View>
           <Modal visible={showSettings} transparent animationType="slide">
             <View style={styles.settingsOverlay}>
@@ -258,7 +270,7 @@ export default function MediaDetailScreen({ route, navigation }) {
             <Text style={{ color: '#6b7280', fontSize: 11, textAlign: 'center', marginTop: 6 }}>或在下方选择剧集</Text>
           </View>
         ) : (
-          <TouchableOpacity style={styles.playBtn} onPress={() => handlePlay(itemId, resumeTicks)}>
+          <TouchableOpacity style={[styles.playBtn, { marginTop: item.Type === 'Series' ? 14 : 20 }]} onPress={() => handlePlay(itemId, resumeTicks)}>
             {resumeTicks > 0 ? (
               <><Clock color="#fff" size={20} /><Text style={styles.playText}>继续播放 ({formatTime(resumeTicks / 10000)})</Text></>
             ) : (
