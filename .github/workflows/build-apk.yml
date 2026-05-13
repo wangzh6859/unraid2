@@ -75,12 +75,24 @@ jobs:
           path: ${{ steps.sign_app.outputs.signedReleaseFile }}
           retention-days: 5
 
-      - name: Upload to Release
-        uses: ncipollo/release-action@v1
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          artifacts: ${{ steps.sign_app.outputs.signedReleaseFile }}
-          tag: v1.1.${{ github.run_number }}
-          name: "Unraid v1.1.${{ github.run_number }}"
+          tag_name: v1.1.${{ github.run_number }}
+          release_name: Unraid v1.1.${{ github.run_number }}
           body: "APK Build - 修复播放按钮错位和闪退问题"
-          token: ${{ secrets.GITHUB_TOKEN }}
-          allowOverwrites: true
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ steps.sign_app.outputs.signedReleaseFile }}
+          asset_name: unraid-v1.1.${{ github.run_number }}.apk
+          asset_content_type: application/vnd.android.package-archive
