@@ -164,12 +164,11 @@ export default function MediaDetailScreen({ route, navigation }) {
     return `${serverUrl}/Videos/${videoId}/stream?static=true`;
   };
 
-  const handlePlay = (videoId, startTicks) => {
-    const url = buildStreamUrl(videoId);
-    setActiveVideoUrl(url);
-    setActiveVideoId(videoId);
-    safeLockLandscape();
-    if (startTicks && startTicks > 0) {
+const handlePlay = (videoId, startTicks) => {
+     const url = buildStreamUrl(videoId);
+     setActiveVideoUrl(url);
+     setActiveVideoId(videoId);
+     if (startTicks && startTicks > 0) {
       const totalMs = mediaSource?.RunTimeTicks ? mediaSource.RunTimeTicks / 10000 : 0;
       if (totalMs > 0) {
         seekPosRef.current = (startTicks / 10000) / totalMs;
@@ -200,9 +199,8 @@ const onPlaybackStatusUpdate = useCallback((status) => {
      }
    }, [closePlayer]);
 
-  const closePlayer = async () => {
-    await safeLockPortrait();
-    const st = playbackStatsRef.current;
+const closePlayer = async () => {
+     const st = playbackStatsRef.current;
     if (st && st.duration && activeVideoId) {
       const pct = (st.position / st.duration) * 100;
       if (pct > 1 && pct < 95) {
@@ -232,7 +230,6 @@ const onPlaybackStatusUpdate = useCallback((status) => {
     setShowTrackPicker(null);
   };
 
-  const safeLockLandscape = async () => { try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE); } catch (e) {} };
   const safeLockPortrait = async () => { try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP); } catch (e) {} };
 
   const directors = item?.People?.filter(p => p.Type === 'Director') || [];
@@ -290,7 +287,7 @@ const onPlaybackStatusUpdate = useCallback((status) => {
                style={styles.video}
                source={{ uri: activeVideoUrl, headers: { 'X-Emby-Token': authToken } }}
                shouldPlay={true}
-               resizeMode="cover"
+               resizeMode="contain"
                useNativeControls={false}
                onPlaybackStatusUpdate={onPlaybackStatusUpdate}
                onError={(e) => console.warn('Video Error:', JSON.stringify(e))}
@@ -580,7 +577,7 @@ const styles = StyleSheet.create({
   playerInner: { flex: 1, justifyContent: 'center', position: 'relative' },
   playerTopBar: { position: 'absolute', top: Platform.OS === 'ios' ? 50 : 30, left: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, zIndex: 1000 },
   iconBtnLayer: { padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 },
-  video: { width: '100%', height: height * 0.4 },
+  video: { width: '100%', height: 220 },
   playerInfoBar: { position: 'absolute', bottom: 0, left: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8, zIndex: 1000 },
   playerInfoText: { color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: '500', textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 4 },
   settingsOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
