@@ -199,7 +199,7 @@ export default function MediaDetailScreen({ route, navigation }) {
                  else if (fullscreenUpdate === 2 || fullscreenUpdate === 3) safeLockPortrait();
                }}
                onPlaybackStatusUpdate={handleVideoRef}
-               positionMillis={hasSeeked.current ? (playbackRef.current && playbackRef.current.isLoaded ? playbackRef.current.positionMillis : 0) : initialPositionMillis}
+               positionMillis={initialPositionMillis}
              />
           </View>
           <Modal visible={showSettings} transparent animationType="slide">
@@ -270,7 +270,7 @@ export default function MediaDetailScreen({ route, navigation }) {
             <Text style={{ color: '#6b7280', fontSize: 11, textAlign: 'center', marginTop: 6 }}>或在下方选择剧集</Text>
           </View>
         ) : (
-          <TouchableOpacity style={[styles.playBtn, { marginTop: item.Type === 'Series' ? 14 : 20 }]} onPress={() => handlePlay(itemId, resumeTicks)}>
+          <TouchableOpacity style={[styles.playBtn, { marginTop: 20 }]} onPress={() => handlePlay(itemId, resumeTicks)}>
             {resumeTicks > 0 ? (
               <><Clock color="#fff" size={20} /><Text style={styles.playText}>继续播放 ({formatTime(resumeTicks / 10000)})</Text></>
             ) : (
