@@ -114,7 +114,7 @@ export default function MediaDetailScreen({ route, navigation }) {
       if (isFullscreen) {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
       } else {
-        await ScreenOrientation.unlockAllOrientationsAsync();
+        await ScreenOrientation.unlockAsync();
       }
     } catch (e) {}
     setIsFullscreen((prev) => !prev);
