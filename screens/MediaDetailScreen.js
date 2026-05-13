@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Linking, FlatList, NativeModules } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Linking, FlatList, NativeModules, PanResponder } from 'react-native';
 import { Video } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ChevronLeft, Play, Film, X, Settings2, Info, ExternalLink, Clock, Star, ChevronDown, User, Building, Monitor, Subtitles, Volume2, Mic, Hash, Languages, Calendar } from 'lucide-react-native';
+import { ChevronLeft, Play, Film, X, Settings2, Info, ExternalLink, Clock, Star, ChevronDown, User, Building, Monitor, Subtitles, Volume2, Mic, Hash, Languages, Calendar, RotateCw } from 'lucide-react-native';
 import * as IntentLauncher from 'expo-intent-launcher';
 
 const { width, height } = Dimensions.get('window');
@@ -62,6 +62,11 @@ export default function MediaDetailScreen({ route, navigation }) {
   const [showSettings, setShowSettings] = useState(false);
   const [playbackStats, setPlaybackStats] = useState({ position: 0, duration: 0 });
 
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [seekDragging, setSeekDragging] = useState(false);
+  const [seekDragValue, setSeekDragValue] = useState(0);
+  const seekDragRef = useRef({ startTime: 0, startX: 0, currentValue: 0 });
+
   const [subtitleStreams, setSubtitleStreams] = useState([]);
   const [audioStreams, setAudioStreams] = useState([]);
   const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState(-1);
@@ -75,6 +80,45 @@ export default function MediaDetailScreen({ route, navigation }) {
   const playbackStatsRef = useRef({ position: 0, duration: 0 });
   const isMounted = useRef(true);
   const seekPosRef = useRef(-1);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e) => {
+        setSeekDragging(true);
+        seekDragRef.current.startTime = playbackStatsRef.current.position;
+        seekDragRef.current.startX = e.nativeEvent.locationX;
+        seekDragRef.current.currentValue = playbackStatsRef.current.position;
+      },
+      onPanResponderMove: (e, gestureState) => {
+        const duration = playbackStatsRef.current.duration;
+        if (duration <= 0) return;
+        const sensitivity = 300;
+        const deltaRatio = (gestureState.dx / sensitivity) / duration;
+        let newValue = seekDragRef.current.currentValue + deltaRatio;
+        newValue = Math.max(0, Math.min(1, newValue));
+        setSeekDragValue(newValue);
+      },
+      onPanResponderRelease: () => {
+        if (playbackStatsRef.current.duration > 0 && videoRef.current) {
+          videoRef.current.seek(seekDragValue * playbackStatsRef.current.duration);
+        }
+        setSeekDragging(false);
+      },
+    })
+  ).current;
+
+  const toggleFullscreen = useCallback(async () => {
+    try {
+      if (isFullscreen) {
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+      } else {
+        await ScreenOrientation.unlockAllOrientationsAsync();
+      }
+    } catch (e) {}
+    setIsFullscreen((prev) => !prev);
+  }, [isFullscreen]);
 
   useEffect(() => {
     isMounted.current = true;
@@ -164,11 +208,11 @@ export default function MediaDetailScreen({ route, navigation }) {
     return `${serverUrl}/Videos/${videoId}/stream?static=true`;
   };
 
-const handlePlay = (videoId, startTicks) => {
-     const url = buildStreamUrl(videoId);
-     setActiveVideoUrl(url);
-     setActiveVideoId(videoId);
-     if (startTicks && startTicks > 0) {
+  const handlePlay = (videoId, startTicks) => {
+    const url = buildStreamUrl(videoId);
+    setActiveVideoUrl(url);
+    setActiveVideoId(videoId);
+    if (startTicks && startTicks > 0) {
       const totalMs = mediaSource?.RunTimeTicks ? mediaSource.RunTimeTicks / 10000 : 0;
       if (totalMs > 0) {
         seekPosRef.current = (startTicks / 10000) / totalMs;
@@ -187,20 +231,24 @@ const handlePlay = (videoId, startTicks) => {
     } else { Linking.openURL(activeVideoUrl); }
   };
 
-const onPlaybackStatusUpdate = useCallback((status) => {
-     if (status.isLoaded) {
-       const posMs = (status.positionMillis || 0);
-       const durMs = (status.durationMillis || 0);
-       playbackStatsRef.current = { position: posMs, duration: durMs };
-       setPlaybackStats({ position: posMs, duration: durMs });
-     }
-     if (status.didJustFinish) {
-       closePlayer();
-     }
-   }, [closePlayer]);
+  const onPlaybackStatusUpdate = useCallback((status) => {
+    if (status.isLoaded) {
+      const posMs = (status.positionMillis || 0);
+      const durMs = (status.durationMillis || 0);
+      playbackStatsRef.current = { position: posMs, duration: durMs };
+      setPlaybackStats({ position: posMs, duration: durMs });
+    }
+    if (status.didJustFinish) {
+      closePlayer();
+    }
+  }, [closePlayer]);
 
-const closePlayer = async () => {
-     const st = playbackStatsRef.current;
+  const closePlayer = async () => {
+    if (isFullscreen) {
+      try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP); } catch (e) {}
+      setIsFullscreen(false);
+    }
+    const st = playbackStatsRef.current;
     if (st && st.duration && activeVideoId) {
       const pct = (st.position / st.duration) * 100;
       if (pct > 1 && pct < 95) {
@@ -226,7 +274,10 @@ const closePlayer = async () => {
   };
 
   const switchSubtitleTrack = (trackId) => {
-    setSelectedSubtitleIndex(trackId);
+    setSelectedSubtitleIndex((prev) => {
+      if (prev === trackId) return prev;
+      return trackId;
+    });
     setShowTrackPicker(null);
   };
 
@@ -259,51 +310,82 @@ const closePlayer = async () => {
 
   const img = (id, type, w = width) => `${serverUrl}/Items/${id}/Images/${type}?api_key=${authToken}&width=${Math.round(w)}`;
 
-  return (
-    <View style={styles.container}>
-      {activeVideoUrl && (
-        <View style={styles.playerWrap}>
-          <View style={styles.playerInner}>
-            <View style={styles.playerTopBar}>
-              <TouchableOpacity style={styles.iconBtnLayer} onPress={closePlayer}><X color="#ffffff" size={26} /></TouchableOpacity>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                {subtitleStreams.length > 0 && (
-                  <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowTrackPicker('subtitle')}>
-                    <Subtitles color={selectedSubtitleIndex >= 0 ? '#fbbf24' : '#ffffff'} size={22} />
-                  </TouchableOpacity>
-                )}
-                {audioStreams.length > 1 && (
-                  <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowTrackPicker('audio')}>
-                    <Volume2 color="#ffffff" size={22} />
-                  </TouchableOpacity>
-                )}
-                <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowSettings(true)}>
-                  <Info color="#ffffff" size={22} />
+  const renderPlayer = () => {
+    if (!activeVideoUrl) return null;
+    return (
+      <View style={[styles.playerWrap, isFullscreen && styles.playerWrapFullscreen]}>
+        <View style={[styles.playerInner, isFullscreen && styles.playerInnerFullscreen]}>
+          <View style={styles.playerTopBar}>
+            <TouchableOpacity style={styles.iconBtnLayer} onPress={closePlayer}><X color="#ffffff" size={26} /></TouchableOpacity>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {subtitleStreams.length > 0 && (
+                <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowTrackPicker('subtitle')}>
+                  <Subtitles color={selectedSubtitleIndex >= 0 ? '#fbbf24' : '#ffffff'} size={22} />
                 </TouchableOpacity>
+              )}
+              {audioStreams.length > 1 && (
+                <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowTrackPicker('audio')}>
+                  <Volume2 color="#ffffff" size={22} />
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity style={styles.iconBtnLayer} onPress={toggleFullscreen}>
+                <RotateCw color="#ffffff" size={22} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowSettings(true)}>
+                <Info color="#ffffff" size={22} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={styles.videoContainer} {...panResponder}>
+            <Video
+              ref={videoRef}
+              style={[styles.video, isFullscreen && styles.videoFullscreen]}
+              source={{ uri: activeVideoUrl, headers: { 'X-Emby-Token': authToken } }}
+              shouldPlay={true}
+              resizeMode={isFullscreen ? 'cover' : 'contain'}
+              useNativeControls={false}
+              onPlaybackStatusUpdate={onPlaybackStatusUpdate}
+              onError={(e) => console.warn('Video Error:', JSON.stringify(e))}
+              audioOutput="speaker"
+              selectedTextTrack={selectedSubtitleIndex >= 0 ? { type: 'index', value: subtitleStreams.findIndex(s => s.Index === selectedSubtitleIndex) } : { type: 'disabled' }}
+            />
+
+            {/* 自定义进度条 */}
+            <View style={styles.seekBarWrap}>
+              {seekDragging && (
+                <View style={styles.seekBarPreview}>
+                  <Text style={styles.seekBarPreviewText}>
+                    {formatTime(seekDragValue * playbackStats.duration)}
+                  </Text>
+                </View>
+              )}
+              <View style={styles.seekBarTrack}>
+                <View
+                  style={[
+                    styles.seekBarBuffer,
+                    { width: `${(playbackStats.position / (playbackStats.duration || 1)) * 100}%` },
+                  ]}
+                />
+                <View
+                  style={[
+                    styles.seekBarProgress,
+                    { width: `${seekDragging ? seekDragValue * 100 : (playbackStats.position / (playbackStats.duration || 1)) * 100}%` },
+                  ]}
+                />
+                <View style={styles.seekBarKnob} />
               </View>
             </View>
-<Video
-               ref={videoRef}
-               style={styles.video}
-               source={{ uri: activeVideoUrl, headers: { 'X-Emby-Token': authToken } }}
-               shouldPlay={true}
-               resizeMode="contain"
-               useNativeControls={false}
-               onPlaybackStatusUpdate={onPlaybackStatusUpdate}
-               onError={(e) => console.warn('Video Error:', JSON.stringify(e))}
-               audioOutput="speaker"
-               selectedTextTrack={selectedSubtitleIndex >= 0 ? { type: 'index', value: subtitleStreams.findIndex(s => s.Index === selectedSubtitleIndex) } : { type: 'disabled' }}
-             />
-            <View style={styles.playerInfoBar}>
+          </View>
+          <View style={styles.playerInfoBar}>
+            <Text style={styles.playerInfoText}>
+              {formatTime(playbackStats.position)} / {formatTime(playbackStats.duration)}
+            </Text>
+            {videoCodec ? (
               <Text style={styles.playerInfoText}>
-                {formatTime(playbackStats.position)} / {formatTime(playbackStats.duration)}
+                {videoCodec.toUpperCase()} {videoResolution}
               </Text>
-              {videoCodec ? (
-                <Text style={styles.playerInfoText}>
-                  {videoCodec.toUpperCase()} {videoResolution}
-                </Text>
-              ) : null}
-            </View>
+            ) : null}
           </View>
 
           <Modal visible={showSettings} transparent animationType="slide">
@@ -362,7 +444,13 @@ const closePlayer = async () => {
             </TouchableOpacity>
           </Modal>
         </View>
-      )}
+      </View>
+    );
+  };
+
+  return (
+    <View style={styles.container}>
+      {renderPlayer()}
 
       <ScrollView style={styles.scroll}>
         <View style={styles.hero}>
@@ -574,10 +662,21 @@ const styles = StyleSheet.create({
   epSub: { color: '#6b7280', fontSize: 11, marginTop: 2 },
   epOverview: { color: '#6b7280', fontSize: 11, marginTop: 4, lineHeight: 16 },
   playerWrap: { position: 'absolute', top: 0, left: 0, width, height, zIndex: 999, backgroundColor: '#000', justifyContent: 'center' },
+  playerWrapFullscreen: { width: '100%', height: '100%' },
   playerInner: { flex: 1, justifyContent: 'center', position: 'relative' },
+  playerInnerFullscreen: { flex: 1 },
   playerTopBar: { position: 'absolute', top: Platform.OS === 'ios' ? 50 : 30, left: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, zIndex: 1000 },
   iconBtnLayer: { padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 },
+  videoContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   video: { width: '100%', height: 220 },
+  videoFullscreen: { width: '100%', height: '100%' },
+  seekBarWrap: { position: 'absolute', bottom: 40, left: 16, right: 16, zIndex: 1001 },
+  seekBarTrack: { height: 4, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 2, flexDirection: 'row', overflow: 'hidden' },
+  seekBarBuffer: { height: '100%', backgroundColor: 'rgba(255,255,255,0.15)' },
+  seekBarProgress: { height: '100%', backgroundColor: '#3b82f6' },
+  seekBarKnob: { position: 'absolute', right: -6, top: -4, width: 12, height: 12, borderRadius: 6, backgroundColor: '#fff', borderWidth: 2, borderColor: '#3b82f6' },
+  seekBarPreview: { position: 'absolute', bottom: 24, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
+  seekBarPreviewText: { color: '#fff', fontSize: 12 },
   playerInfoBar: { position: 'absolute', bottom: 0, left: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8, zIndex: 1000 },
   playerInfoText: { color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: '500', textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 4 },
   settingsOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
@@ -591,4 +690,5 @@ const styles = StyleSheet.create({
   pickerPanel: { backgroundColor: '#1f2937', borderRadius: 16, padding: 20, elevation: 10 },
   pickerItem: { paddingVertical: 13, paddingHorizontal: 12, borderRadius: 8, marginBottom: 4 },
   pickerItemActive: { backgroundColor: 'rgba(59, 130, 246, 0.15)' },
-});
+}); 
+ 
