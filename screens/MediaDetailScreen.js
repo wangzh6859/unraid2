@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Linking, FlatList, Pressable } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Linking, FlatList, PanResponder } from 'react-native';
 import { Video } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ChevronLeft, Play, Film, X, Settings2, Info, ExternalLink, Clock, Star, ChevronDown, User, Building, Monitor, Subtitles, Volume2, Mic, Hash, Languages, Calendar, RotateCw } from 'lucide-react-native';
+import { ChevronLeft, Play, Film, X, Settings2, Info, ExternalLink, Clock, Star, ChevronDown, User, Building, Monitor, Subtitles, Volume2, Mic, Hash, Languages, Calendar, RotateCw, Pause } from 'lucide-react-native';
 import * as IntentLauncher from 'expo-intent-launcher';
 
 const { width, height } = Dimensions.get('window');
@@ -61,11 +61,12 @@ export default function MediaDetailScreen({ route, navigation }) {
   const [resumeTicks, setResumeTicks] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [playbackStats, setPlaybackStats] = useState({ position: 0, duration: 0 });
+  const [isPlaying, setIsPlaying] = useState(true);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [seekDragging, setSeekDragging] = useState(false);
   const [seekDragValue, setSeekDragValue] = useState(0);
-  const seekDragRef = useRef({ currentValue: 0, containerWidth: 0 });
+  const seekDragRef = useRef({ currentValue: 0, startX: 0 });
 
   const [subtitleStreams, setSubtitleStreams] = useState([]);
   const [audioStreams, setAudioStreams] = useState([]);
@@ -76,11 +77,14 @@ export default function MediaDetailScreen({ route, navigation }) {
   const [videoCodec, setVideoCodec] = useState('');
   const [videoResolution, setVideoResolution] = useState('');
 
+  // 实际检测到的字幕轨道列表（来自 expo-av）
+  const [detectedTextTracks, setDetectedTextTracks] = useState([]);
+
   const videoRef = useRef(null);
   const playbackStatsRef = useRef({ position: 0, duration: 0 });
   const isMounted = useRef(true);
   const seekPosRef = useRef(-1);
-  const seekBarLayoutRef = useRef({ width: 0, x: 0 });
+  const seekBarLayoutRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
 
   /* ---------- 关闭播放器 ---------- */
   const closePlayer = useCallback(async () => {
@@ -105,8 +109,14 @@ export default function MediaDetailScreen({ route, navigation }) {
     setActiveVideoUrl(null);
     setActiveVideoId(null);
     setShowSettings(false);
+    setIsPlaying(true);
     seekPosRef.current = -1;
   }, [isFullscreen, serverUrl, userId, authToken, activeVideoId]);
+
+  /* ---------- 播放/暂停切换 ---------- */
+  const togglePlay = useCallback(() => {
+    setIsPlaying((prev) => !prev);
+  }, []);
 
   /* ---------- 播放状态回调 ---------- */
   const onPlaybackStatusUpdate = useCallback((status) => {
@@ -114,14 +124,17 @@ export default function MediaDetailScreen({ route, navigation }) {
       const posMs = (status.positionMillis || 0);
       const durMs = (status.durationMillis || 0);
       playbackStatsRef.current = { position: posMs, duration: durMs };
+      if (status.isPlaying !== undefined) {
+        setIsPlaying(status.isPlaying);
+      }
       if (!seekDragging) {
         setPlaybackStats({ position: posMs, duration: durMs });
       }
     }
     if (status.didJustFinish) {
-      closePlayer();
+      setIsPlaying(false);
     }
-  }, [closePlayer, seekDragging]);
+  }, [seekDragging]);
 
   /* ---------- 全屏切换 ---------- */
   const toggleFullscreen = useCallback(async () => {
@@ -129,39 +142,73 @@ export default function MediaDetailScreen({ route, navigation }) {
       if (isFullscreen) {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
       } else {
-        await ScreenOrientation.unlockAsync();
+        await ScreenOrientation.unlockAllOrientationsAsync();
       }
     } catch (e) {}
     setIsFullscreen((prev) => !prev);
   }, [isFullscreen]);
 
-  /* ---------- SeekBar 拖拽处理 ---------- */
-  const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
+  /* ---------- SeekBar 拖拽（PanResponder 仅绑定在 seekbar 轨道上） ---------- */
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e) => {
+        setSeekDragging(true);
+        const ratio = playbackStatsRef.current.duration > 0
+          ? playbackStatsRef.current.position / playbackStatsRef.current.duration
+          : 0;
+        seekDragRef.current.currentValue = ratio;
+        seekDragRef.current.startX = e.nativeEvent.locationX;
+      },
+      onPanResponderMove: (e, gestureState) => {
+        const { width: bw } = seekBarLayoutRef.current;
+        if (bw <= 0 || !playbackStatsRef.current.duration) return;
+        let newValue = seekDragRef.current.currentValue + (gestureState.dx / bw);
+        newValue = Math.max(0, Math.min(1, newValue));
+        seekDragRef.current.currentValue = newValue;
+        setSeekDragValue(newValue);
+      },
+      onPanResponderRelease: () => {
+        if (playbackStatsRef.current.duration > 0 && videoRef.current) {
+          videoRef.current.seek(seekDragRef.current.currentValue * playbackStatsRef.current.duration);
+        }
+        setSeekDragging(false);
+      },
+    })
+  ).current;
 
-  const onSeekStart = useCallback(() => {
-    setSeekDragging(true);
-    const ratio = playbackStatsRef.current.duration > 0
-      ? playbackStatsRef.current.position / playbackStatsRef.current.duration
-      : 0;
-    seekDragRef.current.currentValue = ratio;
-    setSeekDragValue(ratio);
+  const onSeekBarLayout = useCallback((event) => {
+    seekBarLayoutRef.current = event.nativeEvent.layout;
   }, []);
 
-  const onSeekActive = useCallback((event) => {
-    const { width: bw, x: bx } = seekBarLayoutRef.current;
-    if (bw <= 0) return;
-    const touchX = event.nativeEvent.locationX || 0;
-    const ratio = clamp(touchX / bw, 0, 1);
-    seekDragRef.current.currentValue = ratio;
-    setSeekDragValue(ratio);
-  }, []);
-
-  const onSeekEnd = useCallback(() => {
-    if (playbackStatsRef.current.duration > 0 && videoRef.current) {
-      videoRef.current.seek(seekDragRef.current.currentValue * playbackStatsRef.current.duration);
+  /* ---------- 检测到的字幕轨道加载 ---------- */
+  const onTextTracksLoad = useCallback((event) => {
+    if (event?.textTracks) {
+      setDetectedTextTracks(event.textTracks);
     }
-    setSeekDragging(false);
   }, []);
+
+  /* ---------- 计算实际传给 Video 的字幕索引 ---------- */
+  const getVideoSelectedTextTrack = useCallback(() => {
+    if (selectedSubtitleIndex < 0) return { type: 'disabled' };
+    // 优先使用 detectedTextTracks 匹配
+    if (detectedTextTracks.length > 0) {
+      const matchIdx = detectedTextTracks.findIndex(t => {
+        const streamMatch = subtitleStreams.find(s =>
+          s.DisplayTitle === t.title ||
+          s.Language === t.language ||
+          (t.rawId !== undefined && s.Index === t.rawId)
+        );
+        return streamMatch && streamMatch.Index === selectedSubtitleIndex;
+      });
+      if (matchIdx >= 0) return { type: 'index', value: matchIdx };
+    }
+    // 回退：使用 subtitleStreams 的相对索引
+    const relIdx = subtitleStreams.findIndex(s => s.Index === selectedSubtitleIndex);
+    if (relIdx >= 0) return { type: 'index', value: relIdx };
+    return { type: 'disabled' };
+  }, [selectedSubtitleIndex, subtitleStreams, detectedTextTracks]);
 
   /* ---------- 其余函数 ---------- */
   useEffect(() => {
@@ -224,12 +271,14 @@ export default function MediaDetailScreen({ route, navigation }) {
         setVideoCodec(ms.VideoCodec || '');
         setVideoResolution(getResolution(ms.Width, ms.Height));
         if (ms.MediaStreams) {
-          setSubtitleStreams(ms.MediaStreams.filter(s => s.Type === 'Subtitle'));
-          setAudioStreams(ms.MediaStreams.filter(s => s.Type === 'Audio'));
-          const defaultSub = ms.MediaStreams.find(s => s.Type === 'Subtitle' && s.IsDefault);
+          const subs = ms.MediaStreams.filter(s => s.Type === 'Subtitle');
+          const audios = ms.MediaStreams.filter(s => s.Type === 'Audio');
+          setSubtitleStreams(subs);
+          setAudioStreams(audios);
+          const defaultSub = subs.find(s => s.IsDefault);
           setSelectedSubtitleIndex(defaultSub ? defaultSub.Index : -1);
-          const defaultAudio = ms.MediaStreams.find(s => s.Type === 'Audio' && s.IsDefault);
-          setSelectedAudioIndex(defaultAudio ? defaultAudio.Index : (ms.MediaStreams.find(s => s.Type === 'Audio')?.Index || 0));
+          const defaultAudio = audios.find(s => s.IsDefault);
+          setSelectedAudioIndex(defaultAudio ? defaultAudio.Index : (audios[0]?.Index || 0));
         }
       }
     } catch (e) {}
@@ -253,9 +302,11 @@ export default function MediaDetailScreen({ route, navigation }) {
   };
 
   const handlePlay = (videoId, startTicks) => {
+    setDetectedTextTracks([]); // 重置已检测的字幕轨道
     const url = buildStreamUrl(videoId);
     setActiveVideoUrl(url);
     setActiveVideoId(videoId);
+    setIsPlaying(true);
     if (startTicks && startTicks > 0) {
       const totalMs = mediaSource?.RunTimeTicks ? mediaSource.RunTimeTicks / 10000 : 0;
       if (totalMs > 0) {
@@ -288,22 +339,45 @@ export default function MediaDetailScreen({ route, navigation }) {
     setShowTrackPicker(null);
   };
 
-  /* ---------- 渲染 ---------- */
+  const safeLockPortrait = async () => { try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP); } catch (e) {} };
+
+  const directors = item?.People?.filter(p => p.Type === 'Director') || [];
+  const cast = item?.People?.filter(p => p.Type === 'Actor' || p.Type === 'Performer') || [];
+  const studios = item?.Studios || [];
+  const tagline = item?.Taglines?.[0] || '';
+  const officialRating = item?.OfficialRating || '';
+
+  const streamInfo = [];
+  if (videoCodec) streamInfo.push({ icon: <Monitor color="#3b82f6" size={14} />, label: `${videoCodec.toUpperCase()} ${videoResolution}` });
+  const primaryAudio = audioStreams.find(s => s.Index === selectedAudioIndex) || audioStreams[0];
+  if (primaryAudio) {
+    let audLabel = primaryAudio.Codec?.toUpperCase() || '';
+    if (primaryAudio.ChannelCount) audLabel += ` ${primaryAudio.ChannelCount}ch`;
+    if (primaryAudio.DisplayTitle) audLabel = primaryAudio.DisplayTitle;
+    streamInfo.push({ icon: <Mic color="#3b82f6" size={14} />, label: audLabel });
+  }
+  if (mediaSource?.Bitrate) streamInfo.push({ icon: <ActivityIndicator size={14} color="#3b82f6" />, label: formatBitrate(mediaSource.Bitrate) });
+
+  if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View>;
+  if (!item) return (
+    <View style={styles.center}>
+      <Text style={{ color: '#9ca3af', marginBottom: 16 }}>无法加载影片信息</Text>
+      <TouchableOpacity style={styles.backBtnTop} onPress={() => navigation.goBack()}><ChevronLeft color="#fff" size={28} /></TouchableOpacity>
+    </View>
+  );
+
+  const currentPosition = seekDragging ? seekDragValue : (playbackStats.duration > 0 ? playbackStats.position / playbackStats.duration : 0);
+  const currentTimeMs = seekDragging ? seekDragValue * (playbackStats.duration || 0) : playbackStats.position;
+
   const renderPlayer = () => {
     if (!activeVideoUrl) return null;
-    const currentPosition = seekDragging ? seekDragValue : (playbackStats.duration > 0 ? playbackStats.position / playbackStats.duration : 0);
-
     return (
       <View style={[styles.playerWrap, isFullscreen && styles.playerWrapFullscreen]}>
         <View style={[styles.playerInner, isFullscreen && styles.playerInnerFullscreen]}>
+          {/* 顶部控制栏 */}
           <View style={styles.playerTopBar}>
             <TouchableOpacity style={styles.iconBtnLayer} onPress={closePlayer}><X color="#ffffff" size={26} /></TouchableOpacity>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              {subtitleStreams.length > 0 && (
-                <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowTrackPicker('subtitle')}>
-                  <Subtitles color={selectedSubtitleIndex >= 0 ? '#fbbf24' : '#ffffff'} size={22} />
-                </TouchableOpacity>
-              )}
               {audioStreams.length > 1 && (
                 <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowTrackPicker('audio')}>
                   <Volume2 color="#ffffff" size={22} />
@@ -318,49 +392,57 @@ export default function MediaDetailScreen({ route, navigation }) {
             </View>
           </View>
 
-          <View style={styles.videoContainer}>
+          {/* 视频区域 - 点击切换播放/暂停 */}
+          <TouchableOpacity
+            activeOpacity={1}
+            style={styles.videoContainer}
+            onPress={togglePlay}
+          >
             <Video
               ref={videoRef}
               style={[styles.video, isFullscreen && styles.videoFullscreen]}
               source={{ uri: activeVideoUrl, headers: { 'X-Emby-Token': authToken } }}
-              shouldPlay={true}
+              shouldPlay={isPlaying}
               resizeMode={isFullscreen ? 'cover' : 'contain'}
               useNativeControls={false}
               onPlaybackStatusUpdate={onPlaybackStatusUpdate}
+              onTextTracksLoad={onTextTracksLoad}
               onError={(e) => console.warn('Video Error:', JSON.stringify(e))}
               audioOutput="speaker"
-              selectedTextTrack={selectedSubtitleIndex >= 0 ? { type: 'index', value: subtitleStreams.findIndex(s => s.Index === selectedSubtitleIndex) } : { type: 'disabled' }}
+              selectedTextTrack={getVideoSelectedTextTrack()}
+              selectedAudioTrack={{ type: 'index', value: audioStreams.findIndex(s => s.Index === selectedAudioIndex) >= 0 ? audioStreams.findIndex(s => s.Index === selectedAudioIndex) : 0 }}
             />
 
-            {/* 自定义进度条 */}
-            <View style={styles.seekBarWrap}>
-              {seekDragging && (
-                <View style={styles.seekBarPreview}>
-                  <Text style={styles.seekBarPreviewText}>
-                    {formatTime(seekDragValue * (playbackStats.duration || 0))}
-                  </Text>
-                </View>
-              )}
-              <View
-                style={styles.seekBarTrack}
-                onLayout={(e) => {
-                  seekBarLayoutRef.current = e.nativeEvent.layout;
-                }}
-              >
-                <View style={[styles.seekBarBuffer, { width: `${currentPosition * 100}%` }]} />
-                <View style={[styles.seekBarProgress, { width: `${seekDragging ? seekDragValue * 100 : currentPosition * 100}%` }]} />
-                <Pressable
-                  style={styles.seekBarKnob}
-                  onPressIn={onSeekStart}
-                  onPressMove={onSeekActive}
-                  onPressOut={onSeekEnd}
-                />
+            {/* 视频中央播放/暂停按钮 */}
+            <View style={styles.playPauseOverlay}>
+              <TouchableOpacity style={styles.playPauseBtn} onPress={togglePlay}>
+                {isPlaying ? <Pause color="#ffffff" size={36} /> : <Play color="#ffffff" size={36} fill="#ffffff" />}
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+
+          {/* 自定义进度条 */}
+          <View style={styles.seekBarWrap} onLayout={onSeekBarLayout}>
+            {seekDragging && (
+              <View style={styles.seekBarPreview}>
+                <Text style={styles.seekBarPreviewText}>
+                  {formatTime(seekDragValue * (playbackStats.duration || 0))}
+                </Text>
+              </View>
+            )}
+            <View style={styles.seekBarTrack}>
+              <View style={[styles.seekBarBuffer, { width: `${currentPosition * 100}%` }]} />
+              <View style={[styles.seekBarProgress, { width: `${seekDragging ? seekDragValue * 100 : currentPosition * 100}%` }]} />
+              <View style={styles.seekBarTouchWrapper} {...panResponder.panHandlers}>
+                <View style={styles.seekBarKnob} />
               </View>
             </View>
           </View>
+
+          {/* 底部信息栏 */}
           <View style={styles.playerInfoBar}>
             <Text style={styles.playerInfoText}>
-              {formatTime(seekDragging ? seekDragValue * (playbackStats.duration || 0) : playbackStats.position)} / {formatTime(playbackStats.duration)}
+              {formatTime(currentTimeMs)} / {formatTime(playbackStats.duration)}
             </Text>
             {videoCodec ? (
               <Text style={styles.playerInfoText}>
@@ -369,6 +451,14 @@ export default function MediaDetailScreen({ route, navigation }) {
             ) : null}
           </View>
 
+          {/* 字幕选择按钮（仅在有字幕时显示，放在左下角更易发现） */}
+          {subtitleStreams.length > 0 && (
+            <TouchableOpacity style={[styles.iconBtnLayer, styles.subtitleBtn]} onPress={() => setShowTrackPicker('subtitle')}>
+              <Subtitles color={selectedSubtitleIndex >= 0 ? '#fbbf24' : '#ffffff'} size={22} />
+            </TouchableOpacity>
+          )}
+
+          {/* 设置弹窗 */}
           <Modal visible={showSettings} transparent animationType="slide">
             <View style={styles.settingsOverlay}>
               <View style={styles.settingsPanel}>
@@ -393,6 +483,7 @@ export default function MediaDetailScreen({ route, navigation }) {
             </View>
           </Modal>
 
+          {/* 轨道选择弹窗 */}
           <Modal visible={showTrackPicker !== null} transparent animationType="fade">
             <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowTrackPicker(null)}>
               <View style={styles.pickerPanel}>
@@ -430,31 +521,6 @@ export default function MediaDetailScreen({ route, navigation }) {
   };
 
   const img = (id, type, w = width) => `${serverUrl}/Items/${id}/Images/${type}?api_key=${authToken}&width=${Math.round(w)}`;
-
-  if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View>;
-  if (!item) return (
-    <View style={styles.center}>
-      <Text style={{ color: '#9ca3af', marginBottom: 16 }}>无法加载影片信息</Text>
-      <TouchableOpacity style={styles.backBtnTop} onPress={() => navigation.goBack()}><ChevronLeft color="#fff" size={28} /></TouchableOpacity>
-    </View>
-  );
-
-  const primaryAudio = audioStreams.find(s => s.Index === selectedAudioIndex) || audioStreams[0];
-  const streamInfo = [];
-  if (videoCodec) streamInfo.push({ icon: <Monitor color="#3b82f6" size={14} />, label: `${videoCodec.toUpperCase()} ${videoResolution}` });
-  if (primaryAudio) {
-    let audLabel = primaryAudio.Codec?.toUpperCase() || '';
-    if (primaryAudio.ChannelCount) audLabel += ` ${primaryAudio.ChannelCount}ch`;
-    if (primaryAudio.DisplayTitle) audLabel = primaryAudio.DisplayTitle;
-    streamInfo.push({ icon: <Mic color="#3b82f6" size={14} />, label: audLabel });
-  }
-  if (mediaSource?.Bitrate) streamInfo.push({ icon: <ActivityIndicator size={14} color="#3b82f6" />, label: formatBitrate(mediaSource.Bitrate) });
-
-  const directors = item?.People?.filter(p => p.Type === 'Director') || [];
-  const cast = item?.People?.filter(p => p.Type === 'Actor' || p.Type === 'Performer') || [];
-  const studios = item?.Studios || [];
-  const tagline = item?.Taglines?.[0] || '';
-  const officialRating = item?.OfficialRating || '';
 
   return (
     <View style={styles.container}>
@@ -669,24 +735,42 @@ const styles = StyleSheet.create({
   epTitle: { color: '#e5e7eb', fontSize: 14, fontWeight: 'bold' },
   epSub: { color: '#6b7280', fontSize: 11, marginTop: 2 },
   epOverview: { color: '#6b7280', fontSize: 11, marginTop: 4, lineHeight: 16 },
-  playerWrap: { position: 'absolute', top: 0, left: 0, width, height, zIndex: 999, backgroundColor: '#000', justifyContent: 'center' },
+
+  /* 播放器布局 */
+  playerWrap: { position: 'absolute', top: 0, left: 0, width, height: 300, zIndex: 999, backgroundColor: '#000' },
   playerWrapFullscreen: { width: '100%', height: '100%' },
   playerInner: { flex: 1, justifyContent: 'center', position: 'relative' },
   playerInnerFullscreen: { flex: 1 },
   playerTopBar: { position: 'absolute', top: Platform.OS === 'ios' ? 50 : 30, left: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, zIndex: 1000 },
   iconBtnLayer: { padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 },
+
+  /* 视频容器 */
   videoContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  video: { width: '100%', height: 220 },
+  video: { width: '100%', height: '100%' },
   videoFullscreen: { width: '100%', height: '100%' },
+
+  /* 中央播放/暂停按钮 */
+  playPauseOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 1002 },
+  playPauseBtn: { width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+
+  /* 进度条 */
   seekBarWrap: { position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 1001, paddingHorizontal: 16, paddingBottom: 8 },
-  seekBarTrack: { height: 4, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 2, overflow: 'hidden' },
+  seekBarTrack: { height: 4, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 2, overflow: 'hidden', flexDirection: 'row' },
   seekBarBuffer: { height: '100%', backgroundColor: 'rgba(255,255,255,0.15)' },
   seekBarProgress: { height: '100%', backgroundColor: '#3b82f6' },
-  seekBarKnob: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#fff', borderWidth: 2, borderColor: '#3b82f6', alignSelf: 'flex-end' },
+  seekBarTouchWrapper: { position: 'absolute', top: -8, bottom: -8, left: 0, right: 0, justifyContent: 'center' },
+  seekBarKnob: { width: 14, height: 14, borderRadius: 7, backgroundColor: '#fff', borderWidth: 2, borderColor: '#3b82f6', alignSelf: 'center' },
   seekBarPreview: { position: 'absolute', bottom: 24, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
   seekBarPreviewText: { color: '#fff', fontSize: 12 },
-  playerInfoBar: { position: 'absolute', bottom: 0, left: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8, zIndex: 1000 },
+
+  /* 底部时间信息 */
+  playerInfoBar: { position: 'absolute', bottom: 0, left: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 6, zIndex: 1000 },
   playerInfoText: { color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: '500', textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 4 },
+
+  /* 字幕按钮（左下角） */
+  subtitleBtn: { position: 'absolute', bottom: 30, left: 16, zIndex: 1000 },
+
+  /* 设置弹窗 */
   settingsOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   settingsPanel: { backgroundColor: '#1f2937', borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   settingsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#374151' },
