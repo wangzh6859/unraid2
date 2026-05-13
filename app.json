@@ -3,10 +3,10 @@
     "name": "Unraid",
     "slug": "unraid-manager",
     "version": "1.1.0",
-    "orientation": "portrait",
-     "plugins": [
-       "expo-screen-orientation"
-     ],
+"orientation": "portrait",
+    "plugins": [
+      "expo-screen-orientation"
+    ],
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "splash": {
