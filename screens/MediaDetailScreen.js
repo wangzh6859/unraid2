@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Linking, FlatList, PanResponder } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Linking, PanResponder } from 'react-native';
 import { Video } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ChevronLeft, Play, Film, X, Info, ExternalLink, Clock, Star, ChevronDown, User, Building, Monitor, Subtitles, Volume2, Mic, Hash, Languages, Calendar, Fullscreen, Minimize, ChevronLeft as ChevronLeftIcon, ChevronRight } from 'lucide-react-native';
+import { ChevronLeft, Play, Film, X, Info, ExternalLink, Clock, Star, ChevronDown, User, Building, Monitor, Subtitles, Volume2, Mic, Hash, Languages, Fullscreen, Minimize, ChevronRight } from 'lucide-react-native';
 import * as IntentLauncher from 'expo-intent-launcher';
 
 const { width, height } = Dimensions.get('window');
@@ -77,76 +77,11 @@ export default function MediaDetailScreen({ route, navigation }) {
   const [videoCodec, setVideoCodec] = useState('');
   const [videoResolution, setVideoResolution] = useState('');
 
-  const [detectedTextTracks, setDetectedTextTracks] = useState([]);
-
   const videoRef = useRef(null);
   const playbackStatsRef = useRef({ position: 0, duration: 0 });
   const isMounted = useRef(true);
   const seekPosRef = useRef(-1);
-  const seekBarLayoutRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
-
-  /* ---------- 键盘控制：返回时退出全屏 ---------- */
-  useEffect(() => {
-    if (isFullscreen) {
-      const sub = navigation.addListener('beforeRemove', (e) => {
-        if (isFullscreen) {
-          try { ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP); } catch (err) {}
-          setIsFullscreen(false);
-        }
-      });
-      return sub;
-    }
-  }, [isFullscreen, navigation]);
-
-  /* ---------- 关闭播放器 ---------- */
-  const closePlayer = useCallback(async () => {
-    if (isFullscreen) {
-      try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP); } catch (e) {}
-      setIsFullscreen(false);
-    }
-    const st = playbackStatsRef.current;
-    if (st && st.duration && activeVideoId) {
-      const pct = (st.position / st.duration) * 100;
-      if (pct > 1 && pct < 95) {
-        const ticks = st.position * 10000;
-        try {
-          await fetch(`${serverUrl}/Users/${userId}/PlayingItems/${activeVideoId}/Progress`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Emby-Token': authToken },
-            body: JSON.stringify({ PositionTicks: ticks, IsPaused: false, IsMuted: false }),
-          });
-        } catch (e) {}
-      }
-    }
-    setActiveVideoUrl(null);
-    setActiveVideoId(null);
-    setShowSettings(false);
-    setIsPlaying(true);
-    seekPosRef.current = -1;
-  }, [isFullscreen, serverUrl, userId, authToken, activeVideoId]);
-
-  /* ---------- 播放/暂停切换 ---------- */
-  const togglePlay = useCallback(() => {
-    setIsPlaying((prev) => !prev);
-  }, []);
-
-  /* ---------- 播放状态回调 ---------- */
-  const onPlaybackStatusUpdate = useCallback((status) => {
-    if (status.isLoaded) {
-      const posMs = (status.positionMillis || 0);
-      const durMs = (status.durationMillis || 0);
-      playbackStatsRef.current = { position: posMs, duration: durMs };
-      if (status.isPlaying !== undefined) {
-        setIsPlaying(status.isPlaying);
-      }
-      if (!seekDragging) {
-        setPlaybackStats({ position: posMs, duration: durMs });
-      }
-    }
-    if (status.didJustFinish) {
-      setIsPlaying(false);
-    }
-  }, [seekDragging]);
+  const seekBarLayoutRef = useRef({ width: 0 });
 
   /* ---------- 全屏切换 ---------- */
   const toggleFullscreen = useCallback(async () => {
@@ -160,115 +95,149 @@ export default function MediaDetailScreen({ route, navigation }) {
     setIsFullscreen((prev) => !prev);
   }, [isFullscreen]);
 
-  /* ---------- 全屏切换（点击左上角返回旁边的全屏图标） ---------- */
-  const handleFullscreenBtn = useCallback(async () => {
-    await toggleFullscreen();
-  }, [toggleFullscreen]);
-
-  /* ---------- SeekBar 拖拽 ---------- */
+  /* ---------- SeekBar PanResponder ---------- */
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (e) => {
+      onPanResponderGrant: () => {
         setSeekDragging(true);
-        const ratio = playbackStatsRef.current.duration > 0
-          ? playbackStatsRef.current.position / playbackStatsRef.current.duration
-          : 0;
-        seekDragRef.current.currentValue = ratio;
-        seekDragRef.current.startX = e.nativeEvent.locationX;
+        const d = playbackStatsRef.current.duration;
+        seekDragRef.current.currentValue = d > 0 ? playbackStatsRef.current.position / d : 0;
       },
-      onPanResponderMove: (e, gestureState) => {
-        const { width: bw } = seekBarLayoutRef.current;
-        if (bw <= 0 || !playbackStatsRef.current.duration) return;
-        let newValue = seekDragRef.current.currentValue + (gestureState.dx / bw);
-        newValue = Math.max(0, Math.min(1, newValue));
-        seekDragRef.current.currentValue = newValue;
-        setSeekDragValue(newValue);
+      onPanResponderMove: (_, gestureState) => {
+        const bw = seekBarLayoutRef.current.width;
+        if (bw <= 0) return;
+        let nv = seekDragRef.current.currentValue + gestureState.dx / bw;
+        nv = nv < 0 ? 0 : nv > 1 ? 1 : nv;
+        seekDragRef.current.currentValue = nv;
+        setSeekDragValue(nv);
       },
       onPanResponderRelease: () => {
-        if (playbackStatsRef.current.duration > 0 && videoRef.current) {
-          videoRef.current.seek(seekDragRef.current.currentValue * playbackStatsRef.current.duration);
+        const d = playbackStatsRef.current.duration;
+        if (d > 0 && videoRef.current) {
+          videoRef.current.seek(seekDragRef.current.currentValue * d);
         }
         setSeekDragging(false);
       },
     })
   ).current;
 
-  const onSeekBarLayout = useCallback((event) => {
-    seekBarLayoutRef.current = event.nativeEvent.layout;
+  const onSeekBarLayout = useCallback((e) => {
+    seekBarLayoutRef.current = { width: e.nativeEvent.layout.width };
   }, []);
 
-  /* ---------- 字幕轨道加载 ---------- */
-  const onTextTracksLoad = useCallback((event) => {
-    if (event?.textTracks) {
-      setDetectedTextTracks(event.textTracks);
+  /* ---------- 关闭播放器 ---------- */
+  const closePlayer = useCallback(async () => {
+    if (isFullscreen) {
+      try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP); } catch (e) {}
+      setIsFullscreen(false);
     }
-  }, []);
-
-  const getVideoSelectedTextTrack = useCallback(() => {
-    if (selectedSubtitleIndex < 0) return { type: 'disabled' };
-    if (detectedTextTracks.length > 0) {
-      const matchIdx = detectedTextTracks.findIndex((t) => {
-        const streamMatch = subtitleStreams.find((s) =>
-          s.DisplayTitle === t.title ||
-          s.Language === t.language ||
-          (t.rawId !== undefined && s.Index === t.rawId)
-        );
-        return streamMatch && streamMatch.Index === selectedSubtitleIndex;
-      });
-      if (matchIdx >= 0) return { type: 'index', value: matchIdx };
-    }
-    const relIdx = subtitleStreams.findIndex((s) => s.Index === selectedSubtitleIndex);
-    if (relIdx >= 0) return { type: 'index', value: relIdx };
-    return { type: 'disabled' };
-  }, [selectedSubtitleIndex, subtitleStreams, detectedTextTracks]);
-
-  /* ---------- 上下集导航 ---------- */
-  const getPrevEpisode = useCallback(() => {
-    if (item.Type !== 'Series' || !episodes || episodes.length === 0 || !activeVideoId) return null;
-    const idx = episodes.findIndex((ep) => ep.Id === activeVideoId);
-    if (idx <= 0) return null;
-    return episodes[idx - 1];
-  }, [episodes, activeVideoId, item.Type]);
-
-  const getNextEpisode = useCallback(() => {
-    if (item.Type !== 'Series' || !episodes || episodes.length === 0 || !activeVideoId) return null;
-    const idx = episodes.findIndex((ep) => ep.Id === activeVideoId);
-    if (idx < 0 || idx >= episodes.length - 1) return null;
-    return episodes[idx + 1];
-  }, [episodes, activeVideoId, item.Type]);
-
-  const playEpisode = useCallback(
-    (epId, startTicks) => {
-      if (!epId) return;
-      const ep = episodes.find((e) => e.Id === epId);
-      const ticks = startTicks ?? (ep?.UserData?.PlaybackPositionTicks || 0);
-      const url = `${serverUrl}/Videos/${epId}/stream?static=true`;
-      setActiveVideoUrl(url);
-      setActiveVideoId(epId);
-      setIsPlaying(true);
-      if (ticks > 0) {
-        const totalMs = mediaSource?.RunTimeTicks ? mediaSource.RunTimeTicks / 10000 : 0;
-        if (totalMs > 0) {
-          seekPosRef.current = ticks / 10000 / totalMs;
-        }
-      } else {
-        seekPosRef.current = -1;
+    const st = playbackStatsRef.current;
+    if (st && st.duration && activeVideoId) {
+      const pct = (st.position / st.duration) * 100;
+      if (pct > 1 && pct < 95) {
+        try {
+          await fetch(`${serverUrl}/Users/${userId}/PlayingItems/${activeVideoId}/Progress`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Emby-Token': authToken },
+            body: JSON.stringify({ PositionTicks: Math.round(st.position * 10000), IsPaused: false, IsMuted: false }),
+          });
+        } catch (e) {}
       }
-    },
-    [episodes, serverUrl, mediaSource]
-  );
+    }
+    setActiveVideoUrl(null);
+    setActiveVideoId(null);
+    setShowSettings(false);
+    setIsPlaying(true);
+    seekPosRef.current = -1;
+  }, [isFullscreen, serverUrl, userId, authToken, activeVideoId]);
 
-  /* ---------- 其余函数 ---------- */
+  const togglePlay = useCallback(() => setIsPlaying((p) => !p), []);
+
+  /* ---------- 播放状态回调 ---------- */
+  const onPlaybackStatusUpdate = useCallback((status) => {
+    if (!status.isLoaded) return;
+    const pos = status.positionMillis || 0;
+    const dur = status.durationMillis || 0;
+    playbackStatsRef.current = { position: pos, duration: dur };
+    if (status.isPlaying !== undefined) setIsPlaying(status.isPlaying);
+    if (!seekDragging) setPlaybackStats({ position: pos, duration: dur });
+    if (status.didJustFinish) setIsPlaying(false);
+  }, [seekDragging]);
+
+  /* ---------- 数据加载 ---------- */
   useEffect(() => {
     isMounted.current = true;
-    loadAndFetch();
+    (async () => {
+      try {
+        const [url, token, uid] = await Promise.all([
+          AsyncStorage.getItem('@emby_url'),
+          AsyncStorage.getItem('@emby_token'),
+          AsyncStorage.getItem('@emby_user_id'),
+        ]);
+        if (!url || !token || !uid) return;
+        setServerUrl(url);
+        setAuthToken(token);
+        setUserId(uid);
+        // fetch item detail
+        const data = await fetch(`${url}/Users/${uid}/Items/${itemId}?Fields=MediaSources,Studios,Taglines,People,OfficialRating,ProviderIds,Metascope`, {
+          headers: { 'X-Emby-Token': token },
+        }).then((r) => (r.ok ? r.json() : null));
+        if (!data || !isMounted.current) return;
+        setItem(data);
+        setResumeTicks(data.UserData?.PlaybackPositionTicks || 0);
+
+        if (data.Type === 'Series') {
+          const sd = await fetch(`${url}/Users/${uid}/Items?ParentId=${itemId}&IncludeItemTypes=Season&SortBy=SortName&SortOrder=Ascending`, {
+            headers: { 'X-Emby-Token': token },
+          }).then((r) => (r.ok ? r.json() : null));
+          if (sd?.Items) {
+            const valid = sd.Items.filter((s) => s.Name !== 'Placeholder');
+            setSeasons(valid);
+            if (valid.length > 0) {
+              setActiveSeasonId(valid[0].Id);
+              const ep = await fetch(`${url}/Users/${uid}/Items?ParentId=${valid[0].Id}&IncludeItemTypes=Episode&SortBy=SortName&SortOrder=Ascending`, {
+                headers: { 'X-Emby-Token': token },
+              }).then((r) => (r.ok ? r.json() : null));
+              if (ep?.Items && isMounted.current) setEpisodes(ep.Items);
+            }
+          }
+        }
+
+        const sim = await fetch(`${url}/Items/${itemId}/Similar?Limit=10`, {
+          headers: { 'X-Emby-Token': token },
+        }).then((r) => (r.ok ? r.json() : null));
+        if (sim?.Items) setSimilar(sim.Items.filter((s) => s.Id !== itemId).slice(0, 6));
+
+        if (data.MediaSources?.length > 0) {
+          const ms = data.MediaSources[0];
+          setMediaSource(ms);
+          setVideoCodec(ms.VideoCodec || '');
+          setVideoResolution(getResolution(ms.Width, ms.Height));
+          if (ms.MediaStreams) {
+            const subs = ms.MediaStreams.filter((s) => s.Type === 'Subtitle');
+            const auds = ms.MediaStreams.filter((s) => s.Type === 'Audio');
+            setSubtitleStreams(subs);
+            setAudioStreams(auds);
+            const ds = subs.find((s) => s.IsDefault);
+            setSelectedSubtitleIndex(ds ? ds.Index : -1);
+            const da = auds.find((s) => s.IsDefault);
+            setSelectedAudioIndex(da ? da.Index : (auds[0]?.Index || 0));
+          }
+        }
+      } catch (e) {
+        console.warn('loadAndFetch error:', e);
+      } finally {
+        if (isMounted.current) setLoading(false);
+      }
+    })();
     return () => {
       isMounted.current = false;
     };
   }, []);
 
+  /* ---------- 初始 seek ---------- */
   useEffect(() => {
     if (seekPosRef.current >= 0 && videoRef.current && playbackStatsRef.current.duration > 0) {
       videoRef.current.seek(seekPosRef.current * playbackStatsRef.current.duration);
@@ -276,108 +245,34 @@ export default function MediaDetailScreen({ route, navigation }) {
     }
   }, [playbackStats.duration]);
 
-  const loadAndFetch = async () => {
-    try {
-      const [url, token, uid] = await Promise.all([
-        AsyncStorage.getItem('@emby_url'),
-        AsyncStorage.getItem('@emby_token'),
-        AsyncStorage.getItem('@emby_user_id'),
-      ]);
-      if (!url || !token || !uid) return;
-      setServerUrl(url);
-      setAuthToken(token);
-      setUserId(uid);
-      await fetchItemDetail(url, token, uid);
-    } catch (e) {} finally {
-      if (isMounted.current) setLoading(false);
-    }
-  };
-
-  const apiGet = async (url, token, path) => {
-    const res = await fetch(`${url}${path}`, { headers: { 'X-Emby-Token': token } });
-    if (!res.ok) return null;
-    return res.json();
-  };
-
-  const fetchItemDetail = async (url, token, uid) => {
-    try {
-      const data = await apiGet(url, token, `/Users/${uid}/Items/${itemId}?Fields=MediaSources,Studios,Taglines,People,OfficialRating,ProviderIds,Metascore`);
-      if (!data || !isMounted.current) return;
-      setItem(data);
-      setResumeTicks(data.UserData?.PlaybackPositionTicks || 0);
-
-      if (data.Type === 'Series') {
-        const seasonsData = await apiGet(url, token, `/Users/${uid}/Items?ParentId=${itemId}&IncludeItemTypes=Season&SortBy=SortName&SortOrder=Ascending`);
-        if (seasonsData?.Items) {
-          const validSeasons = seasonsData.Items.filter((s) => s.Name !== 'Placeholder');
-          setSeasons(validSeasons);
-          if (validSeasons.length > 0) {
-            setActiveSeasonId(validSeasons[0].Id);
-            fetchEpisodes(url, token, uid, validSeasons[0].Id);
-          }
-        }
-      }
-
-      const similarData = await apiGet(url, token, `/Items/${itemId}/Similar?Limit=10`);
-      if (similarData?.Items) setSimilar(similarData.Items.filter((s) => s.Id !== itemId).slice(0, 6));
-
-      if (data.MediaSources?.length > 0) {
-        const ms = data.MediaSources[0];
-        setMediaSource(ms);
-        setVideoCodec(ms.VideoCodec || '');
-        setVideoResolution(getResolution(ms.Width, ms.Height));
-        if (ms.MediaStreams) {
-          const subs = ms.MediaStreams.filter((s) => s.Type === 'Subtitle');
-          const audios = ms.MediaStreams.filter((s) => s.Type === 'Audio');
-          setSubtitleStreams(subs);
-          setAudioStreams(audios);
-          const defaultSub = subs.find((s) => s.IsDefault);
-          setSelectedSubtitleIndex(defaultSub ? defaultSub.Index : -1);
-          const defaultAudio = audios.find((s) => s.IsDefault);
-          setSelectedAudioIndex(defaultAudio ? defaultAudio.Index : audios[0]?.Index || 0);
-        }
-      }
-    } catch (e) {}
-  };
-
-  const fetchEpisodes = async (url, token, uid, seasonId) => {
-    try {
-      const data = await apiGet(url, token, `/Users/${uid}/Items?ParentId=${seasonId}&IncludeItemTypes=Episode&SortBy=SortName&SortOrder=Ascending`);
-      if (data?.Items && isMounted.current) setEpisodes(data.Items);
-    } catch (e) {}
-  };
-
-  const handleSeasonChange = (seasonId) => {
-    setActiveSeasonId(seasonId);
-    setShowSeasonPicker(false);
-    fetchEpisodes(serverUrl, authToken, userId, seasonId);
-  };
-
   const handlePlay = (videoId, startTicks) => {
-    setDetectedTextTracks([]);
+    setDetectedSubtitle(null);
     const url = `${serverUrl}/Videos/${videoId}/stream?static=true`;
     setActiveVideoUrl(url);
     setActiveVideoId(videoId);
     setIsPlaying(true);
     if (startTicks && startTicks > 0) {
       const totalMs = mediaSource?.RunTimeTicks ? mediaSource.RunTimeTicks / 10000 : 0;
-      if (totalMs > 0) {
-        seekPosRef.current = startTicks / 10000 / totalMs;
-      }
+      seekPosRef.current = totalMs > 0 ? startTicks / 10000 / totalMs : 0;
     } else {
       seekPosRef.current = -1;
     }
   };
 
+  // 当前播放的 videoId 对应的剧集索引
+  const currentEpisodeIndex = item?.Type === 'Series' ? episodes.findIndex((ep) => ep.Id === activeVideoId) : -1;
+  const prevEp = currentEpisodeIndex > 0 ? episodes[currentEpisodeIndex - 1] : null;
+  const nextEp = currentEpisodeIndex >= 0 && currentEpisodeIndex < episodes.length - 1 ? episodes[currentEpisodeIndex + 1] : null;
+
   const handleExternalPlay = async () => {
     if (!activeVideoUrl) return;
-    if (Platform.OS === 'android') {
-      try {
+    try {
+      if (Platform.OS === 'android') {
         await IntentLauncher.startActivityAsync('android.intent.action.VIEW', { data: activeVideoUrl, type: 'video/*' });
-      } catch (e) {
+      } else {
         Linking.openURL(activeVideoUrl);
       }
-    } else {
+    } catch {
       Linking.openURL(activeVideoUrl);
     }
   };
@@ -388,187 +283,203 @@ export default function MediaDetailScreen({ route, navigation }) {
   };
 
   const switchSubtitleTrack = (trackId) => {
-    setSelectedSubtitleIndex((prev) => {
-      if (prev === trackId) return prev;
-      return trackId;
-    });
+    setSelectedSubtitleIndex((prev) => (prev === trackId ? prev : trackId));
     setShowTrackPicker(null);
   };
 
-  /* ---------- 渲染 ---------- */
-  if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View>;
-  if (!item) {
-    return (
-      <View style={styles.center}>
-        <Text style={{ color: '#9ca3af', marginBottom: 16 }}>无法加载影片信息</Text>
-        <TouchableOpacity style={styles.backBtnTop} onPress={() => navigation.goBack()}><ChevronLeft color="#fff" size={28} /></TouchableOpacity>
-      </View>
-    );
-  }
+  /* ---------- 字幕轨道检测（安全降级） ---------- */
+  const [detectedSubtitle, setDetectedSubtitle] = useState(null);
+  const onTextTracksLoad = useCallback((event) => {
+    if (event?.textTracks && event.textTracks.length > 0) {
+      setDetectedSubtitle(event.textTracks);
+    }
+  }, []);
 
+  const getSelectedTextTrack = useCallback(() => {
+    if (selectedSubtitleIndex < 0) return { type: 'disabled' };
+    if (detectedSubtitle && detectedSubtitle.length > 0) {
+      for (let i = 0; i < detectedSubtitle.length; i++) {
+        const t = detectedSubtitle[i];
+        const match = subtitleStreams.find(
+          (s) => s.DisplayTitle === t.title || s.Language === t.language || s.Id === t.id || s.Index === t.rawId
+        );
+        if (match && match.Index === selectedSubtitleIndex) {
+          return { type: 'index', value: i };
+        }
+      }
+    }
+    const ri = subtitleStreams.findIndex((s) => s.Index === selectedSubtitleIndex);
+    return ri >= 0 ? { type: 'index', value: ri } : { type: 'disabled' };
+  }, [selectedSubtitleIndex, subtitleStreams, detectedSubtitle]);
+
+  /* ---------- 渲染播放器 ---------- */
   const renderPlayer = () => {
     if (!activeVideoUrl) return null;
-
-    const currentRatio = seekDragging ? seekDragValue : playbackStats.duration > 0 ? playbackStats.position / playbackStats.duration : 0;
-    const currentMs = seekDragging ? seekDragValue * (playbackStats.duration || 0) : playbackStats.position;
-    const isSeries = item.Type === 'Series';
-    const prevEp = getPrevEpisode();
-    const nextEp = getNextEpisode();
+    const ratio = seekDragging ? seekDragValue : playbackStats.duration > 0 ? playbackStats.position / playbackStats.duration : 0;
+    const curMs = seekDragging ? seekDragValue * (playbackStats.duration || 0) : playbackStats.position;
+    const isSeries = item?.Type === 'Series';
 
     return (
       <View style={[styles.playerWrap, isFullscreen && styles.playerWrapFullscreen]}>
         <View style={[styles.playerInner, isFullscreen && styles.playerInnerFullscreen]}>
           {/* 顶部栏 */}
-          <View style={[styles.playerTopBar, !isFullscreen && styles.playerTopBarNonFullscreen]}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-              <TouchableOpacity style={styles.iconBtnLayer} onPress={closePlayer}><X color="#ffffff" size={24} /></TouchableOpacity>
-              <Text style={styles.playerTopTitle} numberOfLines={1}>{item.Name || navTitle}</Text>
+          <View style={styles.playerTopBar}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <TouchableOpacity style={styles.iconBtn} onPress={closePlayer}>
+                <X color="#fff" size={24} />
+              </TouchableOpacity>
+              <Text style={styles.topTitle} numberOfLines={1}>
+                {item?.Name || navTitle}
+              </Text>
             </View>
-            <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowSettings(true)}><Info color="#ffffff" size={22} /></TouchableOpacity>
+            <TouchableOpacity style={styles.iconBtn} onPress={() => setShowSettings(true)}>
+              <Info color="#fff" size={22} />
+            </TouchableOpacity>
           </View>
 
-          {/* 视频+seekbar */}
-          <TouchableOpacity activeOpacity={1} style={styles.videoContainer} onPress={togglePlay}>
+          {/* 视频 */}
+          <TouchableOpacity activeOpacity={1} style={styles.videoWrap} onPress={togglePlay}>
             <Video
               ref={videoRef}
-              style={[styles.video, isFullscreen && styles.videoFullscreen]}
+              style={styles.video}
               source={{ uri: activeVideoUrl, headers: { 'X-Emby-Token': authToken } }}
               shouldPlay={isPlaying}
               resizeMode={isFullscreen ? 'cover' : 'contain'}
               useNativeControls={false}
               onPlaybackStatusUpdate={onPlaybackStatusUpdate}
               onTextTracksLoad={onTextTracksLoad}
-              onError={(e) => console.warn('Video Error:', JSON.stringify(e))}
+              onError={(e) => console.warn('Video error:', e)}
               audioOutput="speaker"
-              selectedTextTrack={getVideoSelectedTextTrack()}
-              selectedAudioTrack={{ type: 'index', value: audioStreams.findIndex((s) => s.Index === selectedAudioIndex) >= 0 ? audioStreams.findIndex((s) => s.Index === selectedAudioIndex) : 0 }}
+              selectedTextTrack={getSelectedTextTrack()}
             />
-
             {/* 中央播放/暂停 */}
-            <View style={styles.playPauseOverlay}>
-              <TouchableOpacity style={styles.playPauseBtn} onPress={togglePlay}>
-                {isPlaying ? <Pause color="#ffffff" size={isFullscreen ? 48 : 36} strokeWidth={2} /> : <Play color="#ffffff" size={isFullscreen ? 48 : 36} fill="#ffffff" strokeWidth={2} />}
+            <View style={styles.playCenter}>
+              <TouchableOpacity style={styles.playBtn} onPress={togglePlay}>
+                {isPlaying ? (
+                  <Pause color="#fff" size={isFullscreen ? 48 : 36} strokeWidth={2} />
+                ) : (
+                  <Play color="#fff" size={isFullscreen ? 48 : 36} fill="#fff" />
+                )}
               </TouchableOpacity>
             </View>
 
             {/* seekbar */}
-            <View style={[styles.seekBarWrap, !isFullscreen && styles.seekBarWrapNonFullscreen]} onLayout={onSeekBarLayout}>
+            <View style={[styles.seekWrap, !isFullscreen && styles.seekWrapSmall]} onLayout={onSeekBarLayout}>
               {seekDragging && (
-                <View style={styles.seekBarPreview}>
-                  <Text style={styles.seekBarPreviewText}>{formatTime(seekDragValue * (playbackStats.duration || 0))}</Text>
+                <View style={seekStyles.preview}>
+                  <Text style={seekStyles.previewText}>{formatTime(seekDragValue * (playbackStats.duration || 0))}</Text>
                 </View>
               )}
-              <View style={styles.seekBarTrack}>
-                <View style={[styles.seekBarBuffer, { width: `${currentRatio * 100}%` }]} />
-                <View style={[styles.seekBarProgress, { width: `${seekDragging ? seekDragValue * 100 : currentRatio * 100}%` }]} />
-                <View style={styles.seekBarKnobArea} {...panResponder.panHandlers}>
-                  <View style={styles.seekBarKnob} />
+              <View style={seekStyles.track}>
+                <View style={[seekStyles.buf, { width: `${ratio * 100}%` }]} />
+                <View style={[seekStyles.prog, { width: `${(seekDragging ? seekDragValue : ratio) * 100}%` }]} />
+                <View {...panResponder.panHandlers} style={seekStyles.knobWrap}>
+                  <View style={seekStyles.knob} />
                 </View>
               </View>
             </View>
-
-            {/* 左上角：返回 + 全屏按钮（全屏时） */}
-            {isFullscreen && (
-              <View style={styles.playerTopBarOverlay}>
-                <TouchableOpacity style={styles.iconBtnLayer} onPress={closePlayer}><X color="#ffffff" size={26} /></TouchableOpacity>
-                <Text style={styles.playerTopTitleOverlay} numberOfLines={1}>{item.Name || navTitle}</Text>
-              </View>
-            )}
           </TouchableOpacity>
 
           {/* 底部控制栏 */}
-          <View style={[styles.playerControlsBar, !isFullscreen && styles.playerControlsBarNonFullscreen]}>
-            {/* 时间 */}
-            <Text style={styles.playerInfoText}>
-              {formatTime(currentMs)} / {formatTime(playbackStats.duration)}
-            </Text>
-
-            {/* 左下角：上一集 / 下一集 */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={[styles.ctrlBar, !isFullscreen && styles.ctrlBarSmall]}>
+            {/* 左侧：上集/下集 */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
               {prevEp && (
                 <TouchableOpacity
-                  style={[styles.controlBtn, styles.prevNextBtn]}
-                  onPress={() => playEpisode(prevEp.Id, prevEp.UserData?.PlaybackPositionTicks || 0)}
+                  style={[styles.ctrlBtn, styles.epBtn]}
+                  onPress={() => handlePlay(prevEp.Id, prevEp.UserData?.PlaybackPositionTicks || 0)}
                 >
-                  <ChevronLeftIcon color="#ffffff" size={isFullscreen ? 22 : 18} />
-                  <Text style={[styles.controlBtnText, isFullscreen && styles.controlBtnTextLg]}>上集</Text>
+                  <ChevronLeft size={isFullscreen ? 20 : 16} color="#fff" />
+                  <Text style={[styles.epBtnText, isFullscreen && { fontSize: 14 }]}>上集</Text>
                 </TouchableOpacity>
               )}
               {nextEp && (
                 <TouchableOpacity
-                  style={[styles.controlBtn, styles.prevNextBtn]}
-                  onPress={() => playEpisode(nextEp.Id, nextEp.UserData?.PlaybackPositionTicks || 0)}
+                  style={[styles.ctrlBtn, styles.epBtn]}
+                  onPress={() => handlePlay(nextEp.Id, nextEp.UserData?.PlaybackPositionTicks || 0)}
                 >
-                  <Text style={[styles.controlBtnText, isFullscreen && styles.controlBtnTextLg]}>下集</Text>
-                  <ChevronRight color="#ffffff" size={isFullscreen ? 22 : 18} />
+                  <Text style={[styles.epBtnText, isFullscreen && { fontSize: 14 }]}>下集</Text>
+                  <ChevronRight size={isFullscreen ? 20 : 16} color="#fff" />
                 </TouchableOpacity>
               )}
             </View>
 
-            {/* 右下角区域：字幕/音轨/全屏 */}
+            {/* 中间：时间 */}
+            <Text style={styles.timeText}>
+              {formatTime(curMs)} / {formatTime(playbackStats.duration)}
+            </Text>
+
+            {/* 右侧：字幕/音轨/全屏 */}
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               {subtitleStreams.length > 0 && (
-                <TouchableOpacity style={[styles.controlBtn, styles.trackBtn]} onPress={() => setShowTrackPicker('subtitle')}>
-                  <Subtitles color={selectedSubtitleIndex >= 0 ? '#fbbf24' : '#ffffff'} size={isFullscreen ? 22 : 18} />
-                  <Text style={[styles.controlBtnText, isFullscreen && styles.controlBtnTextLg]}>字幕</Text>
+                <TouchableOpacity style={styles.ctrlBtn} onPress={() => setShowTrackPicker('subtitle')}>
+                  <Subtitles color={selectedSubtitleIndex >= 0 ? '#fbbf24' : '#fff'} size={isFullscreen ? 20 : 16} />
+                  <Text style={[styles.ctrlBtnLabel, isFullscreen && { fontSize: 12 }]}>字幕</Text>
                 </TouchableOpacity>
               )}
               {audioStreams.length > 1 && (
-                <TouchableOpacity style={[styles.controlBtn, styles.trackBtn]} onPress={() => setShowTrackPicker('audio')}>
-                  <Volume2 color="#ffffff" size={isFullscreen ? 22 : 18} />
-                  <Text style={[styles.controlBtnText, isFullscreen && styles.controlBtnTextLg]}>音轨</Text>
+                <TouchableOpacity style={styles.ctrlBtn} onPress={() => setShowTrackPicker('audio')}>
+                  <Volume2 color="#fff" size={isFullscreen ? 20 : 16} />
+                  <Text style={[styles.ctrlBtnLabel, isFullscreen && { fontSize: 12 }]}>音轨</Text>
                 </TouchableOpacity>
               )}
-              <TouchableOpacity style={[styles.controlBtn, styles.fullscreenBtn]} onPress={handleFullscreenBtn}>
-                {isFullscreen ? <Minimize color="#ffffff" size={isFullscreen ? 22 : 18} /> : <Fullscreen color="#ffffff" size={isFullscreen ? 22 : 18} />}
-                <Text style={[styles.controlBtnText, isFullscreen && styles.controlBtnTextLg]}>
-                  {isFullscreen ? '退出' : '全屏'}
-                </Text>
+              <TouchableOpacity style={styles.ctrlBtn} onPress={toggleFullscreen}>
+                {isFullscreen ? <Minimize color="#fff" size={isFullscreen ? 20 : 16} /> : <Fullscreen color="#fff" size={isFullscreen ? 20 : 16} />}
+                <Text style={[styles.ctrlBtnLabel, isFullscreen && { fontSize: 12 }]}>{isFullscreen ? '退出' : '全屏'}</Text>
               </TouchableOpacity>
             </View>
           </View>
 
           {/* 设置弹窗 */}
           <Modal visible={showSettings} transparent animationType="slide">
-            <View style={styles.settingsOverlay}>
-              <View style={styles.settingsPanel}>
-                <View style={styles.settingsHeader}>
+            <View style={styles.modalBg}>
+              <View style={styles.modalCard}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                   <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>播放信息</Text>
                   <TouchableOpacity onPress={() => setShowSettings(false)}><X color="#9ca3af" size={24} /></TouchableOpacity>
                 </View>
-                <View style={{ padding: 20 }}>
-                  <View style={styles.statBox}><Info color="#3b82f6" size={16} /><Text style={styles.statLabel}>进度</Text></View>
-                  <Text style={styles.statText}>{formatTime(playbackStats.position)} / {formatTime(playbackStats.duration)}</Text>
+                <View style={{ paddingHorizontal: 20 }}>
+                  <View style={styles.statRow}>
+                    <Info color="#3b82f6" size={16} />
+                    <Text style={styles.statLabel}>进度</Text>
+                  </View>
+                  <Text style={styles.statVal}>{formatTime(playbackStats.position)} / {formatTime(playbackStats.duration)}</Text>
                   {videoCodec ? (
                     <>
                       <View style={{ height: 1, backgroundColor: '#374151', marginVertical: 12 }} />
-                      <View style={styles.statBox}><Monitor color="#3b82f6" size={16} /><Text style={styles.statLabel}>视频</Text></View>
-                      <Text style={styles.statText}>{videoCodec.toUpperCase()} {videoResolution}</Text>
+                      <View style={styles.statRow}><Monitor color="#3b82f6" size={16} /><Text style={styles.statLabel}>视频</Text></View>
+                      <Text style={styles.statVal}>{videoCodec.toUpperCase()} {videoResolution}</Text>
                     </>
                   ) : null}
-                  {primaryAudio ? (
-                    <>
-                      <View style={{ height: 1, backgroundColor: '#374151', marginVertical: 12 }} />
-                      <View style={styles.statBox}><Mic color="#3b82f6" size={16} /><Text style={styles.statLabel}>音频</Text></View>
-                      <Text style={styles.statText}>{primaryAudio.DisplayTitle || `${primaryAudio.Codec?.toUpperCase() || ''} ${primaryAudio.ChannelCount ? primaryAudio.ChannelCount + 'ch' : ''}`.trim()}</Text>
-                    </>
-                  ) : null}
+                  {(() => {
+                    const a = audioStreams.find((s) => s.Index === selectedAudioIndex) || audioStreams[0];
+                    if (!a) return null;
+                    return (
+                      <>
+                        <View style={{ height: 1, backgroundColor: '#374151', marginVertical: 12 }} />
+                        <View style={styles.statRow}><Mic color="#3b82f6" size={16} /><Text style={styles.statLabel}>音频</Text></View>
+                        <Text style={styles.statVal}>
+                          {a.DisplayTitle || `${a.Codec?.toUpperCase() || ''} ${a.ChannelCount ? a.ChannelCount + 'ch' : ''}`.trim()}
+                        </Text>
+                      </>
+                    );
+                  })()}
                   {mediaSource?.Container ? (
                     <>
                       <View style={{ height: 1, backgroundColor: '#374151', marginVertical: 12 }} />
-                      <View style={styles.statBox}><Hash color="#3b82f6" size={16} /><Text style={styles.statLabel}>封装</Text></View>
-                      <Text style={styles.statText}>{mediaSource.Container.toUpperCase()}</Text>
+                      <View style={styles.statRow}><Hash color="#3b82f6" size={16} /><Text style={styles.statLabel}>封装</Text></View>
+                      <Text style={styles.statVal}>{mediaSource.Container.toUpperCase()}</Text>
                     </>
                   ) : null}
                   {mediaSource?.Bitrate ? (
                     <>
                       <View style={{ height: 1, backgroundColor: '#374151', marginVertical: 12 }} />
-                      <View style={styles.statBox}><ActivityIndicator size={14} color="#3b82f6" /><Text style={styles.statLabel}>码率</Text></View>
-                      <Text style={styles.statText}>{formatBitrate(mediaSource.Bitrate)}</Text>
+                      <View style={styles.statRow}><ActivityIndicator size={14} color="#3b82f6" /><Text style={styles.statLabel}>码率</Text></View>
+                      <Text style={styles.statVal}>{formatBitrate(mediaSource.Bitrate)}</Text>
                     </>
                   ) : null}
                   <View style={{ height: 1, backgroundColor: '#374151', marginVertical: 16 }} />
-                  <TouchableOpacity style={styles.externalBtn} onPress={handleExternalPlay}>
+                  <TouchableOpacity style={styles.extBtn} onPress={handleExternalPlay}>
                     <ExternalLink color="#fff" size={16} style={{ marginRight: 8 }} />
                     <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 15 }}>使用第三方播放器</Text>
                   </TouchableOpacity>
@@ -577,9 +488,9 @@ export default function MediaDetailScreen({ route, navigation }) {
             </View>
           </Modal>
 
-          {/* 轨道选择弹窗 */}
+          {/* 轨道选择 */}
           <Modal visible={showTrackPicker !== null} transparent animationType="fade">
-            <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowTrackPicker(null)}>
+            <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowTrackPicker(null)}>
               <View style={styles.pickerPanel}>
                 <Text style={{ color: '#9ca3af', fontSize: 13, fontWeight: 'bold', marginBottom: 12 }}>
                   {showTrackPicker === 'subtitle' ? '选择字幕' : '选择音轨'}
@@ -587,30 +498,20 @@ export default function MediaDetailScreen({ route, navigation }) {
                 {showTrackPicker === 'subtitle' ? (
                   <>
                     <TouchableOpacity
-                      style={[styles.pickerItem, selectedSubtitleIndex === -1 && styles.pickerItemActive]}
+                      style={[styles.pickItem, selectedSubtitleIndex === -1 && styles.pickItemOn]}
                       onPress={() => switchSubtitleTrack(-1)}
                     >
-                      <Text
-                        style={{
-                          color: selectedSubtitleIndex === -1 ? '#3b82f6' : '#e5e7eb',
-                          fontWeight: selectedSubtitleIndex === -1 ? 'bold' : 'normal',
-                        }}
-                      >
+                      <Text style={{ color: selectedSubtitleIndex === -1 ? '#3b82f6' : '#e5e7eb', fontWeight: selectedSubtitleIndex === -1 ? 'bold' : 'normal' }}>
                         关闭字幕
                       </Text>
                     </TouchableOpacity>
                     {subtitleStreams.map((s) => (
                       <TouchableOpacity
                         key={s.Index}
-                        style={[styles.pickerItem, selectedSubtitleIndex === s.Index && styles.pickerItemActive]}
+                        style={[styles.pickItem, selectedSubtitleIndex === s.Index && styles.pickItemOn]}
                         onPress={() => switchSubtitleTrack(s.Index)}
                       >
-                        <Text
-                          style={{
-                            color: selectedSubtitleIndex === s.Index ? '#3b82f6' : '#e5e7eb',
-                            fontWeight: selectedSubtitleIndex === s.Index ? 'bold' : 'normal',
-                          }}
-                        >
+                        <Text style={{ color: selectedSubtitleIndex === s.Index ? '#3b82f6' : '#e5e7eb', fontWeight: selectedSubtitleIndex === s.Index ? 'bold' : 'normal' }}>
                           {s.DisplayTitle || `${s.Language || ''} ${s.Codec?.toUpperCase() || ''}`}
                         </Text>
                       </TouchableOpacity>
@@ -620,15 +521,10 @@ export default function MediaDetailScreen({ route, navigation }) {
                   audioStreams.map((s) => (
                     <TouchableOpacity
                       key={s.Index}
-                      style={[styles.pickerItem, selectedAudioIndex === s.Index && styles.pickerItemActive]}
+                      style={[styles.pickItem, selectedAudioIndex === s.Index && styles.pickItemOn]}
                       onPress={() => switchAudioTrack(s.Index)}
                     >
-                      <Text
-                        style={{
-                          color: selectedAudioIndex === s.Index ? '#3b82f6' : '#e5e7eb',
-                          fontWeight: selectedAudioIndex === s.Index ? 'bold' : 'normal',
-                        }}
-                      >
+                      <Text style={{ color: selectedAudioIndex === s.Index ? '#3b82f6' : '#e5e7eb', fontWeight: selectedAudioIndex === s.Index ? 'bold' : 'normal' }}>
                         {s.DisplayTitle || `${s.Language || ''} ${s.Codec?.toUpperCase() || ''} ${s.ChannelCount ? s.ChannelCount + 'ch' : ''}`}
                       </Text>
                     </TouchableOpacity>
@@ -642,21 +538,29 @@ export default function MediaDetailScreen({ route, navigation }) {
     );
   };
 
-  /* ---------- 详情页 ---------- */
-  const img = (id, type, w = width) =>
-    `${serverUrl}/Items/${id}/Images/${type}?api_key=${authToken}&width=${Math.round(w)}`;
+  /* ---------- 详情内容 ---------- */
+  const img = (id, tp, w = width) => `${serverUrl}/Items/${id}/Images/${tp}?api_key=${authToken}&width=${Math.round(w)}`;
+
+  if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View>;
+  if (!item) {
+    return (
+      <View style={styles.center}>
+        <Text style={{ color: '#9ca3af', marginBottom: 16 }}>无法加载影片信息</Text>
+        <TouchableOpacity style={styles.backTop} onPress={() => navigation.goBack()}><ChevronLeft color="#fff" size={28} /></TouchableOpacity>
+      </View>
+    );
+  }
 
   const primaryAudio = audioStreams.find((s) => s.Index === selectedAudioIndex) || audioStreams[0];
   const streamInfo = [];
-  if (videoCodec) streamInfo.push({ icon: <Monitor color="#3b82f6" size={14} />, label: `${videoCodec.toUpperCase()} ${videoResolution}` });
+  if (videoCodec) streamInfo.push({ label: `${videoCodec.toUpperCase()} ${videoResolution}` });
   if (primaryAudio) {
-    let audLabel = primaryAudio.Codec?.toUpperCase() || '';
-    if (primaryAudio.ChannelCount) audLabel += ` ${primaryAudio.ChannelCount}ch`;
-    if (primaryAudio.DisplayTitle) audLabel = primaryAudio.DisplayTitle;
-    streamInfo.push({ icon: <Mic color="#3b82f6" size={14} />, label: audLabel });
+    let lb = primaryAudio.Codec?.toUpperCase() || '';
+    if (primaryAudio.ChannelCount) lb += ` ${primaryAudio.ChannelCount}ch`;
+    if (primaryAudio.DisplayTitle) lb = primaryAudio.DisplayTitle;
+    streamInfo.push({ label: lb });
   }
-  if (mediaSource?.Bitrate)
-    streamInfo.push({ icon: <ActivityIndicator size={14} color="#3b82f6" />, label: formatBitrate(mediaSource.Bitrate) });
+  if (mediaSource?.Bitrate) streamInfo.push({ label: formatBitrate(mediaSource.Bitrate) });
 
   const directors = item?.People?.filter((p) => p.Type === 'Director') || [];
   const cast = item?.People?.filter((p) => p.Type === 'Actor' || p.Type === 'Performer') || [];
@@ -666,33 +570,25 @@ export default function MediaDetailScreen({ route, navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* ===== 播放部分 ===== */}
       {renderPlayer()}
 
-      {/* ===== 详情部分 ===== */}
       <ScrollView style={styles.scroll}>
         <View style={styles.hero}>
           <Image source={{ uri: backdropUrl || img(itemId, 'Backdrop', width) }} style={styles.backdrop} />
           <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
-          <View style={styles.heroOverlay} />
-          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-            <ChevronLeft color="#ffffff" size={30} />
-          </TouchableOpacity>
+          <View style={styles.heroFade} />
+          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}><ChevronLeft color="#fff" size={30} /></TouchableOpacity>
           <View style={styles.heroContent}>
             <Image source={{ uri: imageUrl || img(itemId, 'Primary', 240) }} style={styles.poster} />
             <View style={styles.heroText}>
-              <Text style={styles.title} numberOfLines={2}>
-                {item.Name || navTitle}
-              </Text>
-              {tagline ? (
-                <Text style={{ color: '#9ca3af', fontSize: 12, fontStyle: 'italic', marginBottom: 4 }}>{tagline}</Text>
-              ) : null}
+              <Text style={styles.title} numberOfLines={2}>{item.Name || navTitle}</Text>
+              {tagline ? <Text style={styles.tagline}>{tagline}</Text> : null}
               <View style={styles.metaRow}>
                 {item.ProductionYear ? <Text style={styles.meta}>{item.ProductionYear}</Text> : null}
                 {item.CommunityRating ? (
-                  <View style={styles.ratingBadge}>
+                  <View style={styles.rating}>
                     <Star color="#fff" size={11} fill="#fff" style={{ marginRight: 2 }} />
-                    <Text style={styles.ratingText}>{item.CommunityRating.toFixed(1)}</Text>
+                    <Text style={styles.ratingTxt}>{item.CommunityRating.toFixed(1)}</Text>
                   </View>
                 ) : null}
                 {officialRating ? <Text style={styles.meta}>{officialRating}</Text> : null}
@@ -705,9 +601,7 @@ export default function MediaDetailScreen({ route, navigation }) {
         {item.Genres?.length > 0 && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.genreRow} contentContainerStyle={{ paddingHorizontal: 20 }}>
             {item.Genres.map((g, i) => (
-              <View key={i} style={styles.genreChip}>
-                <Text style={styles.genreText}>{g}</Text>
-              </View>
+              <View key={i} style={styles.chip}><Text style={styles.chipText}>{g}</Text></View>
             ))}
           </ScrollView>
         )}
@@ -717,15 +611,15 @@ export default function MediaDetailScreen({ route, navigation }) {
             <TouchableOpacity
               style={styles.playBtn}
               onPress={() => {
-                const nextEp = episodes.find((e) => !e.UserData?.Played);
-                if (nextEp) handlePlay(nextEp.Id, nextEp.UserData?.PlaybackPositionTicks || 0);
+                const ne = episodes.find((e) => !e.UserData?.Played);
+                if (ne) handlePlay(ne.Id, ne.UserData?.PlaybackPositionTicks || 0);
                 else if (episodes.length > 0) handlePlay(episodes[0].Id, 0);
               }}
             >
               <Play color="#fff" size={20} fill="#fff" />
               <Text style={styles.playText}>播放下一集</Text>
             </TouchableOpacity>
-            <Text style={{ color: '#6b7280', fontSize: 11, textAlign: 'center', marginTop: 6 }}>或在下方选择剧集</Text>
+            <Text style={seriesHint}>或在下方选择剧集</Text>
           </View>
         ) : (
           <TouchableOpacity style={styles.playBtn} onPress={() => handlePlay(itemId, resumeTicks)}>
@@ -744,11 +638,10 @@ export default function MediaDetailScreen({ route, navigation }) {
         )}
 
         {streamInfo.length > 0 && (
-          <View style={styles.streamInfoRow}>
+          <View style={styles.siRow}>
             {streamInfo.map((s, i) => (
-              <View key={i} style={styles.streamInfoChip}>
-                {s.icon}
-                <Text style={styles.streamInfoText}>{s.label}</Text>
+              <View key={i} style={styles.siChip}>
+                <Text style={styles.siText}>{s.label}</Text>
               </View>
             ))}
           </View>
@@ -765,38 +658,31 @@ export default function MediaDetailScreen({ route, navigation }) {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>详细信息</Text>
             {directors.length > 0 && (
-              <View style={styles.metaLine}>
+              <View style={styles.ml}>
                 <User color="#6b7280" size={14} />
-                <Text style={styles.metaLineLabel}>导演</Text>
-                <Text style={styles.metaLineValue}>{directors.map((d) => d.Name).join('、')}</Text>
+                <Text style={styles.mll}>导演</Text>
+                <Text style={styles.mlv}>{directors.map((d) => d.Name).join('、')}</Text>
               </View>
             )}
             {studios.length > 0 && (
-              <View style={styles.metaLine}>
+              <View style={styles.ml}>
                 <Building color="#6b7280" size={14} />
-                <Text style={styles.metaLineLabel}>出品</Text>
-                <Text style={styles.metaLineValue}>{studios.map((s) => s.Name).join('、')}</Text>
+                <Text style={styles.mll}>出品</Text>
+                <Text style={styles.mlv}>{studios.map((s) => s.Name).join('、')}</Text>
               </View>
             )}
             {cast.length > 0 && (
-              <View style={styles.metaLine}>
+              <View style={styles.ml}>
                 <Star color="#6b7280" size={14} />
-                <Text style={styles.metaLineLabel}>主演</Text>
-                <Text style={styles.metaLineValue}>{cast.slice(0, 6).map((p) => p.Name).join('、')}</Text>
-              </View>
-            )}
-            {streamInfo.length > 0 && (
-              <View style={styles.metaLine}>
-                <Monitor color="#6b7280" size={14} />
-                <Text style={styles.metaLineLabel}>画质</Text>
-                <Text style={styles.metaLineValue}>{streamInfo.map((s) => s.label).join(' | ')}</Text>
+                <Text style={styles.mll}>主演</Text>
+                <Text style={styles.mlv}>{cast.slice(0, 6).map((p) => p.Name).join('、')}</Text>
               </View>
             )}
             {subtitleStreams.length > 0 && (
-              <View style={styles.metaLine}>
+              <View style={styles.ml}>
                 <Languages color="#6b7280" size={14} />
-                <Text style={styles.metaLineLabel}>字幕</Text>
-                <Text style={styles.metaLineValue}>{subtitleStreams.map((s) => s.Language || s.Codec || '未知').join('、')}</Text>
+                <Text style={styles.mll}>字幕</Text>
+                <Text style={styles.mlv}>{subtitleStreams.map((s) => s.Language || s.Codec || '未知').join('、')}</Text>
               </View>
             )}
           </View>
@@ -805,19 +691,14 @@ export default function MediaDetailScreen({ route, navigation }) {
         {item.Type === 'Series' && (
           <View style={styles.section}>
             <TouchableOpacity style={styles.seasonPicker} onPress={() => setShowSeasonPicker(true)}>
-              <Text style={{ color: '#fff', fontWeight: 'bold' }}>
-                季度 {seasons.findIndex((s) => s.Id === activeSeasonId) + 1}:{' '}
-                {seasons.find((s) => s.Id === activeSeasonId)?.Name || '未知'}
+              <Text style={styles.seasonText}>
+                季度 {seasons.findIndex((s) => s.Id === activeSeasonId) + 1}: {seasons.find((s) => s.Id === activeSeasonId)?.Name || '未知'}
               </Text>
               <ChevronDown color="#9ca3af" size={20} />
             </TouchableOpacity>
             {episodes.map((ep) => (
-              <TouchableOpacity
-                key={ep.Id}
-                style={styles.episodeCard}
-                onPress={() => handlePlay(ep.Id, ep.UserData?.PlaybackPositionTicks || 0)}
-              >
-                <Image source={{ uri: img(ep.Id, 'Primary', 160) }} style={styles.episodePoster} />
+              <TouchableOpacity key={ep.Id} style={styles.epCard} onPress={() => handlePlay(ep.Id, ep.UserData?.PlaybackPositionTicks || 0)}>
+                <Image source={{ uri: img(ep.Id, 'Primary', 160) }} style={styles.epPoster} />
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <Text style={styles.epTitle} numberOfLines={1}>
                     {ep.IndexNumber ? `${ep.IndexNumber}. ` : ''}
@@ -849,13 +730,8 @@ export default function MediaDetailScreen({ route, navigation }) {
                     })
                   }
                 >
-                  <Image
-                    source={{ uri: img(s.Id, 'Primary', 220) }}
-                    style={{ width: 110, height: 165, borderRadius: 8, backgroundColor: '#374151' }}
-                  />
-                  <Text style={{ color: '#e5e7eb', fontSize: 11, marginTop: 4, fontWeight: '500' }} numberOfLines={1}>
-                    {s.Name}
-                  </Text>
+                  <Image source={{ uri: img(s.Id, 'Primary', 220) }} style={{ width: 110, height: 165, borderRadius: 8, backgroundColor: '#374151' }} />
+                  <Text style={{ color: '#e5e7eb', fontSize: 11, marginTop: 4, fontWeight: '500' }} numberOfLines={1}>{s.Name}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -866,15 +742,11 @@ export default function MediaDetailScreen({ route, navigation }) {
       </ScrollView>
 
       <Modal visible={showSeasonPicker} transparent animationType="fade">
-        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowSeasonPicker(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowSeasonPicker(false)}>
           <View style={styles.pickerPanel}>
             <Text style={{ color: '#9ca3af', fontSize: 13, fontWeight: 'bold', marginBottom: 12 }}>选择季度</Text>
             {seasons.map((s, i) => (
-              <TouchableOpacity
-                key={s.Id}
-                style={[styles.pickerItem, activeSeasonId === s.Id && styles.pickerItemActive]}
-                onPress={() => handleSeasonChange(s.Id)}
-              >
+              <TouchableOpacity key={s.Id} style={[styles.pickItem, activeSeasonId === s.Id && styles.pickItemOn]} onPress={() => handleSeasonChange(s.Id)}>
                 <Text style={{ color: activeSeasonId === s.Id ? '#3b82f6' : '#e5e7eb', fontWeight: activeSeasonId === s.Id ? 'bold' : 'normal' }}>
                   季度 {i + 1}: {s.Name}
                 </Text>
@@ -893,96 +765,87 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   hero: { height: 300, justifyContent: 'flex-end', padding: 20, paddingBottom: 10, position: 'relative' },
   backdrop: { position: 'absolute', top: 0, left: 0, width, height: 300, resizeMode: 'cover' },
-  heroOverlay: { position: 'absolute', bottom: 0, left: 0, width, height: 120, backgroundColor: 'rgba(17, 24, 39, 0.7)' },
+  heroFade: { position: 'absolute', bottom: 0, left: 0, width, height: 120, backgroundColor: 'rgba(17,24,39,0.7)' },
   backBtn: { position: 'absolute', top: 50, left: 16, zIndex: 10, padding: 8 },
-  backBtnTop: { position: 'absolute', top: 50, left: 16, padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 },
+  backTop: { position: 'absolute', top: 50, left: 16, padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 },
   heroContent: { flexDirection: 'row', alignItems: 'flex-end', zIndex: 5 },
   poster: { width: 100, height: 150, borderRadius: 10, borderWidth: 2, borderColor: '#374151', elevation: 8 },
   heroText: { flex: 1, marginLeft: 14 },
-  title: { color: '#ffffff', fontSize: 20, fontWeight: 'bold', marginBottom: 4 },
+  title: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 4 },
+  tagline: { color: '#9ca3af', fontSize: 12, fontStyle: 'italic', marginBottom: 4 },
   metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
   meta: { color: '#d1d5db', fontSize: 13, marginRight: 10, fontWeight: '500' },
-  ratingBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(245, 158, 11, 0.2)', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 4, marginRight: 10 },
-  ratingText: { color: '#f59e0b', fontSize: 12, fontWeight: 'bold' },
-  genreRow: { marginTop: 14, marginBottom: 4 },
-  genreChip: { backgroundColor: 'rgba(59, 130, 246, 0.15)', paddingHorizontal: 12, paddingVertical: 5, borderRadius: 14, marginRight: 8, borderWidth: 1, borderColor: 'rgba(59, 130, 246, 0.3)' },
-  genreText: { color: '#60a5fa', fontSize: 12, fontWeight: '600' },
+  rating: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(245,158,11,0.2)', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 4, marginRight: 10 },
+  ratingTxt: { color: '#f59e0b', fontSize: 12, fontWeight: 'bold' },
+  chip: { backgroundColor: 'rgba(59,130,246,0.15)', paddingHorizontal: 12, paddingVertical: 5, borderRadius: 14, marginRight: 8, borderWidth: 1, borderColor: 'rgba(59,130,246,0.3)' },
+  chipText: { color: '#60a5fa', fontSize: 12, fontWeight: '600' },
   playBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#e50914', marginHorizontal: 20, marginTop: 14, paddingVertical: 13, borderRadius: 8, elevation: 3 },
-  playText: { color: '#ffffff', fontSize: 17, fontWeight: 'bold', marginLeft: 8 },
-  streamInfoRow: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: 20, marginTop: 12, gap: 8 },
-  streamInfoChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(59, 130, 246, 0.1)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(59, 130, 246, 0.2)' },
-  streamInfoText: { color: '#93c5fd', fontSize: 11, fontWeight: '600', marginLeft: 5 },
+  playText: { color: '#fff', fontSize: 17, fontWeight: 'bold', marginLeft: 8 },
+  seriesHint: { color: '#6b7280', fontSize: 11, textAlign: 'center', marginTop: 6 },
+  siRow: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: 20, marginTop: 12, gap: 8 },
+  siChip: { backgroundColor: 'rgba(59,130,246,0.1)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(59,130,246,0.2)' },
+  siText: { color: '#93c5fd', fontSize: 11, fontWeight: '600', marginLeft: 5 },
   section: { padding: 20, paddingBottom: 0 },
-  sectionTitle: { color: '#ffffff', fontSize: 17, fontWeight: 'bold', marginBottom: 12 },
+  sectionTitle: { color: '#fff', fontSize: 17, fontWeight: 'bold', marginBottom: 12 },
   overview: { color: '#9ca3af', fontSize: 14, lineHeight: 22 },
-  metaLine: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8 },
-  metaLineLabel: { color: '#6b7280', fontSize: 13, fontWeight: 'bold', marginLeft: 6, width: 40 },
-  metaLineValue: { color: '#d1d5db', fontSize: 13, flex: 1 },
-  seasonPicker: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1f2937', padding: 14, borderRadius: 10, marginBottom: 14 },
-  episodeCard: { flexDirection: 'row', backgroundColor: '#1f2937', padding: 12, borderRadius: 10, marginBottom: 10 },
-  episodePoster: { width: 80, height: 45, borderRadius: 6, backgroundColor: '#374151' },
+  ml: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8 },
+  mll: { color: '#6b7280', fontSize: 13, fontWeight: 'bold', marginLeft: 6, width: 40 },
+  mlv: { color: '#d1d5db', fontSize: 13, flex: 1 },
+  epCard: { flexDirection: 'row', backgroundColor: '#1f2937', padding: 12, borderRadius: 10, marginBottom: 10 },
+  epPoster: { width: 80, height: 45, borderRadius: 6, backgroundColor: '#374151' },
   epTitle: { color: '#e5e7eb', fontSize: 14, fontWeight: 'bold' },
   epSub: { color: '#6b7280', fontSize: 11, marginTop: 2 },
   epOverview: { color: '#6b7280', fontSize: 11, marginTop: 4, lineHeight: 16 },
 
-  /* -------- 播放器 -------- */
+  /* === 播放器 === */
   playerWrap: { position: 'absolute', top: 0, left: 0, width, zIndex: 999, backgroundColor: '#000' },
-  playerWrapFullscreen: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 9999, backgroundColor: '#000' },
-  playerInner: { flex: 1, justifyContent: 'center', position: 'relative' },
-  playerInnerFullscreen: { flex: 1 },
+  playerWrapFullscreen: { width: '100%', height: '100%', zIndex: 9999 },
+  playerInner: { flex: 1, justifyContent: 'center', position: 'relative', height: 220 },
+  playerInnerFullscreen: { flex: 1, height: undefined },
 
-  /* 非全屏：高度 220 */
-  playerTopBar: { position: 'absolute', top: 0, left: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingTop: Platform.OS === 'ios' ? 50 : 12, paddingBottom: 8, zIndex: 1000 },
-  playerTopBarNonFullscreen: { position: 'absolute', top: 0 },
-
-  /* 全屏：顶部 */
-  playerTopBarOverlay: { position: 'absolute', top: Platform.OS === 'ios' ? 50 : 30, left: 0, width: '100%', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, zIndex: 1001, gap: 8 },
-  playerTopTitleOverlay: { color: '#fff', fontSize: 16, fontWeight: '600', flex: 1, marginLeft: 4 },
-  playerTopTitle: { color: '#fff', fontSize: 14, fontWeight: '600', flex: 1, marginLeft: 4 },
+  /* 顶部栏 */
+  playerTopBar: { position: 'absolute', top: Platform.OS === 'ios' ? 50 : 30, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, zIndex: 1000 },
+  topTitle: { color: '#fff', fontSize: 14, fontWeight: '600', flex: 1, marginLeft: 8 },
+  iconBtn: { padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 },
 
   /* 视频 */
-  videoContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  video: { width: '100%', height: 220 },
-  videoFullscreen: { width: '100%', height: '100%' },
+  videoWrap: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  video: { width: '100%', height: '100%' },
 
-  /* 中央播放/暂停 */
-  playPauseOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 1002 },
-  playPauseBtn: { width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center' },
+  /* 播放/暂停 */
+  playCenter: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 1002 },
+  playBtn: { width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center' },
 
   /* seekbar */
-  seekBarWrap: { position: 'absolute', bottom: 50, left: 0, right: 0, zIndex: 1001, paddingHorizontal: 16 },
-  seekBarWrapNonFullscreen: { bottom: 8 },
-  seekBarTrack: { height: 4, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 2, overflow: 'hidden', flexDirection: 'row' },
-  seekBarBuffer: { height: '100%', backgroundColor: 'rgba(255,255,255,0.15)' },
-  seekBarProgress: { height: '100%', backgroundColor: '#3b82f6' },
-  seekBarKnobArea: { position: 'absolute', top: -6, left: 0, right: 0, bottom: -6, justifyContent: 'center' },
-  seekBarKnob: { width: 14, height: 14, borderRadius: 7, backgroundColor: '#fff', borderWidth: 2, borderColor: '#3b82f6', alignSelf: 'center' },
-  seekBarPreview: { position: 'absolute', bottom: 20, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.8)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
-  seekBarPreviewText: { color: '#fff', fontSize: 12 },
+  seekWrap: { position: 'absolute', bottom: 50, left: 0, right: 0, zIndex: 1001, paddingHorizontal: 16 },
+  seekWrapSmall: { bottom: 8 },
+  seekTrack: { height: 4, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 2, overflow: 'hidden', flexDirection: 'row' },
+  seekBuf: { height: '100%', backgroundColor: 'rgba(255,255,255,0.15)' },
+  seekProg: { height: '100%', backgroundColor: '#3b82f6' },
+  seekKnobWrap: { position: 'absolute', top: -6, left: 0, right: 0, bottom: -6, justifyContent: 'center' },
+  seekKnob: { width: 14, height: 14, borderRadius: 7, backgroundColor: '#fff', borderWidth: 2, borderColor: '#3b82f6' },
+  seekPreview: { position: 'absolute', bottom: 20, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.8)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
+  seekPreviewText: { color: '#fff', fontSize: 12 },
 
   /* 底部控制栏 */
-  playerControlsBar: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingBottom: 6, zIndex: 1000 },
-  playerControlsBarNonFullscreen: { position: 'absolute', bottom: 0 },
-  playerInfoText: { color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: '500', textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 4 },
+  ctrlBar: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingBottom: Platform.OS === 'ios' ? 10 : 6, zIndex: 1000 },
+  ctrlBarSmall: { paddingBottom: 4 },
+  timeText: { color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: '500', textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 4 },
+  ctrlBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, padding: 6 },
+  ctrlBtnLabel: { color: '#e5e7eb', fontSize: 12, fontWeight: '500' },
+  epBtn: { backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4 },
+  epBtnText: { color: '#e5e7eb', fontSize: 12, fontWeight: '500' },
 
-  /* 控制按钮 */
-  controlBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, padding: 6 },
-  trackBtn: {},
-  fullscreenBtn: {},
-  prevNextBtn: { backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4 },
-  controlBtnText: { color: '#e5e7eb', fontSize: 12, fontWeight: '500' },
-  controlBtnTextLg: { fontSize: 14 },
-
-  /* 设置弹窗 */
-  settingsOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  settingsPanel: { backgroundColor: '#1f2937', borderTopLeftRadius: 24, borderTopRightRadius: 24 },
-  settingsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#374151' },
-  statBox: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  statLabel: { color: '#e5e7eb', fontSize: 15, fontWeight: 'bold', marginLeft: 8 },
-  statText: { color: '#9ca3af', fontSize: 13, marginBottom: 4 },
-  externalBtn: { flexDirection: 'row', backgroundColor: '#8b5cf6', padding: 14, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
+  /* 弹窗 */
+  modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  modalCard: { backgroundColor: '#1f2937', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '60%' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: '#374151' },
   pickerPanel: { backgroundColor: '#1f2937', borderRadius: 16, padding: 20, elevation: 10 },
-  pickerItem: { paddingVertical: 13, paddingHorizontal: 12, borderRadius: 8, marginBottom: 4 },
-  pickerItemActive: { backgroundColor: 'rgba(59, 130, 246, 0.15)' },
+  pickItem: { paddingVertical: 13, paddingHorizontal: 12, borderRadius: 8, marginBottom: 4 },
+  pickItemOn: { backgroundColor: 'rgba(59,130,246,0.15)' },
+  statRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  statLabel: { color: '#e5e7eb', fontSize: 15, fontWeight: 'bold', marginLeft: 8 },
+  statVal: { color: '#9ca3af', fontSize: 13, marginBottom: 4 },
+  extBtn: { flexDirection: 'row', backgroundColor: '#8b5cf6', padding: 14, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginTop: 16 },
 });
