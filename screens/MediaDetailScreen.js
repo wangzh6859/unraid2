@@ -295,6 +295,7 @@ const onPlaybackStatusUpdate = useCallback((status) => {
                onPlaybackStatusUpdate={onPlaybackStatusUpdate}
                onError={(e) => console.warn('Video Error:', JSON.stringify(e))}
                audioOutput="speaker"
+               selectedTextTrack={selectedSubtitleIndex >= 0 ? { type: 'index', value: subtitleStreams.findIndex(s => s.Index === selectedSubtitleIndex) } : { type: 'disabled' }}
              />
             <View style={styles.playerInfoBar}>
               <Text style={styles.playerInfoText}>
