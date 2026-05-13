@@ -42,11 +42,6 @@ jobs:
 
       - name: Configure APK Signing
         run: |
-          rm -f release.keystore
-          keytool -genkey -v -keystore release.keystore \
-            -alias unraid_alias -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass "UnraidApp2024!" -keypass "UnraidApp2024!" \
-            -dname "CN=UnraidManager, OU=Dev, O=Personal, L=Unknown, S=Unknown, C=US"
           echo "KEY_ALIAS=unraid_alias" >> $GITHUB_ENV
           echo "KEY_STORE_PASS=UnraidApp2024!" >> $GITHUB_ENV
           echo "KEY_PASS=UnraidApp2024!" >> $GITHUB_ENV
