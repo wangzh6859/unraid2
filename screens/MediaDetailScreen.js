@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Linking, FlatList, NativeModules } from 'react-native';
-import Video from 'react-native-video';
+import { Video } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -188,20 +188,17 @@ export default function MediaDetailScreen({ route, navigation }) {
     } else { Linking.openURL(activeVideoUrl); }
   };
 
-  const onVideoProgress = useCallback((data) => {
-    if (data && data.currentTime !== undefined) {
-      const posMs = data.currentTime * 1000;
-      const durMs = (data.seekableDuration || 0) * 1000;
-      playbackStatsRef.current = { position: posMs, duration: durMs };
-      setPlaybackStats({ position: posMs, duration: durMs });
-    }
-  }, []);
-
-  const onVideoLoad = useCallback((data) => {
-    const durMs = (data.duration || 0) * 1000;
-    playbackStatsRef.current = { ...playbackStatsRef.current, duration: durMs };
-    setPlaybackStats(prev => ({ ...prev, duration: durMs }));
-  }, []);
+const onPlaybackStatusUpdate = useCallback((status) => {
+     if (status.isLoaded) {
+       const posMs = (status.positionMillis || 0);
+       const durMs = (status.durationMillis || 0);
+       playbackStatsRef.current = { position: posMs, duration: durMs };
+       setPlaybackStats({ position: posMs, duration: durMs });
+     }
+     if (status.didJustFinish) {
+       closePlayer();
+     }
+   }, [closePlayer]);
 
   const closePlayer = async () => {
     await safeLockPortrait();
@@ -288,19 +285,17 @@ export default function MediaDetailScreen({ route, navigation }) {
                 </TouchableOpacity>
               </View>
             </View>
-            <Video
-              ref={videoRef}
-              style={styles.video}
-              source={{ uri: activeVideoUrl, headers: { 'X-Emby-Token': authToken } }}
-              paused={false}
-              resizeMode="contain"
-              onProgress={onVideoProgress}
-              onLoad={onVideoLoad}
-              onEnd={closePlayer}
-              onError={(e) => console.warn('Video Error:', JSON.stringify(e))}
-              selectedAudioTrack={audioStreams.length > 1 ? { type: 'index', value: selectedAudioIndex } : undefined}
-              selectedTextTrack={selectedSubtitleIndex >= 0 ? { type: 'index', value: selectedSubtitleIndex } : { type: 'disabled' }}
-            />
+<Video
+               ref={videoRef}
+               style={styles.video}
+               source={{ uri: activeVideoUrl, headers: { 'X-Emby-Token': authToken } }}
+               shouldPlay={true}
+               resizeMode="cover"
+               useNativeControls={false}
+               onPlaybackStatusUpdate={onPlaybackStatusUpdate}
+               onError={(e) => console.warn('Video Error:', JSON.stringify(e))}
+               audioOutput="speaker"
+             />
             <View style={styles.playerInfoBar}>
               <Text style={styles.playerInfoText}>
                 {formatTime(playbackStats.position)} / {formatTime(playbackStats.duration)}
