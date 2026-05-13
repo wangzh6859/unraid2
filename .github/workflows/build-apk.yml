@@ -41,49 +41,60 @@ jobs:
       - name: Prebuild
         run: npx expo prebuild --platform android --clean --no-install
 
-      - name: Patch Android build files for media3 compileSdk 35
+      - name: Patch Android build files for media3 + compileSdk 35
         run: |
           python3 -c "
-          import re
+          import re, os
 
-          # Fix 1: Upgrade compileSdk to 35 in app/build.gradle
-          gradle_path = 'android/app/build.gradle'
-          with open(gradle_path, 'r') as f:
-            content = f.read()
-          content = re.sub(r'compileSdk\s+(\d+)', 'compileSdk 35', content)
-          # Remove the compileSdk override if expo added it via app.json (no-op if not present)
-          with open(gradle_path, 'w') as f:
-            f.write(content)
-
-          # Fix 2: Upgrade AGP version in android/build.gradle for compileSdk 35 support
+          # Fix 1: Upgrade AGP in android/build.gradle
           root_gradle = 'android/build.gradle'
           with open(root_gradle, 'r') as f:
             root_content = f.read()
           root_content = re.sub(
-            r'com\.android\.tools\.build:gradle:[^\\n]+',
-            'com.android.tools.build:gradle:8.7.3',
+            r'com\.android\.tools\.build:gradle:[^\n]+',
+            'com.android.tools.build:gradle:8.4.2',
             root_content
           )
-          # Also bump the distribution URL to match
           root_content = re.sub(
             r'https://services\.gradle\.org/distributions/gradle-[^-]+-',
-            'https://services.gradle.org/distributions/gradle-8.12.1-',
+            'https://services.gradle.org/distributions/gradle-8.7-bin-',
             root_content
           )
           with open(root_gradle, 'w') as f:
             f.write(root_content)
 
-          # Fix 3: Remove conflicting buildscript from VLC if present
+          # Fix 2: Upgrade compileSdk in android/app/build.gradle
+          app_gradle = 'android/app/build.gradle'
+          with open(app_gradle, 'r') as f:
+            app_content = f.read()
+          app_content = re.sub(r'compileSdk\s+(\d+)', 'compileSdk 35', app_content)
+          # Also set targetSdk to 35
+          app_content = re.sub(r'targetSdk\s+(\d+)', 'targetSdk 35', app_content)
+          # Upgrade kotlin jvmToolchain
+          app_content = re.sub(r'jvmToolchain\([\d]+\)', 'jvmToolchain(17)', app_content)
+          with open(app_gradle, 'w') as f:
+            f.write(app_content)
+
+          # Fix 3: Ensure gradle/wrapper/gradle-wrapper.properties uses 8.7
+          wrapper_props = 'android/gradle/wrapper/gradle-wrapper.properties'
+          if os.path.exists(wrapper_props):
+            with open(wrapper_props, 'r') as f:
+              wcontent = f.read()
+            wcontent = re.sub(r'distributionUrl=.*', 'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-bin.zip', wcontent)
+            with open(wrapper_props, 'w') as f:
+              f.write(wcontent)
+
+          # Fix 4: Remove conflicting buildscript from VLC if exists
           try:
-            import os
-            for dep_dir in ['node_modules/react-native-vlc-media-player/android']:
-              vlc_gradle = os.path.join(dep_dir, 'build.gradle')
-              if os.path.exists(vlc_gradle):
-                with open(vlc_gradle, 'r') as f:
-                  vlc_content = f.read()
-                vlc_content = re.sub(r'buildscript\s*\{[^}]*dependencies\s*\{[^}]*\}\s*\}', '', vlc_content, flags=re.DOTALL)
-                with open(vlc_gradle, 'w') as f:
-                  f.write(vlc_content)
+            vlc_dir = 'node_modules/react-native-vlc-media-player/android'
+            if os.path.exists(vlc_dir):
+              vlc_build = os.path.join(vlc_dir, 'build.gradle')
+              if os.path.exists(vlc_build):
+                with open(vlc_build, 'r') as f:
+                  vlc = f.read()
+                vlc = re.sub(r'buildscript\s*\{[^}]*dependencies\s*\{[^}]*\}\s*\}', '', vlc, flags=re.DOTALL)
+                with open(vlc_build, 'w') as f:
+                  f.write(vlc)
           except:
             pass
           "
