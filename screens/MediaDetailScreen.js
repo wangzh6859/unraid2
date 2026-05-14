@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Linking, Alert } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Linking, FlatList } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { BlurView } from 'expo-blur';
+import base64 from 'base-64';
+import { XMLParser } from 'fast-xml-parser';
 import { ChevronLeft, Play, X, Info, ExternalLink, Star } from 'lucide-react-native';
 import * as IntentLauncher from 'expo-intent-launcher';
 
@@ -19,34 +21,107 @@ function formatTime(millis) {
 }
 
 export default function MediaDetailScreen({ route, navigation }) {
-  const { videoUrl, title: navTitle, year, plot, rating, posterUrl, backdropUrl, type, showName } = route?.params || {};
+  const { videoUrl, title: navTitle, year, plot, rating, posterUrl, backdropUrl, type, showName, showPath, serverUrl, webdavUser, webdavPass } = route?.params || {};
 
   const videoRef = useRef(null);
-  const isMounted = useRef(true);
-
   const [playing, setPlaying] = useState(false);
   const [playbackStats, setPlaybackStats] = useState({ position: 0, duration: 0 });
   const [showSettings, setShowSettings] = useState(false);
+  const [episodes, setEpisodes] = useState([]);
+  const [loadingEps, setLoadingEps] = useState(false);
+  const [playingEp, setPlayingEp] = useState(null);
+
+  const origin = (serverUrl || '').match(/^(https?:\/\/[^\/]+)/)?.[1] || '';
+  const authHeader = () => 'Basic ' + base64.encode(`${webdavUser || ''}:${webdavPass || ''}`);
 
   useEffect(() => {
-    isMounted.current = true;
-    if (videoUrl) setPlaying(true);
-    return () => { isMounted.current = false; };
+    if (type === 'tv' && showPath) fetchEpisodes();
   }, []);
+
+  const propfind = async (targetPath) => {
+    const url = origin + targetPath;
+    const res = await fetch(url, {
+      method: 'PROPFIND',
+      headers: { 'Authorization': authHeader(), 'Depth': '1', 'Content-Type': 'application/xml' },
+    });
+    const xml = await res.text();
+    const parser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true });
+    const result = parser.parse(xml);
+    let responses = result?.multistatus?.response;
+    if (!responses) return [];
+    if (!Array.isArray(responses)) responses = [responses];
+    const entries = [];
+    const normPath = targetPath.replace(/\/+$/, '') + '/';
+    for (const r of responses) {
+      let href = r.href;
+      if (href.startsWith('http')) href = href.replace(/^https?:\/\/[^\/]+/, '');
+      if (href === targetPath.replace(/\/+$/, '') || href === normPath) continue;
+      const isDir = (r.propstat?.prop || (Array.isArray(r.propstat) ? r.propstat[0].prop : {}))?.resourcetype?.collection === '';
+      const name = (r.propstat?.prop || {}).displayname || decodeURIComponent(href.split('/').filter(Boolean).pop() || '');
+      if (!name || name.startsWith('.')) continue;
+      entries.push({ name, href, isDir });
+    }
+    return entries;
+  };
+
+  const getAuthUrl = (filePath) => {
+    const encU = encodeURIComponent(webdavUser || '');
+    const encP = encodeURIComponent(webdavPass || '');
+    return origin.replace('://', `://${encU}:${encP}@`) + filePath;
+  };
+
+  const fetchEpisodes = async () => {
+    setLoadingEps(true);
+    try {
+      const entries = await propfind(showPath);
+      const seasonDirs = entries.filter(e => e.isDir);
+      const allEps = [];
+      for (const sd of seasonDirs) {
+        const sn = sd.name.match(/\d+/)?.[0] || sd.name;
+        const files = await propfind(sd.href);
+        for (const f of files) {
+          if (f.isDir || !/\.(mkv|mp4|avi|ts|mov|wmv|m4v|webm)$/i.test(f.name)) continue;
+          const nfoRes = await fetch(origin + sd.href + f.name.replace(/\.\w+$/, '.nfo'), { headers: { 'Authorization': authHeader() } });
+          const nfoXml = nfoRes.ok ? await nfoRes.text() : '';
+          const title = nfoXml.match(/<title>([\s\S]*?)<\/title>/)?.[1]?.trim() || f.name.replace(/\.[^.]+$/, '');
+          const plot = nfoXml.match(/<plot>([\s\S]*?)<\/plot>/)?.[1]?.trim() || '';
+          const epNum = parseInt(nfoXml.match(/<episode>([\s\S]*?)<\/episode>/)?.[1]) || 0;
+          const seasonNum = parseInt(nfoXml.match(/<season>([\s\S]*?)<\/season>/)?.[1]) || 0;
+          const tm = f.name.match(/S(\d+)E(\d+)/i);
+          allEps.push({
+            id: f.href, title, plot,
+            episode: epNum || parseInt(tm?.[2]) || 0,
+            season: seasonNum || parseInt(tm?.[1]) || parseInt(sn) || 0,
+            file: f.href,
+          });
+        }
+      }
+      allEps.sort((a, b) => a.season - b.season || a.episode - b.episode);
+      setEpisodes(allEps);
+    } catch (e) { setEpisodes([]); }
+    setLoadingEps(false);
+  };
+
+  const playEpisode = async (ep) => {
+    setPlayingEp(ep);
+    setPlaying(true);
+  };
 
   const closePlayer = async () => {
     await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
     setPlaying(false);
+    setPlayingEp(null);
     setShowSettings(false);
   };
 
   const handleExternalPlay = () => {
-    if (!videoUrl) return;
+    const url = playingEp ? getAuthUrl(playingEp.file) : videoUrl;
+    if (!url) return;
     if (Platform.OS === 'android') {
-      IntentLauncher.startActivityAsync('android.intent.action.VIEW', { data: videoUrl, type: 'video/*' })
-        .catch(() => Linking.openURL(videoUrl));
+      IntentLauncher.startActivityAsync('android.intent.action.VIEW', { data: url, type: 'video/*' })
+        .catch(() => Linking.openURL(url));
     } else {
-      Linking.openURL(videoUrl);
+      Linking.openURL(url);
     }
   };
 
@@ -59,9 +134,11 @@ export default function MediaDetailScreen({ route, navigation }) {
   const safeLockLandscape = async () => { try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE); } catch (e) {} };
   const safeLockPortrait = async () => { try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP); } catch (e) {} };
 
+  const currentVideoUrl = playingEp ? getAuthUrl(playingEp.file) : videoUrl;
+
   return (
     <View style={styles.container}>
-      {playing && videoUrl && (
+      {playing && currentVideoUrl && (
         <View style={styles.playerWrap}>
           <View style={styles.playerInner}>
             <View style={styles.playerTopBar}>
@@ -69,7 +146,7 @@ export default function MediaDetailScreen({ route, navigation }) {
               <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowSettings(true)}><Info color="#ffffff" size={24} /></TouchableOpacity>
             </View>
             <Video
-              ref={videoRef} style={styles.video} source={{ uri: videoUrl }}
+              ref={videoRef} style={styles.video} source={{ uri: currentVideoUrl }}
               useNativeControls resizeMode={ResizeMode.CONTAIN} shouldPlay
               onFullscreenUpdate={({ fullscreenUpdate }) => {
                 if (fullscreenUpdate === 0 || fullscreenUpdate === 1) safeLockLandscape();
@@ -119,15 +196,20 @@ export default function MediaDetailScreen({ route, navigation }) {
                     <Text style={styles.ratingText}>{rating.toFixed(1)}</Text>
                   </View>
                 ) : null}
+                {type === 'tv' && episodes.length > 0 && (
+                  <Text style={styles.meta}>{episodes.length} 集</Text>
+                )}
               </View>
             </View>
           </View>
         </View>
 
-        {!playing && (
-          <TouchableOpacity style={styles.playBtn} onPress={() => { setPlaying(true); }}>
-            <Play color="#fff" size={20} fill="#fff" /><Text style={styles.playText}>立即播放</Text>
-          </TouchableOpacity>
+        {type === 'tv' ? null : (
+          !playing ? (
+            <TouchableOpacity style={styles.playBtn} onPress={() => setPlaying(true)}>
+              <Play color="#fff" size={20} fill="#fff" /><Text style={styles.playText}>立即播放</Text>
+            </TouchableOpacity>
+          ) : null
         )}
 
         {plot ? (
@@ -136,6 +218,27 @@ export default function MediaDetailScreen({ route, navigation }) {
             <Text style={styles.overview}>{plot}</Text>
           </View>
         ) : null}
+
+        {type === 'tv' && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>剧集列表</Text>
+            {loadingEps ? (
+              <ActivityIndicator color="#3b82f6" style={{ marginVertical: 20 }} />
+            ) : episodes.length === 0 ? (
+              <Text style={{ color: '#6b7280', textAlign: 'center', marginVertical: 20 }}>暂无剧集</Text>
+            ) : (
+              episodes.map((ep, i) => (
+                <TouchableOpacity key={i} style={styles.epCard} onPress={() => playEpisode(ep)}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.epTitle} numberOfLines={1}>S{String(ep.season).padStart(2, '0')}E{String(ep.episode).padStart(2, '0')} - {ep.title}</Text>
+                    {ep.plot ? <Text style={styles.epOverview} numberOfLines={2}>{ep.plot}</Text> : null}
+                  </View>
+                  <Play color="#3b82f6" size={20} fill="#3b82f6" />
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
+        )}
 
         <View style={{ height: 50 }} />
       </ScrollView>
@@ -176,4 +279,7 @@ const styles = StyleSheet.create({
   statLabel: { color: '#e5e7eb', fontSize: 15, fontWeight: 'bold', marginLeft: 8 },
   statText: { color: '#9ca3af', fontSize: 13, marginBottom: 4 },
   externalBtn: { flexDirection: 'row', backgroundColor: '#8b5cf6', padding: 14, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  epCard: { flexDirection: 'row', backgroundColor: '#1f2937', padding: 14, borderRadius: 10, marginBottom: 8, alignItems: 'center' },
+  epTitle: { color: '#e5e7eb', fontSize: 14, fontWeight: 'bold' },
+  epOverview: { color: '#6b7280', fontSize: 12, marginTop: 4 },
 });

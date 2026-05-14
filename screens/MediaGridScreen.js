@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, FlatList, Image, Alert, Dimensions, TextInput, Modal, ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import base64 from 'base-64';
 import { XMLParser } from 'fast-xml-parser';
-import { Film, Plus, X, Trash2, Play, FolderOpen, ChevronLeft, Star, Server, User, Key, LogOut, Settings, ChevronRight } from 'lucide-react-native';
+import { Film, Plus, X, FolderOpen, ChevronLeft, Star, Server, User, Key, LogOut, Settings } from 'lucide-react-native';
 
 const { width } = Dimensions.get('window');
 const POSTER_W = (width - 48) / 3;
@@ -28,9 +28,6 @@ export default function MediaGridScreen({ navigation }) {
   const [activeLibId, setActiveLibId] = useState('all');
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
-
-  const [tvShow, setTvShow] = useState(null);
-  const [episodes, setEpisodes] = useState([]);
 
   const [showSettings, setShowSettings] = useState(false);
   const [editingLib, setEditingLib] = useState(null);
@@ -155,31 +152,23 @@ export default function MediaGridScreen({ navigation }) {
     } catch (e) { return null; }
   };
 
+  const parseNfoField = (xml, tag) => xml.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`))?.[1]?.trim() || '';
+
   const parseMovieNfo = (xml) => {
     if (!xml) return {};
-    const title = xml.match(/<title>(.+?)<\/title>/)?.[1]?.trim() || '';
-    const plot = xml.match(/<plot>(.+?)<\/plot>/)?.[1]?.trim() || '';
-    const outline = xml.match(/<outline>(.+?)<\/outline>/)?.[1]?.trim() || '';
-    const rating = parseFloat(xml.match(/<rating>(.+?)<\/rating>/)?.[1]) || 0;
-    const year = parseInt(xml.match(/<year>(.+?)<\/year>/)?.[1]) || 0;
-    return { title, plot: plot || outline, rating, year };
+    const title = parseNfoField(xml, 'title');
+    const plot = parseNfoField(xml, 'plot') || parseNfoField(xml, 'outline');
+    const rating = parseFloat(parseNfoField(xml, 'rating')) || 0;
+    const year = parseInt(parseNfoField(xml, 'year')) || 0;
+    return { title, plot, rating, year };
   };
 
   const parseTvShowNfo = (xml) => {
     if (!xml) return {};
-    const title = xml.match(/<title>(.+?)<\/title>/)?.[1]?.trim() || '';
-    const plot = xml.match(/<plot>(.+?)<\/plot>/)?.[1]?.trim() || '';
-    const rating = parseFloat(xml.match(/<rating>(.+?)<\/rating>/)?.[1]) || 0;
+    const title = parseNfoField(xml, 'title');
+    const plot = parseNfoField(xml, 'plot');
+    const rating = parseFloat(parseNfoField(xml, 'rating')) || 0;
     return { title, plot, rating };
-  };
-
-  const parseEpisodeNfo = (xml) => {
-    if (!xml) return {};
-    const title = xml.match(/<title>(.+?)<\/title>/)?.[1]?.trim() || '';
-    const plot = xml.match(/<plot>(.+?)<\/plot>/)?.[1]?.trim() || '';
-    const epNum = parseInt(xml.match(/<episode>(.+?)<\/episode>/)?.[1]) || 0;
-    const seasonNum = parseInt(xml.match(/<season>(.+?)<\/season>/)?.[1]) || 0;
-    return { title, plot, episode: epNum, season: seasonNum };
   };
 
   const fetchLibItems = async (lib) => {
@@ -214,7 +203,7 @@ export default function MediaGridScreen({ navigation }) {
   };
 
   const fetchItems = async (libId) => {
-    setLoading(true); setTvShow(null); setEpisodes([]);
+    setLoading(true);
     try {
       let allItems = [];
       if (libId === 'all') {
@@ -243,37 +232,9 @@ export default function MediaGridScreen({ navigation }) {
     }
   }, [view, libraries]);
 
-  const browseTvShow = async (show) => {
-    setTvShow(show); setLoading(true);
-    try {
-      const entries = await propfind(show.path);
-      const seasonDirs = entries.filter(e => e.isDir);
-      const allEps = [];
-      for (const sd of seasonDirs) {
-        const sn = sd.name.match(/\d+/)?.[0] || sd.name;
-        const files = await propfind(sd.href);
-        for (const f of files) {
-          if (f.isDir || !/\.(mkv|mp4|avi|ts|mov|wmv)$/i.test(f.name)) continue;
-          const nfo = await readFile(sd.href + f.name.replace(/\.\w+$/, '.nfo'));
-          const meta = parseEpisodeNfo(nfo);
-          const tm = f.name.match(/S(\d+)E(\d+)/i);
-          allEps.push({
-            id: f.href, title: meta.title || f.name.replace(/\.[^.]+$/, ''),
-            plot: meta.plot, episode: meta.episode || parseInt(tm?.[2]) || 0,
-            season: meta.season || parseInt(tm?.[1]) || parseInt(sn) || 0,
-            file: f.href, showTitle: show.title,
-          });
-        }
-      }
-      allEps.sort((a, b) => a.season - b.season || a.episode - b.episode);
-      setEpisodes(allEps);
-    } catch (e) { setEpisodes([]); }
-    setLoading(false);
-  };
-
   const handlePlay = (item) => {
     propfind(item.path).then(files => {
-      const video = files.find(f => !f.isDir && /\.(mkv|mp4|avi|ts|mov|wmv)$/i.test(f.name));
+      const video = files.find(f => !f.isDir && /\.(mkv|mp4|avi|ts|mov|wmv|m4v|webm)$/i.test(f.name));
       if (video) {
         navigation.navigate('MediaDetail', {
           videoUrl: getAuthUrl(video.href), title: item.title, year: item.year,
@@ -281,15 +242,6 @@ export default function MediaGridScreen({ navigation }) {
           posterUrl: getAuthUrl(item.poster), backdropUrl: getAuthUrl(item.fanart), type: 'movie',
         });
       }
-    });
-  };
-
-  const handlePlayEpisode = (ep) => {
-    navigation.navigate('MediaDetail', {
-      videoUrl: getAuthUrl(ep.file),
-      title: `S${String(ep.season).padStart(2, '0')}E${String(ep.episode).padStart(2, '0')} - ${ep.title}`,
-      showName: ep.showTitle, plot: ep.plot, type: 'episode',
-      posterUrl: getAuthUrl(tvShow?.poster), backdropUrl: getAuthUrl(tvShow?.fanart),
     });
   };
 
@@ -393,37 +345,20 @@ export default function MediaGridScreen({ navigation }) {
           <TouchableOpacity onPress={() => { setEditingLib(null); setEditName(''); setEditType('movie'); setEditFolders([]); setAddingFolder(false); setShowSettings(true); }} style={styles.tab}><Settings color="#9ca3af" size={18} /></TouchableOpacity>
         </ScrollView>
 
-        {tvShow ? (
-          <View style={{ flex: 1 }}>
-            <View style={styles.subHeader}>
-              <TouchableOpacity onPress={() => { setTvShow(null); setEpisodes([]); }} style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <ChevronLeft color="#fff" size={22} /><Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>{tvShow.title}</Text>
-              </TouchableOpacity>
-            </View>
-            {loading ? <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View> : (
-              <FlatList data={episodes} keyExtractor={e => e.id} contentContainerStyle={{ padding: 16 }}
-                ListEmptyComponent={<Text style={{ color: '#6b7280', textAlign: 'center', marginTop: 40 }}>暂无剧集</Text>}
-                renderItem={({ item: ep }) => (
-                  <TouchableOpacity style={styles.epCard} onPress={() => handlePlayEpisode(ep)}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.epTitle} numberOfLines={1}>S{String(ep.season).padStart(2, '0')}E{String(ep.episode).padStart(2, '0')} - {ep.title}</Text>
-                      {ep.plot ? <Text style={styles.epOverview} numberOfLines={2}>{ep.plot}</Text> : null}
-                    </View>
-                    <Play color="#3b82f6" size={20} fill="#3b82f6" />
-                  </TouchableOpacity>
-                )}
-              />
-            )}
-          </View>
-        ) : (
-          loading ? <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View> : (
+          {loading ? <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View> : (
             <FlatList data={items} keyExtractor={item => item.id} numColumns={3}
               contentContainerStyle={{ padding: 16 }}
               ListEmptyComponent={<Text style={{ color: '#6b7280', textAlign: 'center', marginTop: 40 }}>暂无内容{'\n'}点右上角 + 添加媒体库</Text>}
               renderItem={({ item }) => (
                 <TouchableOpacity style={styles.gridItem} onPress={() => {
                   if (item.type === 'movie') handlePlay(item);
-                  else browseTvShow(item);
+                  else navigation.navigate('MediaDetail', {
+                    type: item.type, showPath: item.path,
+                    title: item.title, plot: item.plot, rating: item.rating,
+                    posterUrl: getAuthUrl(item.poster), backdropUrl: getAuthUrl(item.fanart),
+                    showName: item.title, serverUrl: origin,
+                    webdavUser: username, webdavPass: password,
+                  });
                 }}>
                   <Image source={{ uri: getAuthUrl(item.poster) }} style={styles.gridPoster} />
                   <View style={styles.gridOverlay}>
@@ -433,8 +368,7 @@ export default function MediaGridScreen({ navigation }) {
                 </TouchableOpacity>
               )}
             />
-          )
-        )}
+          )}
 
         <Modal visible={showSettings} transparent animationType="slide">
           <View style={styles.settingsOverlay}>
@@ -521,16 +455,12 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: 'rgba(59, 130, 246, 0.25)' },
   tabText: { color: '#9ca3af', fontSize: 14, fontWeight: '600' },
   tabTextActive: { color: '#60a5fa' },
-  subHeader: { paddingHorizontal: 16, paddingVertical: 10, backgroundColor: '#1f2937', borderBottomWidth: 1, borderBottomColor: '#374151' },
   gridItem: { width: POSTER_W, marginRight: 8, marginBottom: 16 },
   gridPoster: { width: POSTER_W, height: POSTER_H, borderRadius: 8, backgroundColor: '#374151' },
   gridOverlay: { position: 'absolute', top: 4, right: 4, flexDirection: 'row' },
   ratingBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4 },
   ratingText: { color: '#f59e0b', fontSize: 10, fontWeight: 'bold', marginLeft: 2 },
   gridTitle: { color: '#e5e7eb', fontSize: 12, fontWeight: '500', marginTop: 4 },
-  epCard: { flexDirection: 'row', backgroundColor: '#1f2937', padding: 14, borderRadius: 10, marginBottom: 8, alignItems: 'center' },
-  epTitle: { color: '#e5e7eb', fontSize: 14, fontWeight: 'bold' },
-  epOverview: { color: '#6b7280', fontSize: 12, marginTop: 4 },
   typeChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: '#374151', marginRight: 8 },
   typeChipActive: { backgroundColor: 'rgba(59, 130, 246, 0.25)' },
   typeChipText: { color: '#9ca3af', fontSize: 13, fontWeight: '600' },
