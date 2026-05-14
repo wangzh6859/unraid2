@@ -143,7 +143,7 @@ export default function MediaGridScreen({ navigation }) {
        let baseUrl = serverUrl.trim().replace(/\/+$/, '');
        const res = await fetch(`${baseUrl}/Users/AuthenticateByName`, {
          method: 'POST',
-         headers: { 'Content-Type': 'application/json' },
+         headers: { 'Content-Type': 'application/json', 'X-Emby-Client': 'UnraidManager', 'X-Emby-Device-Name': 'Android', 'X-Emby-Client-Version': '1.1.57' },
          body: JSON.stringify({ Username: username, Pw: password }),
        });
        if (!res.ok) {
