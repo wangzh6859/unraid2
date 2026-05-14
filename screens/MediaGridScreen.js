@@ -1,400 +1,473 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, FlatList, Image, Alert, Dimensions, TextInput, Platform, Modal, ScrollView, RefreshControl } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, FlatList, Image, Alert, Dimensions, TextInput, Modal, ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Film, Search, ArrowUpDown, LogOut, Clock, Play, X, Server, User, Key, ChevronRight, ListVideo, Star } from 'lucide-react-native';
+import { Film, Plus, X, Trash2, Play, FolderOpen, ChevronLeft, Star, Server, User, Key, ChevronRight, LogOut } from 'lucide-react-native';
 
 const { width } = Dimensions.get('window');
 const POSTER_W = (width - 48) / 3;
 const POSTER_H = POSTER_W * 1.5;
-const PER_PAGE = 60;
 
-const SORT_OPTIONS = [
-  { id: 'SortName_Ascending', label: '名称 (A-Z)', sortBy: 'SortName', order: 'Ascending' },
-  { id: 'SortName_Descending', label: '名称 (Z-A)', sortBy: 'SortName', order: 'Descending' },
-  { id: 'PremiereDate_Descending', label: '年份 (新→旧)', sortBy: 'PremiereDate', order: 'Descending' },
-  { id: 'PremiereDate_Ascending', label: '年份 (旧→新)', sortBy: 'PremiereDate', order: 'Ascending' },
-  { id: 'CommunityRating_Descending', label: '评分 (高→低)', sortBy: 'CommunityRating', order: 'Descending' },
-  { id: 'DateCreated_Descending', label: '最近添加', sortBy: 'DateCreated', order: 'Descending' },
+const LIB_TYPES = [
+  { id: 'movie', label: '电影' },
+  { id: 'tv', label: '电视剧' },
+  { id: 'anime', label: '动漫' },
+  { id: 'other', label: '其他' },
 ];
 
-function formatTime(millis) {
-  if (!millis) return null;
-  const s = Math.floor(millis / 1000);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-  return `${m}:${String(sec).padStart(2, '0')}`;
-}
+const btoa = global.btoa || ((s) => Buffer.from(s, 'binary').toString('base64'));
 
 export default function MediaGridScreen({ navigation }) {
-  const [isConfigured, setIsConfigured] = useState(false);
+  const [view, setView] = useState('loading');
   const [serverUrl, setServerUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [authToken, setAuthToken] = useState('');
-  const [userId, setUserId] = useState('');
-  const [userName, setUserName] = useState('');
 
   const [libraries, setLibraries] = useState([]);
-  const [activeLibId, setActiveLibId] = useState('all');
-  const [items, setItems] = useState([]);
-  const [totalItems, setTotalItems] = useState(0);
-  const [startIndex, setStartIndex] = useState(0);
-  const [continueWatching, setContinueWatching] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
-  const [sortBy, setSortBy] = useState('SortName');
-  const [sortOrder, setSortOrder] = useState('Ascending');
-  const [showSortModal, setShowSortModal] = useState(false);
 
-  const isMounted = useRef(true);
+  const [showAddLib, setShowAddLib] = useState(false);
+  const [newLibName, setNewLibName] = useState('');
+  const [newLibType, setNewLibType] = useState('movie');
+  const [newLibPath, setNewLibPath] = useState('');
 
-  useEffect(() => {
-    isMounted.current = true;
-    loadSavedAuth();
-    return () => { isMounted.current = false; };
-  }, []);
+  const [activeLib, setActiveLib] = useState(null);
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const [tvShow, setTvShow] = useState(null);
+  const [episodes, setEpisodes] = useState([]);
+
+  const auth = useCallback(() => 'Basic ' + btoa(username + ':' + password), [username, password]);
+
+  const authUrl = useCallback((path) => {
+    const base = serverUrl.replace(/\/+$/, '');
+    const [prot, rest] = base.split('://');
+    return `${prot}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${rest}${path.startsWith('/') ? path : '/' + path}`;
+  }, [serverUrl, username, password]);
+
+  const webdavFetch = async (path, opts = {}) => {
+    const base = serverUrl.replace(/\/+$/, '');
+    const url = base + (path.startsWith('/') ? path : '/' + path);
+    return fetch(url, { ...opts, headers: { ...opts.headers, 'Authorization': auth() } });
+  };
+
+  const listDir = async (path) => {
+    const body = '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/><d:getcontentlength/><d:getcontenttype/></d:prop></d:propfind>';
+    const res = await webdavFetch(path, { method: 'PROPFIND', headers: { 'Depth': '1', 'Content-Type': 'application/xml' }, body });
+    const xml = await res.text();
+    const entries = [];
+    const parts = xml.split(/<\/[Dd]:response>|<\/response>/);
+    const normalizedPath = path.replace(/\/+$/, '') + '/';
+    for (const part of parts) {
+      const hrefMatch = part.match(/<[Dd]?:href[^>]*>(.*?)<\/[Dd]?:href>/i);
+      if (!hrefMatch) continue;
+      let href = (hrefMatch[1] || '').trim();
+      href = decodeURIComponent(href.replace(/\/+$/, ''));
+      if (href.startsWith('http')) try { href = new URL(href).pathname; } catch (e) { continue; }
+      if (!href || href === normalizedPath.replace(/\/$/, '') || href + '/' === normalizedPath) continue;
+      const isCollection = /<[Dd]?:collection\s*\/>/i.test(part);
+      const name = href.split('/').filter(Boolean).pop() || '';
+      if (!name || name.startsWith('.')) continue;
+      if (isCollection) entries.push({ name, href, isDir: true });
+      else entries.push({ name, href, isDir: false });
+    }
+    return entries;
+  };
+
+  const getDirEntries = async (path) => {
+    const entries = await listDir(path);
+    return entries.filter(e => e.isDir);
+  };
+
+  const getFileEntries = async (path, exts = ['.mkv', '.mp4', '.avi', '.ts', '.mov', '.wmv']) => {
+    const entries = await listDir(path);
+    return entries.filter(e => !e.isDir && exts.some(ext => e.name.toLowerCase().endsWith(ext)));
+  };
+
+  const readNfo = async (nfoPath) => {
+    try {
+      const res = await webdavFetch(nfoPath);
+      if (!res.ok) return null;
+      const xml = await res.text();
+      return xml;
+    } catch (e) { return null; }
+  };
+
+  const parseMovieNfo = (xml) => {
+    if (!xml) return {};
+    const title = xml.match(/<title>(.+?)<\/title>/)?.[1]?.trim() || '';
+    const plot = xml.match(/<plot>(.+?)<\/plot>/)?.[1]?.trim() || '';
+    const outline = xml.match(/<outline>(.+?)<\/outline>/)?.[1]?.trim() || '';
+    const rating = parseFloat(xml.match(/<rating>(.+?)<\/rating>/)?.[1]) || 0;
+    const year = parseInt(xml.match(/<year>(.+?)<\/year>/)?.[1]) || 0;
+    return { title, plot: plot || outline, rating, year };
+  };
+
+  const parseTvShowNfo = (xml) => {
+    if (!xml) return {};
+    const title = xml.match(/<title>(.+?)<\/title>/)?.[1]?.trim() || '';
+    const plot = xml.match(/<plot>(.+?)<\/plot>/)?.[1]?.trim() || '';
+    const rating = parseFloat(xml.match(/<rating>(.+?)<\/rating>/)?.[1]) || 0;
+    return { title, plot, rating };
+  };
+
+  const parseEpisodeNfo = (xml) => {
+    if (!xml) return {};
+    const title = xml.match(/<title>(.+?)<\/title>/)?.[1]?.trim() || '';
+    const plot = xml.match(/<plot>(.+?)<\/plot>/)?.[1]?.trim() || '';
+    const epNum = parseInt(xml.match(/<episode>(.+?)<\/episode>/)?.[1]) || 0;
+    const seasonNum = parseInt(xml.match(/<season>(.+?)<\/season>/)?.[1]) || 0;
+    return { title, plot, episode: epNum, season: seasonNum };
+  };
+
+  useEffect(() => { loadSavedAuth(); }, []);
 
   const loadSavedAuth = async () => {
     try {
-      const [url, token, uid, uname] = await Promise.all([
-        AsyncStorage.getItem('@emby_url'),
-        AsyncStorage.getItem('@emby_token'),
-        AsyncStorage.getItem('@emby_user_id'),
-        AsyncStorage.getItem('@emby_user_name'),
+      const [url, user, pass, libs] = await Promise.all([
+        AsyncStorage.getItem('@webdav_url'),
+        AsyncStorage.getItem('@webdav_user'),
+        AsyncStorage.getItem('@webdav_pass'),
+        AsyncStorage.getItem('@libraries'),
       ]);
-      if (url && token && uid) {
-        setServerUrl(url); setAuthToken(token);
-        setUserId(uid); setUserName(uname || '');
-        setIsConfigured(true);
-        await Promise.all([fetchLibraries(url, token, uid), fetchContinueWatching(url, token, uid)]);
-        if (isMounted.current) setLoading(false);
+      if (url && user && pass) {
+        setServerUrl(url); setUsername(user); setPassword(pass);
+        if (libs) setLibraries(JSON.parse(libs));
+        setView('manager');
       } else {
-        if (isMounted.current) setLoading(false);
+        setView('login');
       }
-    } catch (e) {
-      if (isMounted.current) setLoading(false);
-    }
-  };
-
-  const api = useCallback(async (path) => {
-    const res = await fetch(`${serverUrl}${path}${path.includes('?') ? '&' : '?'}api_key=${authToken}`, { headers: { 'X-Emby-Token': authToken } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  }, [serverUrl, authToken]);
-
-  const apiItems = useCallback(async (path) => {
-    const res = await fetch(`${serverUrl}${path}${path.includes('?') ? '&' : '?'}api_key=${authToken}`, { headers: { 'X-Emby-Token': authToken } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    return { items: data.Items || [], total: data.TotalRecordCount || 0 };
-  }, [serverUrl, authToken]);
-
-  const headers = (token) => ({ 'X-Emby-Token': token || authToken });
-
-  const fetchLibraries = async (url, token, uid) => {
-    try {
-      const data = await fetch(`${url}/Users/${uid}/Views`, { headers: headers(token) }).then(r => r.json());
-      const libs = (data.Items || []).filter(l => l.CollectionType === 'movies' || l.CollectionType === 'tvshows' || !l.CollectionType);
-      if (isMounted.current) {
-        setLibraries(libs);
-        if (libs.length > 0 && activeLibId === 'all') {
-          await fetchItems('all', url, token, uid);
-        }
-      }
-    } catch (e) {}
-  };
-
-  const fetchItems = async (libId, url = serverUrl, token = authToken, uid = userId, start = 0, append = false, search = '', sort = sortBy, order = sortOrder) => {
-    try {
-      const COLLECTION_TYPES = { movies: 'Movie', tvshows: 'Series', homevideos: 'Video', musicvideos: 'MusicVideo', trailers: 'Trailer', boxsets: 'BoxSet' };
-      let types = 'Movie,Series';
-      if (libId && libId !== 'all') {
-        const lib = libraries.find(l => l.Id === libId);
-        types = (lib && COLLECTION_TYPES[lib.CollectionType]) || 'Movie,Series';
-      }
-      let path = libId && libId !== 'all'
-        ? `/Users/${uid}/Items?SortBy=${sort}&SortOrder=${order}&Limit=${PER_PAGE}&StartIndex=${start}&IncludeItemTypes=${types}&ParentId=${libId}&Recursive=true`
-        : `/Users/${uid}/Items?SortBy=${sort}&SortOrder=${order}&Limit=${PER_PAGE}&StartIndex=${start}&IncludeItemTypes=${types}&Recursive=true`;
-      if (search.trim()) path += `&SearchTerm=${encodeURIComponent(search.trim())}`;
-      const data = await fetch(`${url}${path}`, { headers: headers(token) }).then(r => r.json());
-      const newItems = data.Items || [];
-      if (isMounted.current) {
-        if (append) {
-          setItems(prev => [...prev, ...newItems]);
-        } else {
-          setItems(newItems);
-        }
-        setTotalItems(data.TotalRecordCount || 0);
-        setStartIndex(start + PER_PAGE);
-      }
-    } catch (e) {
-      if (!append && isMounted.current) setItems([]);
-    }
-  };
-
-  const fetchContinueWatching = async (url = serverUrl, token = authToken, uid = userId) => {
-    try {
-      const data = await fetch(`${url}/Users/${uid}/Items/Resume?Limit=20`, { headers: headers(token) }).then(r => r.json());
-      if (isMounted.current) setContinueWatching(data.Items || []);
-    } catch (e) {}
+    } catch (e) { setView('login'); }
   };
 
   const handleLogin = async () => {
-     if (!serverUrl || !username || !password) return Alert.alert('提示', '请填写完整信息');
-     setIsTesting(true);
-     try {
-       let baseUrl = serverUrl.trim().replace(/\/+$/, '');
-       const res = await fetch(`${baseUrl}/Users/AuthenticateByName?format=json&username=${encodeURIComponent(username)}&pw=${encodeURIComponent(password)}`, {
-         method: 'POST',
-         headers: { 'X-Emby-Client': 'UnraidManager', 'X-Emby-Device-Name': 'Android', 'X-Emby-Client-Version': '1.1.59', 'X-Emby-Device-Id': 'unraid-android-001' },
-       });
-       if (!res.ok) {
-         const text = await res.text();
-         return Alert.alert('错误', `认证失败 (${res.status}): ${text.slice(0, 100)}`);
-       }
-      const data = await res.json();
-      const token = data.AccessToken;
-      const uid = data.User.Id;
-      const uname = data.User.Name;
+    if (!serverUrl || !username || !password) return Alert.alert('提示', '请填写完整信息');
+    setIsTesting(true);
+    try {
+      const base = serverUrl.trim().replace(/\/+$/, '');
+      const res = await fetch(base + '/', {
+        method: 'PROPFIND',
+        headers: { 'Authorization': 'Basic ' + btoa(username + ':' + password), 'Depth': '0' },
+        body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>',
+      });
+      if (!res.ok) return Alert.alert('错误', `WebDAV 连接失败 (${res.status})`);
       await AsyncStorage.multiSet([
-        ['@emby_url', baseUrl], ['@emby_token', token],
-        ['@emby_user_id', uid], ['@emby_user_name', uname],
+        ['@webdav_url', base], ['@webdav_user', username], ['@webdav_pass', password],
       ]);
-      setServerUrl(baseUrl); setAuthToken(token);
-      setUserId(uid); setUserName(uname);
-      setIsConfigured(true);
-      await Promise.all([fetchLibraries(baseUrl, token, uid), fetchContinueWatching(baseUrl, token, uid)]);
+      setServerUrl(base);
+      setView('manager');
     } catch (e) {
       Alert.alert('错误', '无法连接服务器');
     } finally { setIsTesting(false); }
   };
 
   const handleLogout = () => {
-    Alert.alert('注销', '确定退出登录吗？', [
-      { text: '取消' }, { text: '注销', style: 'destructive', onPress: async () => {
-        await AsyncStorage.multiRemove(['@emby_url', '@emby_token', '@emby_user_id', '@emby_user_name']);
-        setIsConfigured(false); setItems([]); setLibraries([]); setContinueWatching([]); setActiveLibId('all');
-      }}
+    Alert.alert('注销', '确定退出吗？', [
+      { text: '取消' }, {
+        text: '注销', style: 'destructive', onPress: async () => {
+          await AsyncStorage.multiRemove(['@webdav_url', '@webdav_user', '@webdav_pass', '@libraries']);
+          setLibraries([]); setView('login'); setItems([]); setActiveLib(null);
+        }
+      }
     ]);
   };
 
-  const handleTabSelect = (libId) => {
-    setActiveLibId(libId);
-    setItems([]);
-    setStartIndex(0);
-    setSearchQuery('');
-    fetchItems(libId, serverUrl, authToken, userId, 0);
+  const saveLibraries = async (libs) => {
+    setLibraries(libs);
+    await AsyncStorage.setItem('@libraries', JSON.stringify(libs));
   };
 
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    setStartIndex(0);
-    await Promise.all([
-      fetchContinueWatching(),
-      fetchItems(activeLibId, serverUrl, authToken, userId, 0),
-    ]);
-    if (isMounted.current) setRefreshing(false);
+  const handleAddLib = async () => {
+    if (!newLibName.trim() || !newLibPath.trim()) return Alert.alert('提示', '请填写完整信息');
+    const lib = {
+      id: Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
+      name: newLibName.trim(),
+      type: newLibType,
+      path: newLibPath.trim().replace(/\/+$/, ''),
+    };
+    await saveLibraries([...libraries, lib]);
+    setNewLibName(''); setNewLibPath(''); setNewLibType('movie');
+    setShowAddLib(false);
   };
 
-  const handleLoadMore = async () => {
-    if (loadingMore || startIndex >= totalItems) return;
-    setLoadingMore(true);
-    await fetchItems(activeLibId, serverUrl, authToken, userId, startIndex, true);
-    if (isMounted.current) setLoadingMore(false);
+  const handleDeleteLib = async (libId) => {
+    await saveLibraries(libraries.filter(l => l.id !== libId));
+    if (activeLib?.id === libId) { setActiveLib(null); setItems([]); }
   };
 
-  const handleSearch = (text) => {
-    setSearchQuery(text);
-    fetchItems(activeLibId, serverUrl, authToken, userId, 0, false, text);
+  const getPosterUrl = (dirPath) => authUrl(dirPath + '/poster.jpg');
+  const getFanartUrl = (dirPath) => authUrl(dirPath + '/fanart.jpg');
+
+  const browseLibrary = async (lib) => {
+    setActiveLib(lib);
+    setTvShow(null);
+    setEpisodes([]);
+    setLoading(true);
+    setView('grid');
+    try {
+      if (lib.type === 'movie') {
+        const dirs = await getDirEntries(lib.path);
+        const movieItems = [];
+        for (const dir of dirs) {
+          const nfoXml = await readNfo(dir.href + 'movie.nfo');
+          const meta = parseMovieNfo(nfoXml);
+          movieItems.push({
+            id: dir.href,
+            title: meta.title || dir.name.replace(/\s*\(\d{4}\)\s*$/, '').trim(),
+            year: meta.year,
+            plot: meta.plot,
+            rating: meta.rating,
+            poster: getPosterUrl(dir.href),
+            fanart: getFanartUrl(dir.href),
+            path: dir.href,
+            type: 'movie',
+            dir: dir.name,
+          });
+        }
+        movieItems.sort((a, b) => a.title.localeCompare(b.title));
+        setItems(movieItems);
+      } else {
+        const dirs = await getDirEntries(lib.path);
+        const showItems = [];
+        for (const dir of dirs) {
+          const nfoXml = await readNfo(dir.href + 'tvshow.nfo');
+          const meta = parseTvShowNfo(nfoXml);
+          showItems.push({
+            id: dir.href,
+            title: meta.title || dir.name,
+            plot: meta.plot,
+            rating: meta.rating,
+            poster: getPosterUrl(dir.href),
+            fanart: getFanartUrl(dir.href),
+            path: dir.href,
+            type: lib.type === 'tv' ? 'tv' : 'anime',
+          });
+        }
+        showItems.sort((a, b) => a.title.localeCompare(b.title));
+        setItems(showItems);
+      }
+    } catch (e) { setItems([]); }
+    finally { setLoading(false); }
   };
 
-  const handleSortChange = (opt) => {
-    setSortBy(opt.sortBy); setSortOrder(opt.order);
-    setShowSortModal(false);
-    fetchItems(activeLibId, serverUrl, authToken, userId, 0, false, searchQuery, opt.sortBy, opt.order);
+  const browseTvShow = async (show) => {
+    setTvShow(show);
+    setLoading(true);
+    try {
+      const seasonDirs = await getDirEntries(show.path);
+      const allEps = [];
+      for (const seasonDir of seasonDirs) {
+        const seasonName = seasonDir.name.match(/\d+/)?.[0] || seasonDir.name;
+        const files = await getFileEntries(seasonDir.href);
+        for (const file of files) {
+          const nfoPath = seasonDir.href + file.name.replace(/\.(mkv|mp4|avi|ts|mov|wmv)$/, '.nfo');
+          const nfoXml = await readNfo(nfoPath);
+          const meta = parseEpisodeNfo(nfoXml);
+          const titleMatch = file.name.match(/S(\d+)E(\d+)/i);
+          allEps.push({
+            id: file.href,
+            title: meta.title || file.name.replace(/\.[^.]+$/, ''),
+            plot: meta.plot,
+            episode: meta.episode || parseInt(titleMatch?.[2]) || 0,
+            season: meta.season || parseInt(titleMatch?.[1]) || parseInt(seasonName) || 0,
+            file: file.href,
+            path: file.href,
+            showTitle: show.title,
+          });
+        }
+      }
+      allEps.sort((a, b) => a.season - b.season || a.episode - b.episode);
+      setEpisodes(allEps);
+    } catch (e) { setEpisodes([]); }
+    finally { setLoading(false); }
   };
 
-  const getImgUrl = (itemId, type = 'Primary', w = POSTER_W * 2) =>
-    `${serverUrl}/Items/${itemId}/Images/${type}?api_key=${authToken}&width=${Math.round(w)}`;
-
-  const formatRuntime = (ticks) => {
-    if (!ticks) return '';
-    const min = Math.round(ticks / 600000000);
-    if (min >= 60) return `${Math.floor(min / 60)}h ${min % 60}m`;
-    return `${min}m`;
+  const handlePlay = (item) => {
+    if (item.type === 'movie') {
+      getFileEntries(item.path).then(files => {
+        if (files.length > 0) {
+          const videoUrl = authUrl(files[0].href);
+          navigation.navigate('MediaDetail', {
+            videoUrl, title: item.title, year: item.year,
+            plot: item.plot, rating: item.rating,
+            posterUrl: item.poster, backdropUrl: item.fanart,
+            type: 'movie',
+          });
+        }
+      });
+    }
   };
 
-  const getResumePercent = (item) => {
-    if (!item.UserData?.PlaybackPositionTicks || !item.RunTimeTicks) return 0;
-    return (item.UserData.PlaybackPositionTicks / item.RunTimeTicks) * 100;
+  const handlePlayEpisode = (ep) => {
+    const videoUrl = authUrl(ep.file);
+    navigation.navigate('MediaDetail', {
+      videoUrl, title: `S${String(ep.season).padStart(2, '0')}E${String(ep.episode).padStart(2, '0')} - ${ep.title}`,
+      showName: ep.showTitle, plot: ep.plot, type: 'episode',
+      posterUrl: tvShow?.poster, backdropUrl: tvShow?.fanart,
+    });
   };
 
-  const sortLabel = SORT_OPTIONS.find(o => o.sortBy === sortBy && o.order === sortOrder)?.label || '排序';
+  const goBack = () => {
+    if (tvShow) { setTvShow(null); setEpisodes([]); }
+    else if (activeLib) { setActiveLib(null); setItems([]); setView('manager'); }
+  };
 
-  if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View>;
+  if (view === 'loading') return <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View>;
 
-  if (!isConfigured) {
+  if (view === 'login') {
     return (
       <View style={styles.center}>
         <View style={styles.setupCard}>
           <Film color="#3b82f6" size={48} style={{ alignSelf: 'center', marginBottom: 16 }} />
-          <Text style={styles.setupTitle}>连接 Emby 服务器</Text>
-          <View style={styles.inputBox}><Server color="#9ca3af" size={20} /><TextInput style={styles.input} placeholder="服务器地址 (含端口)" placeholderTextColor="#6b7280" value={serverUrl} onChangeText={setServerUrl} autoCapitalize="none" keyboardType="url" /></View>
+          <Text style={styles.setupTitle}>连接 WebDAV</Text>
+          <View style={styles.inputBox}><Server color="#9ca3af" size={20} /><TextInput style={styles.input} placeholder="服务器地址" placeholderTextColor="#6b7280" value={serverUrl} onChangeText={setServerUrl} autoCapitalize="none" keyboardType="url" /></View>
           <View style={styles.inputBox}><User color="#9ca3af" size={20} /><TextInput style={styles.input} placeholder="用户名" placeholderTextColor="#6b7280" value={username} onChangeText={setUsername} autoCapitalize="none" /></View>
           <View style={styles.inputBox}><Key color="#9ca3af" size={20} /><TextInput style={styles.input} placeholder="密码" placeholderTextColor="#6b7280" value={password} onChangeText={setPassword} secureTextEntry /></View>
-          <TouchableOpacity style={styles.primaryBtn} onPress={handleLogin}><Text style={styles.btnText}>{isTesting ? '连接中...' : '进入影音中心'}</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.primaryBtn} onPress={handleLogin}><Text style={styles.btnText}>{isTesting ? '连接中...' : '连接'}</Text></TouchableOpacity>
         </View>
       </View>
     );
   }
 
-  return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        {isSearching ? (
-          <View style={styles.searchBar}>
-            <Search color="#9ca3af" size={20} />
-            <TextInput style={styles.searchInput} placeholder="搜索影视..." placeholderTextColor="#6b7280" autoFocus value={searchQuery} onChangeText={handleSearch} />
-            <TouchableOpacity onPress={() => { setIsSearching(false); setSearchQuery(''); handleTabSelect(activeLibId); }}><X color="#ffffff" size={24} /></TouchableOpacity>
-          </View>
-        ) : (
-          <>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.headerTitle}>影音中心</Text>
-              {userName ? <Text style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>{userName}</Text> : null}
+  if (view === 'manager') {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>媒体库</Text>
+          <TouchableOpacity onPress={handleLogout} style={styles.iconBtn}><LogOut color="#ef4444" size={20} /></TouchableOpacity>
+        </View>
+        <FlatList
+          data={libraries}
+          keyExtractor={l => l.id}
+          contentContainerStyle={{ padding: 16 }}
+          ListEmptyComponent={
+            <View style={styles.emptyLib}>
+              <FolderOpen color="#4b5563" size={48} />
+              <Text style={{ color: '#9ca3af', marginTop: 12 }}>暂无媒体库，点击下方添加</Text>
             </View>
-            <TouchableOpacity onPress={() => setIsSearching(true)} style={styles.iconBtn}><Search color="#ffffff" size={22} /></TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowSortModal(true)} style={styles.iconBtn}><ArrowUpDown color="#ffffff" size={20} /></TouchableOpacity>
-            <TouchableOpacity onPress={handleLogout} style={styles.iconBtn}><LogOut color="#ef4444" size={20} /></TouchableOpacity>
-          </>
+          }
+          renderItem={({ item: lib }) => (
+            <TouchableOpacity style={styles.libCard} onPress={() => browseLibrary(lib)}>
+              <Film color="#3b82f6" size={28} />
+              <View style={{ flex: 1, marginLeft: 14 }}>
+                <Text style={styles.libName}>{lib.name}</Text>
+                <Text style={styles.libMeta}>{LIB_TYPES.find(t => t.id === lib.type)?.label || lib.type} · {lib.path}</Text>
+              </View>
+              <ChevronRight color="#6b7280" size={20} />
+              <TouchableOpacity style={{ padding: 8 }} onPress={() => handleDeleteLib(lib.id)}><Trash2 color="#ef4444" size={18} /></TouchableOpacity>
+            </TouchableOpacity>
+          )}
+        />
+        <TouchableOpacity style={styles.fab} onPress={() => setShowAddLib(true)}><Plus color="#fff" size={28} /></TouchableOpacity>
+
+        <Modal visible={showAddLib} transparent animationType="fade">
+          <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowAddLib(false)}>
+            <View style={styles.modalPanel} onStartShouldSetResponder={() => true}>
+              <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 16 }}>添加媒体库</Text>
+              <View style={styles.inputBox}><TextInput style={styles.input} placeholder="名称（如：我的电影）" placeholderTextColor="#6b7280" value={newLibName} onChangeText={setNewLibName} /></View>
+              <View style={styles.inputBox}><TextInput style={styles.input} placeholder="路径（如：/media/movies）" placeholderTextColor="#6b7280" value={newLibPath} onChangeText={setNewLibPath} autoCapitalize="none" /></View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
+                {LIB_TYPES.map(t => (
+                  <TouchableOpacity key={t.id} onPress={() => setNewLibType(t.id)}
+                    style={[styles.typeChip, newLibType === t.id && styles.typeChipActive]}>
+                    <Text style={[styles.typeChipText, newLibType === t.id && styles.typeChipTextActive]}>{t.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              <TouchableOpacity style={styles.primaryBtn} onPress={handleAddLib}><Text style={styles.btnText}>添加</Text></TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+      </View>
+    );
+  }
+
+  if (view === 'grid') {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={goBack} style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <ChevronLeft color="#fff" size={24} /><Text style={styles.headerTitle}>{tvShow ? tvShow.title : activeLib?.name || '浏览'}</Text>
+          </TouchableOpacity>
+        </View>
+        {tvShow ? (
+          loading ? <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View> : (
+            <FlatList
+              data={episodes}
+              keyExtractor={e => e.id}
+              contentContainerStyle={{ padding: 16 }}
+              ListEmptyComponent={<Text style={{ color: '#6b7280', textAlign: 'center', marginTop: 40 }}>暂无剧集</Text>}
+              renderItem={({ item: ep }) => (
+                <TouchableOpacity style={styles.epCard} onPress={() => handlePlayEpisode(ep)}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.epTitle} numberOfLines={1}>S{String(ep.season).padStart(2, '0')}E{String(ep.episode).padStart(2, '0')} - {ep.title}</Text>
+                    {ep.plot ? <Text style={styles.epOverview} numberOfLines={2}>{ep.plot}</Text> : null}
+                  </View>
+                  <Play color="#3b82f6" size={20} fill="#3b82f6" />
+                </TouchableOpacity>
+              )}
+            />
+          )
+        ) : (
+          loading ? <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View> : (
+            <FlatList
+              data={items}
+              keyExtractor={item => item.id}
+              numColumns={3}
+              contentContainerStyle={{ padding: 16 }}
+              ListEmptyComponent={<Text style={{ color: '#6b7280', textAlign: 'center', marginTop: 40 }}>暂无内容</Text>}
+              renderItem={({ item }) => (
+                <TouchableOpacity style={styles.gridItem} onPress={() => {
+                  if (item.type === 'movie') handlePlay(item);
+                  else browseTvShow(item);
+                }}>
+                  <Image source={{ uri: item.poster }} style={styles.gridPoster} />
+                  <View style={styles.gridOverlay}>
+                    {item.rating > 0 && <View style={styles.ratingBadge}><Star color="#f59e0b" size={10} fill="#f59e0b" /><Text style={styles.ratingText}>{item.rating.toFixed(1)}</Text></View>}
+                  </View>
+                  <Text style={styles.gridTitle} numberOfLines={2}>{item.title}</Text>
+                </TouchableOpacity>
+              )}
+            />
+          )
         )}
       </View>
+    );
+  }
 
-      <FlatList
-        data={items}
-        keyExtractor={item => item.Id}
-        numColumns={3}
-        onEndReached={handleLoadMore}
-        onEndReachedThreshold={0.3}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#3b82f6" />}
-        ListHeaderComponent={
-          <>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabRow} contentContainerStyle={{ paddingHorizontal: 16 }}>
-              <TouchableOpacity onPress={() => handleTabSelect('all')} style={[styles.tab, activeLibId === 'all' && styles.tabActive]}><Text style={[styles.tabText, activeLibId === 'all' && styles.tabTextActive]}>全部</Text></TouchableOpacity>
-              {libraries.map(lib => (
-                <TouchableOpacity key={lib.Id} onPress={() => handleTabSelect(lib.Id)} style={[styles.tab, activeLibId === lib.Id && styles.tabActive]}>
-                  <Text style={[styles.tabText, activeLibId === lib.Id && styles.tabTextActive]}>{lib.Name}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-            {continueWatching.length > 0 && !searchQuery && (
-              <View style={{ marginBottom: 12 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 16, marginBottom: 10 }}>
-                  <Clock color="#f59e0b" size={16} /><Text style={{ color: '#ffffff', fontSize: 15, fontWeight: 'bold', marginLeft: 6 }}>继续观看</Text>
-                </View>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingLeft: 16 }}>
-                  {continueWatching.map(item => {
-                    const percent = getResumePercent(item);
-                    return (
-                      <TouchableOpacity key={item.Id} style={{ width: 140, marginRight: 12 }} onPress={() => navigation.navigate('MediaDetail', { itemId: item.Id, type: item.Type, title: item.Name, imageUrl: getImgUrl(item.Id, 'Primary', 280) })}>
-                        <Image source={{ uri: getImgUrl(item.Id, 'Primary', 280) }} style={{ width: 140, height: 80, borderRadius: 8, backgroundColor: '#374151' }} />
-                        <View style={{ height: 3, backgroundColor: '#374151', width: '100%', marginTop: 4, borderRadius: 2, overflow: 'hidden' }}><View style={{ height: '100%', backgroundColor: '#f59e0b', width: `${Math.min(percent, 100)}%` }} /></View>
-                        <Text style={{ color: '#e5e7eb', fontSize: 12, marginTop: 4, fontWeight: '500' }} numberOfLines={1}>{item.Name}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            )}
-            {libraries.length === 0 && (
-              <View style={styles.emptyLib}>
-                <ListVideo color="#4b5563" size={48} />
-                <Text style={{ color: '#9ca3af', marginTop: 12 }}>Emby 服务器中未找到媒体库</Text>
-              </View>
-            )}
-          </>
-        }
-        ListFooterComponent={loadingMore ? <ActivityIndicator color="#3b82f6" style={{ padding: 20 }} /> : null}
-        ListEmptyComponent={!loading && !refreshing ? (
-          <View style={styles.emptyLib}>
-            <Film color="#4b5563" size={48} />
-            <Text style={{ color: '#9ca3af', marginTop: 12 }}>{searchQuery ? '没有找到匹配的影片' : '暂无内容'}</Text>
-          </View>
-        ) : null}
-        renderItem={({ item }) => (
-          <TouchableOpacity style={styles.card} onPress={() => navigation.navigate('MediaDetail', { itemId: item.Id, type: item.Type, title: item.Name, imageUrl: getImgUrl(item.Id, 'Primary', 300), backdropUrl: getImgUrl(item.Id, 'Backdrop', 800) })}>
-            <View style={styles.posterWrap}>
-              <Image source={{ uri: getImgUrl(item.Id, 'Primary', 300) }} style={styles.poster} />
-              {item.Type === 'Series' && <View style={styles.seriesBadge}><Text style={styles.seriesBadgeText}>剧集</Text></View>}
-              {item.UserData?.Played && <View style={styles.playedBadge}><Play color="#fff" size={10} fill="#fff" /></View>}
-            </View>
-            <Text style={styles.cardTitle} numberOfLines={1}>{item.Name}</Text>
-            <Text style={styles.cardSub}>
-              {item.ProductionYear ? item.ProductionYear : ''}
-              {item.RunTimeTicks ? ` · ${formatRuntime(item.RunTimeTicks)}` : ''}
-            </Text>
-          </TouchableOpacity>
-        )}
-        contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 100 }}
-        columnWrapperStyle={{ justifyContent: 'flex-start' }}
-      />
-
-      <Modal visible={showSortModal} transparent animationType="fade">
-        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowSortModal(false)}>
-          <View style={styles.sortPanel}>
-            <Text style={{ color: '#9ca3af', fontSize: 13, marginBottom: 12, fontWeight: 'bold' }}>排序依据</Text>
-            {SORT_OPTIONS.map(opt => {
-              const active = sortBy === opt.sortBy && sortOrder === opt.order;
-              return (
-                <TouchableOpacity key={opt.id} style={[styles.sortItem, active && styles.sortItemActive]} onPress={() => handleSortChange(opt)}>
-                  <Text style={{ color: active ? '#3b82f6' : '#e5e7eb', fontSize: 15, fontWeight: active ? 'bold' : 'normal' }}>{opt.label}</Text>
-                  {active && <Star color="#3b82f6" size={18} />}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </TouchableOpacity>
-      </Modal>
-    </View>
-  );
+  return null;
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#111827' },
-  center: { flex: 1, backgroundColor: '#111827', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  header: { flexDirection: 'row', alignItems: 'center', padding: 16, paddingTop: 55, backgroundColor: '#1f2937', minHeight: 100 },
-  headerTitle: { color: '#ffffff', fontSize: 22, fontWeight: 'bold' },
-  iconBtn: { marginLeft: 14 },
-  searchBar: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#374151', borderRadius: 10, paddingHorizontal: 12, height: 42 },
-  searchInput: { flex: 1, color: '#ffffff', marginLeft: 10, fontSize: 15 },
-  setupCard: { backgroundColor: '#1f2937', borderRadius: 20, padding: 25, width: '100%' },
-  setupTitle: { color: '#ffffff', fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 20 },
-  inputBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#374151', borderRadius: 10, marginBottom: 15, paddingHorizontal: 15 },
-  input: { flex: 1, color: '#ffffff', height: 48, marginLeft: 10 },
-  primaryBtn: { backgroundColor: '#3b82f6', padding: 15, borderRadius: 10, alignItems: 'center' },
-  btnText: { color: '#ffffff', fontWeight: 'bold', fontSize: 16 },
-  tabRow: { marginVertical: 14 },
-  tab: { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 18, backgroundColor: '#1f2937', marginRight: 10, borderWidth: 1, borderColor: '#374151' },
-  tabActive: { backgroundColor: '#3b82f6', borderColor: '#3b82f6' },
-  tabText: { color: '#9ca3af', fontSize: 13, fontWeight: 'bold' },
-  tabTextActive: { color: '#ffffff' },
-  card: { width: POSTER_W, marginBottom: 16, marginRight: 12 },
-  posterWrap: { borderRadius: 10, overflow: 'hidden', position: 'relative', elevation: 6, shadowColor: '#000' },
-  poster: { width: POSTER_W, height: POSTER_H, backgroundColor: '#1f2937' },
-  seriesBadge: { position: 'absolute', top: 6, left: 6, backgroundColor: 'rgba(139, 92, 246, 0.9)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  seriesBadgeText: { color: '#ffffff', fontSize: 10, fontWeight: 'bold' },
-  playedBadge: { position: 'absolute', bottom: 6, right: 6, backgroundColor: 'rgba(16, 185, 129, 0.9)', width: 22, height: 22, borderRadius: 11, justifyContent: 'center', alignItems: 'center' },
-  cardTitle: { color: '#ffffff', fontSize: 12, marginTop: 6, fontWeight: '600' },
-  cardSub: { color: '#6b7280', fontSize: 10, marginTop: 2 },
-  emptyLib: { paddingTop: 80, alignItems: 'center' },
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
-  sortPanel: { backgroundColor: '#1f2937', borderRadius: 16, padding: 20, elevation: 10 },
-  sortItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 13, paddingHorizontal: 12, borderRadius: 8 },
-  sortItemActive: { backgroundColor: 'rgba(59, 130, 246, 0.15)' },
+  center: { flex: 1, backgroundColor: '#111827', justifyContent: 'center', alignItems: 'center' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 50, paddingBottom: 12, backgroundColor: '#1f2937' },
+  headerTitle: { color: '#ffffff', fontSize: 20, fontWeight: 'bold', marginLeft: 4 },
+  iconBtn: { padding: 8 },
+  setupCard: { width: '88%', maxWidth: 400, backgroundColor: '#1f2937', padding: 24, borderRadius: 16, elevation: 8 },
+  setupTitle: { color: '#ffffff', fontSize: 22, fontWeight: 'bold', textAlign: 'center', marginBottom: 20 },
+  inputBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#374151', borderRadius: 10, paddingHorizontal: 14, marginBottom: 14, height: 48 },
+  input: { flex: 1, color: '#e5e7eb', fontSize: 15, marginLeft: 8 },
+  primaryBtn: { backgroundColor: '#3b82f6', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginTop: 6 },
+  btnText: { color: '#ffffff', fontSize: 17, fontWeight: 'bold' },
+  emptyLib: { alignItems: 'center', marginTop: 80 },
+  libCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1f2937', padding: 16, borderRadius: 12, marginBottom: 10, elevation: 2 },
+  libName: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
+  libMeta: { color: '#6b7280', fontSize: 12, marginTop: 2 },
+  fab: { position: 'absolute', bottom: 24, right: 24, backgroundColor: '#3b82f6', width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', elevation: 6 },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 24 },
+  modalPanel: { backgroundColor: '#1f2937', borderRadius: 16, padding: 20, elevation: 10 },
+  typeChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: '#374151', marginRight: 8 },
+  typeChipActive: { backgroundColor: 'rgba(59, 130, 246, 0.25)' },
+  typeChipText: { color: '#9ca3af', fontSize: 13, fontWeight: '600' },
+  typeChipTextActive: { color: '#60a5fa' },
+  gridItem: { width: POSTER_W, marginRight: 8, marginBottom: 16 },
+  gridPoster: { width: POSTER_W, height: POSTER_H, borderRadius: 8, backgroundColor: '#374151' },
+  gridOverlay: { position: 'absolute', top: 4, right: 4, flexDirection: 'row' },
+  ratingBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4 },
+  ratingText: { color: '#f59e0b', fontSize: 10, fontWeight: 'bold', marginLeft: 2 },
+  gridTitle: { color: '#e5e7eb', fontSize: 12, fontWeight: '500', marginTop: 4 },
+  epCard: { flexDirection: 'row', backgroundColor: '#1f2937', padding: 14, borderRadius: 10, marginBottom: 8, alignItems: 'center' },
+  epTitle: { color: '#e5e7eb', fontSize: 14, fontWeight: 'bold' },
+  epOverview: { color: '#6b7280', fontSize: 12, marginTop: 4 },
 });
