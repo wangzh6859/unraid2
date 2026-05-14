@@ -3,7 +3,7 @@ import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, FlatList, 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import base64 from 'base-64';
 import { XMLParser } from 'fast-xml-parser';
-import { Film, Plus, X, Trash2, FolderOpen, ChevronLeft, Star, Server, User, Key, LogOut, Settings } from 'lucide-react-native';
+import { Film, Plus, X, FolderOpen, ChevronLeft, Star, Server, User, Key, LogOut, Settings } from 'lucide-react-native';
 
 const { width } = Dimensions.get('window');
 const POSTER_W = (width - 48) / 3;
@@ -30,7 +30,7 @@ export default function MediaGridScreen({ navigation }) {
   const [loading, setLoading] = useState(false);
 
   const [showSettings, setShowSettings] = useState(false);
-  const [settingsMode, setSettingsMode] = useState('list'); // 'list' | 'add' | 'edit'
+  const [settingsMode, setSettingsMode] = useState('list');
   const [editingLib, setEditingLib] = useState(null);
   const [editName, setEditName] = useState('');
   const [editType, setEditType] = useState('movie');
@@ -157,21 +157,19 @@ export default function MediaGridScreen({ navigation }) {
 
   const parseMovieNfo = (xml) => {
     if (!xml) return {};
-    return {
-      title: parseNfoField(xml, 'title'),
-      plot: parseNfoField(xml, 'plot') || parseNfoField(xml, 'outline'),
-      rating: parseFloat(parseNfoField(xml, 'rating')) || 0,
-      year: parseInt(parseNfoField(xml, 'year')) || 0,
-    };
+    const title = parseNfoField(xml, 'title');
+    const plot = parseNfoField(xml, 'plot') || parseNfoField(xml, 'outline');
+    const rating = parseFloat(parseNfoField(xml, 'rating')) || 0;
+    const year = parseInt(parseNfoField(xml, 'year')) || 0;
+    return { title, plot, rating, year };
   };
 
   const parseTvShowNfo = (xml) => {
     if (!xml) return {};
-    return {
-      title: parseNfoField(xml, 'title'),
-      plot: parseNfoField(xml, 'plot'),
-      rating: parseFloat(parseNfoField(xml, 'rating')) || 0,
-    };
+    const title = parseNfoField(xml, 'title');
+    const plot = parseNfoField(xml, 'plot');
+    const rating = parseFloat(parseNfoField(xml, 'rating')) || 0;
+    return { title, plot, rating };
   };
 
   const fetchLibItems = async (lib) => {
@@ -196,7 +194,7 @@ export default function MediaGridScreen({ navigation }) {
             result.push({
               id: dir.href, title: meta.title || dir.name, plot: meta.plot, rating: meta.rating,
               poster: dir.href + 'poster.jpg', fanart: dir.href + 'fanart.jpg',
-              path: dir.href, type: 'tv',
+              path: dir.href, type: lib.type,
             });
           }
         }
@@ -269,48 +267,53 @@ export default function MediaGridScreen({ navigation }) {
     setEditFolders(editFolders.filter(f => f !== path));
   };
 
-  const openNewLib = () => {
-    setEditingLib(null); setEditName(''); setEditType('movie'); setEditFolders([]);
-    setAddingFolder(false); setBrowseDirs([]); setBrowsePath('');
-    setSettingsMode('add');
-    setShowSettings(true);
-  };
+const openNewLib = () => {
+     setEditingLib(null); setEditName(''); setEditType('movie'); setEditFolders([]);
+     setAddingFolder(false); setBrowseDirs([]); setBrowsePath('');
+     setSettingsMode('add');
+     setShowSettings(true);
+   };
 
   const openEditLib = (lib) => {
-    setEditingLib(lib); setEditName(lib.name); setEditType(lib.type); setEditFolders([...lib.folders]);
-    setAddingFolder(false); setBrowseDirs([]); setBrowsePath('');
-    setSettingsMode('edit');
-    setShowSettings(true);
-  };
+     setEditingLib(lib); setEditName(lib.name); setEditType(lib.type); setEditFolders([...lib.folders]);
+     setAddingFolder(false); setBrowseDirs([]); setBrowsePath('');
+     setSettingsMode('edit');
+     setShowSettings(true);
+   };
 
-  const saveEditingLib = async () => {
-    if (!editName.trim()) return Alert.alert('提示', '请输入名称');
-    if (editFolders.length === 0) return Alert.alert('提示', '请至少添加一个路径');
-    let newLibs;
-    if (editingLib) {
-      newLibs = libraries.map(l => l.id === editingLib.id ? { ...l, name: editName.trim(), type: editType, folders: [...editFolders] } : l);
-    } else {
-      newLibs = [...libraries, { id: Date.now().toString(36) + Math.random().toString(36).substr(2, 4), name: editName.trim(), type: editType, folders: [...editFolders] }];
-    }
-    await saveLibs(newLibs);
-    setSettingsMode('list');
-    setShowSettings(false);
-    if (view === 'main') fetchItems(activeLibId);
-  };
+  const openLibList = () => {
+     setSettingsMode('list');
+     setShowSettings(true);
+   };
 
-  const confirmDeleteLib = (libId) => {
-    Alert.alert('删除媒体库', '确定要删除这个媒体库吗？所有关联的文件夹配置将被移除。', [
-      { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: () => deleteLib(libId) },
-    ]);
-  };
+const saveEditingLib = async () => {
+     if (!editName.trim()) return Alert.alert('提示', '请输入名称');
+     if (editFolders.length === 0) return Alert.alert('提示', '请至少添加一个路径');
+     let newLibs;
+     if (editingLib) {
+       newLibs = libraries.map(l => l.id === editingLib.id ? { ...l, name: editName.trim(), type: editType, folders: [...editFolders] } : l);
+     } else {
+       newLibs = [...libraries, { id: Date.now().toString(36) + Math.random().toString(36).substr(2, 4), name: editName.trim(), type: editType, folders: [...editFolders] }];
+     }
+     await saveLibs(newLibs);
+     setSettingsMode('list');
+     setShowSettings(false);
+     if (view === 'main') fetchItems(activeLibId);
+   };
+
+const confirmDeleteLib = (libId) => {
+     Alert.alert('删除媒体库', '确定要删除这个媒体库吗？所有关联的文件夹配置将被移除。', [
+       { text: '取消', style: 'cancel' },
+       { text: '删除', style: 'destructive', onPress: () => deleteLib(libId) },
+     ]);
+   };
 
   const deleteLib = (libId) => {
-    const newLibs = libraries.filter(l => l.id !== libId);
-    saveLibs(newLibs);
-    if (activeLibId === libId) setActiveLibId('all');
-    if (view === 'main') fetchItems(activeLibId === libId ? 'all' : activeLibId);
-  };
+     const newLibs = libraries.filter(l => l.id !== libId);
+     saveLibs(newLibs);
+     if (activeLibId === libId) setActiveLibId('all');
+     if (view === 'main') fetchItems(activeLibId === libId ? 'all' : activeLibId);
+   };
 
   if (view === 'loading') return <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View>;
 
@@ -348,78 +351,69 @@ export default function MediaGridScreen({ navigation }) {
             </TouchableOpacity>
           ))}
           <TouchableOpacity onPress={openNewLib} style={styles.tab}><Plus color="#9ca3af" size={18} /></TouchableOpacity>
-          <TouchableOpacity onPress={() => { setSettingsMode('list'); setShowSettings(true); }} style={styles.tab}><Settings color="#9ca3af" size={18} /></TouchableOpacity>
+          <TouchableOpacity onPress={openLibList} style={styles.tab}><Settings color="#9ca3af" size={18} /></TouchableOpacity>
         </ScrollView>
 
-        {loading ? <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View> : (
-          <FlatList data={items} keyExtractor={item => item.id} numColumns={3}
-            contentContainerStyle={{ padding: 16 }}
-            ListEmptyComponent={<Text style={{ color: '#6b7280', textAlign: 'center', marginTop: 40 }}>暂无内容{'\n'}点右上角 + 添加媒体库</Text>}
-            renderItem={({ item }) => (
-              <TouchableOpacity style={styles.gridItem} onPress={() => {
-                if (item.type === 'movie') handlePlay(item);
-                else navigation.navigate('MediaDetail', {
-                  type: 'tv', showPath: item.path,
-                  title: item.title, plot: item.plot, rating: item.rating,
-                  posterUrl: getAuthUrl(item.poster), backdropUrl: getAuthUrl(item.fanart),
-                  showName: item.title, serverUrl: origin,
-                  webdavUser: username, webdavPass: password,
-                });
-              }}>
-                <Image source={{ uri: getAuthUrl(item.poster) }} style={styles.gridPoster} />
-                <View style={styles.gridOverlay}>
-                  {item.rating > 0 && <View style={styles.ratingBadge}><Star color="#f59e0b" size={10} fill="#f59e0b" /><Text style={styles.ratingText}>{item.rating.toFixed(1)}</Text></View>}
-                </View>
-                <Text style={styles.gridTitle} numberOfLines={2}>{item.title}</Text>
-              </TouchableOpacity>
-            )}
-          />
-        )}
+          {loading ? <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View> : (
+            <FlatList data={items} keyExtractor={item => item.id} numColumns={3}
+              contentContainerStyle={{ padding: 16 }}
+              ListEmptyComponent={<Text style={{ color: '#6b7280', textAlign: 'center', marginTop: 40 }}>暂无内容{'\n'}点右上角 + 添加媒体库</Text>}
+              renderItem={({ item }) => (
+                <TouchableOpacity style={styles.gridItem} onPress={() => {
+                  if (item.type === 'movie') handlePlay(item);
+                  else navigation.navigate('MediaDetail', {
+                    type: item.type, showPath: item.path,
+                    title: item.title, plot: item.plot, rating: item.rating,
+                    posterUrl: getAuthUrl(item.poster), backdropUrl: getAuthUrl(item.fanart),
+                    showName: item.title, serverUrl: origin,
+                    webdavUser: username, webdavPass: password,
+                  });
+                }}>
+                  <Image source={{ uri: getAuthUrl(item.poster) }} style={styles.gridPoster} />
+                  <View style={styles.gridOverlay}>
+                    {item.rating > 0 && <View style={styles.ratingBadge}><Star color="#f59e0b" size={10} fill="#f59e0b" /><Text style={styles.ratingText}>{item.rating.toFixed(1)}</Text></View>}
+                  </View>
+                  <Text style={styles.gridTitle} numberOfLines={2}>{item.title}</Text>
+                </TouchableOpacity>
+              )}
+            />
+          )}
 
-        <Modal visible={showSettings} transparent animationType="slide">
+<Modal visible={showSettings} transparent animationType="slide">
           <View style={styles.settingsOverlay}>
             <View style={styles.settingsPanel}>
-              {/* 顶部标题和操作区 */}
               <View style={styles.settingsHeader}>
                 <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
                   {settingsMode === 'list' ? '管理媒体库' : (settingsMode === 'edit' ? '编辑媒体库' : '添加媒体库')}
                 </Text>
                 <TouchableOpacity onPress={() => setShowSettings(false)}><X color="#9ca3af" size={24} /></TouchableOpacity>
               </View>
-
               <ScrollView style={{ padding: 20, maxHeight: '80%' }} nestedScrollEnabled>
-                {/* 模式一：库列表 */}
-                {settingsMode === 'list' && libraries.length > 0 && (
-                  <View>
-                    {libraries.map(lib => (
-                      <View key={lib.id} style={[styles.libRow, { borderBottomWidth: 1, borderBottomColor: '#374151' }]}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 'bold' }}>{lib.name}</Text>
-                          <Text style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>{lib.type === 'movie' ? '电影' : lib.type === 'tv' ? '电视剧' : lib.type} · {lib.folders.length} 个文件夹</Text>
-                        </View>
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          <TouchableOpacity onPress={() => openEditLib(lib)} style={{ padding: 8 }}>
-                            <Text style={{ color: '#60a5fa', fontSize: 13 }}>编辑</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity onPress={() => confirmDeleteLib(lib.id)} style={{ padding: 8 }}>
-                            <Trash2 color="#ef4444" size={16} />
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    ))}
+                {settingsMode === 'list' && libraries.length > 0 && libraries.map(lib => (
+                  <View key={lib.id} style={[styles.libRow, { borderBottomWidth: 1, borderBottomColor: '#374151' }]}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: '#e5e7eb', fontSize: 15, fontWeight: 'bold' }}>{lib.name}</Text>
+                      <Text style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>
+                        {lib.type === 'movie' ? '电影' : lib.type === 'tv' ? '电视剧' : lib.type} · {lib.folders.length} 个文件夹
+                      </Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <TouchableOpacity onPress={() => openEditLib(lib)} style={{ padding: 8 }}>
+                        <Text style={{ color: '#60a5fa', fontSize: 13 }}>编辑</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => confirmDeleteLib(lib.id)} style={{ padding: 8, marginLeft: 4 }}>
+                        <X color="#ef4444" size={18} />
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                )}
-
+                ))}
                 {settingsMode === 'list' && libraries.length === 0 && (
                   <Text style={{ color: '#6b7280', textAlign: 'center', marginVertical: 20 }}>暂无媒体库，请添加</Text>
                 )}
-
-                {/* 模式二/三：添加/编辑表单 */}
                 {(settingsMode === 'add' || settingsMode === 'edit') && (
                   <View>
                     <Text style={{ color: '#9ca3af', fontSize: 13, marginBottom: 8 }}>媒体库名称</Text>
                     <View style={styles.inputBox}><TextInput style={styles.input} placeholder="媒体库名称" placeholderTextColor="#6b7280" value={editName} onChangeText={setEditName} /></View>
-
                     <Text style={{ color: '#9ca3af', fontSize: 13, marginVertical: 8 }}>媒体库类型</Text>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
                       {LIB_TYPES.map(t => (
@@ -429,7 +423,6 @@ export default function MediaGridScreen({ navigation }) {
                         </TouchableOpacity>
                       ))}
                     </ScrollView>
-
                     <Text style={{ color: '#9ca3af', fontSize: 13, marginBottom: 8 }}>文件夹路径</Text>
                     {editFolders.map((fp, i) => (
                       <View key={i} style={[styles.inputBox, { marginBottom: 8 }]}>
@@ -438,7 +431,6 @@ export default function MediaGridScreen({ navigation }) {
                         <TouchableOpacity onPress={() => removeFolderFromLib(fp)}><X color="#ef4444" size={18} /></TouchableOpacity>
                       </View>
                     ))}
-
                     {addingFolder ? (
                       <View style={{ marginTop: 8 }}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
@@ -463,16 +455,13 @@ export default function MediaGridScreen({ navigation }) {
                         <Plus color="#3b82f6" size={20} style={{ marginRight: 8 }} /><Text style={{ color: '#3b82f6', fontSize: 14 }}>添加文件夹</Text>
                       </TouchableOpacity>
                     )}
-
                     <TouchableOpacity style={styles.primaryBtn} onPress={saveEditingLib}><Text style={styles.btnText}>保存</Text></TouchableOpacity>
+                    {settingsMode === 'edit' && (
+                      <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: '#6b7280', marginTop: 8 }]} onPress={() => setSettingsMode('list')}>
+                        <Text style={styles.btnText}>返回库列表</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
-                )}
-
-                {/* 返回列表按钮 */}
-                {(settingsMode !== 'list') && (
-                  <TouchableOpacity onPress={() => setSettingsMode('list')} style={[styles.primaryBtn, { backgroundColor: '#6b7280', marginTop: 8 }]}>
-                    <Text style={styles.btnText}>返回库列表</Text>
-                  </TouchableOpacity>
                 )}
               </ScrollView>
             </View>
