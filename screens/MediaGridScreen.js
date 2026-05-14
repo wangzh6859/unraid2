@@ -137,15 +137,15 @@ export default function MediaGridScreen({ navigation }) {
   };
 
   const handleLogin = async () => {
-    if (!serverUrl || !username || !password) return Alert.alert('提示', '请填写完整信息');
-    setIsTesting(true);
-    try {
-      let baseUrl = serverUrl.trim().replace(/\/+$/, '');
-      const res = await fetch(`${baseUrl}/Users/AuthenticateByName`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ Username: username, Pw: password }),
-      });
+     if (!serverUrl || !username || !password) return Alert.alert('提示', '请填写完整信息');
+     setIsTesting(true);
+     try {
+       let baseUrl = serverUrl.trim().replace(/\/+$/, '');
+       const res = await fetch(`${baseUrl}/Users/AuthenticateByName?format=json`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+         body: `username=${encodeURIComponent(username)}&pw=${encodeURIComponent(password)}`,
+       });
       if (!res.ok) return Alert.alert('错误', '认证失败，请检查用户名或密码');
       const data = await res.json();
       const token = data.AccessToken;
