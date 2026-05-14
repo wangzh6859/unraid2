@@ -146,18 +146,19 @@ export default function MediaGridScreen({ navigation }) {
     try {
       const base = serverUrl.trim().replace(/\/+$/, '');
       const auth = 'Basic ' + btoa(username + ':' + password);
-      let ok = false;
-      try {
-        const r = await fetch(base + '/', { method: 'PROPFIND', headers: { 'Authorization': auth, 'Depth': '0' }, body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>' });
-        ok = r.ok;
-      } catch (_) {}
-      if (!ok) {
+      let connected = false;
+      const testPaths = ['/', '/webdav', '/media', '/dav'];
+      for (const p of testPaths) {
         try {
-          const r = await fetch(base + '/', { method: 'GET', headers: { 'Authorization': auth } });
-          ok = r.ok || r.status === 401 || r.status === 403;
-        } catch (_) { return Alert.alert('错误', '无法连接服务器，请检查地址和网络'); }
+          const r = await fetch(base + p, { method: 'PROPFIND', headers: { 'Authorization': auth, 'Depth': '0' }, body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>' });
+          if (r.ok) { connected = true; break; }
+        } catch (_) {}
+        try {
+          const r = await fetch(base + p, { method: 'GET', headers: { 'Authorization': auth } });
+          if (r.ok || r.status === 401 || r.status === 403 || r.status === 405) { connected = true; break; }
+        } catch (_) {}
       }
-      if (!ok) return Alert.alert('错误', '认证失败，请检查用户名和密码');
+      if (!connected) return Alert.alert('连接失败', '无法连接到该地址\n\n请确保输入的是 WebDAV 服务地址（不是 Emby 网页地址）\n提示：unRAID 的 WebDAV 通常在 端口或 /webdav 路径下');
       await AsyncStorage.multiSet([
         ['@webdav_url', base], ['@webdav_user', username], ['@webdav_pass', password],
       ]);
