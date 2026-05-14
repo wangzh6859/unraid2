@@ -83,21 +83,23 @@ export default function MediaGridScreen({ navigation }) {
   };
 
   const api = useCallback(async (path) => {
-    const res = await fetch(`${serverUrl}${path}${path.includes('?') ? '&' : '?'}api_key=${authToken}`);
+    const res = await fetch(`${serverUrl}${path}${path.includes('?') ? '&' : '?'}api_key=${authToken}`, { headers: { 'X-Emby-Token': authToken } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   }, [serverUrl, authToken]);
 
   const apiItems = useCallback(async (path) => {
-    const res = await fetch(`${serverUrl}${path}${path.includes('?') ? '&' : '?'}api_key=${authToken}`);
+    const res = await fetch(`${serverUrl}${path}${path.includes('?') ? '&' : '?'}api_key=${authToken}`, { headers: { 'X-Emby-Token': authToken } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     return { items: data.Items || [], total: data.TotalRecordCount || 0 };
   }, [serverUrl, authToken]);
 
+  const headers = (token) => ({ 'X-Emby-Token': token || authToken });
+
   const fetchLibraries = async (url, token, uid) => {
     try {
-      const data = await fetch(`${url}/Users/${uid}/Views?api_key=${token}`).then(r => r.json());
+      const data = await fetch(`${url}/Users/${uid}/Views`, { headers: headers(token) }).then(r => r.json());
       const libs = (data.Items || []).filter(l => l.CollectionType === 'movies' || l.CollectionType === 'tvshows' || !l.CollectionType);
       if (isMounted.current) {
         setLibraries(libs);
@@ -116,10 +118,11 @@ export default function MediaGridScreen({ navigation }) {
         const lib = libraries.find(l => l.Id === libId);
         types = (lib && COLLECTION_TYPES[lib.CollectionType]) || 'Movie,Series';
       }
-      let path = `/Users/${uid}/Items?Recursive=true&IncludeItemTypes=${types}&SortBy=${sort}&SortOrder=${order}&Limit=${PER_PAGE}&StartIndex=${start}`;
-      if (libId && libId !== 'all') path += `&ParentId=${libId}`;
+      let path = libId && libId !== 'all'
+        ? `/Users/${uid}/Items?SortBy=${sort}&SortOrder=${order}&Limit=${PER_PAGE}&StartIndex=${start}&IncludeItemTypes=${types}&ParentId=${libId}&Recursive=true`
+        : `/Users/${uid}/Items?SortBy=${sort}&SortOrder=${order}&Limit=${PER_PAGE}&StartIndex=${start}&IncludeItemTypes=${types}&Recursive=true`;
       if (search.trim()) path += `&SearchTerm=${encodeURIComponent(search.trim())}`;
-      const data = await fetch(`${url}${path}&api_key=${token}`).then(r => r.json());
+      const data = await fetch(`${url}${path}`, { headers: headers(token) }).then(r => r.json());
       const newItems = data.Items || [];
       if (isMounted.current) {
         if (append) {
@@ -137,7 +140,7 @@ export default function MediaGridScreen({ navigation }) {
 
   const fetchContinueWatching = async (url = serverUrl, token = authToken, uid = userId) => {
     try {
-      const data = await fetch(`${url}/Users/${uid}/Items/Resume?Limit=20&api_key=${token}`).then(r => r.json());
+      const data = await fetch(`${url}/Users/${uid}/Items/Resume?Limit=20`, { headers: headers(token) }).then(r => r.json());
       if (isMounted.current) setContinueWatching(data.Items || []);
     } catch (e) {}
   };
