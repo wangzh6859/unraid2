@@ -4,7 +4,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants'; // 💡 引入动态变量库，用于获取真实版本号
-import { Trash2, HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server, LogOut, Moon, Sun } from 'lucide-react-native';
+import { X, HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server, LogOut, Moon, Sun } from 'lucide-react-native';
 
 export default function SettingsScreen({ navigation }) {
   const [cacheSize, setCacheSize] = useState('计算中...');
@@ -163,7 +163,7 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.divider} />
         <TouchableOpacity style={styles.row} onPress={clearCache} disabled={isClearing}>
           <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
-            {isClearing ? <ActivityIndicator color="#ef4444" size="small" /> : <Trash2 color="#ef4444" size={20} />}
+            {isClearing ? <ActivityIndicator color="#ef4444" size="small" /> : <X color="#ef4444" size={20} />}
           </View>
           <View style={styles.infoBox}>
             <Text style={[styles.rowTitle, { color: '#ef4444' }]}>一键清理缓存</Text>
