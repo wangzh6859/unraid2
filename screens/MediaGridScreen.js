@@ -3,7 +3,7 @@ import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, FlatList, 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import base64 from 'base-64';
 import { XMLParser } from 'fast-xml-parser';
-import { Film, Plus, X, Trash2, Play, FolderOpen, ChevronLeft, Star, Server, User, Key, ChevronRight, LogOut } from 'lucide-react-native';
+import { Film, Plus, X, Trash2, Play, FolderOpen, ChevronLeft, Star, Server, User, Key, LogOut, Settings, ChevronRight } from 'lucide-react-native';
 
 const { width } = Dimensions.get('window');
 const POSTER_W = (width - 48) / 3;
@@ -16,8 +16,6 @@ const LIB_TYPES = [
   { id: 'other', label: '其他' },
 ];
 
-const nfe = (v, d) => v !== undefined && v !== null && v !== '' ? v : d;
-
 export default function MediaGridScreen({ navigation }) {
   const [view, setView] = useState('loading');
   const [davUrl, setDavUrl] = useState('');
@@ -27,24 +25,32 @@ export default function MediaGridScreen({ navigation }) {
   const [isTesting, setIsTesting] = useState(false);
 
   const [libraries, setLibraries] = useState([]);
-  const [showAddLib, setShowAddLib] = useState(false);
-  const [newLibName, setNewLibName] = useState('');
-  const [newLibType, setNewLibType] = useState('movie');
-  const [newLibPath, setNewLibPath] = useState('');
+  const [activeLibId, setActiveLibId] = useState('all');
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const [tvShow, setTvShow] = useState(null);
+  const [episodes, setEpisodes] = useState([]);
+
+  const [showSettings, setShowSettings] = useState(false);
+  const [editingLib, setEditingLib] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editType, setEditType] = useState('movie');
+  const [editFolders, setEditFolders] = useState([]);
   const [browseDirs, setBrowseDirs] = useState([]);
   const [browsePath, setBrowsePath] = useState('');
   const [loadingDirs, setLoadingDirs] = useState(false);
-
-  const [activeLib, setActiveLib] = useState(null);
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [tvShow, setTvShow] = useState(null);
-  const [episodes, setEpisodes] = useState([]);
+  const [addingFolder, setAddingFolder] = useState(false);
 
   const origin = davUrl.match(/^(https?:\/\/[^\/]+)/)?.[1] || '';
   const davPath = davUrl.match(/^(https?:\/\/[^\/]+)(.*)$/)?.[2]?.replace(/\/+$/, '') || '';
 
   const authHeader = () => 'Basic ' + base64.encode(`${username}:${password}`);
+  const getAuthUrl = (filePath) => {
+    const encU = encodeURIComponent(username);
+    const encP = encodeURIComponent(password);
+    return origin.replace('://', `://${encU}:${encP}@`) + filePath;
+  };
 
   useEffect(() => { loadSaved(); }, []);
 
@@ -60,7 +66,7 @@ export default function MediaGridScreen({ navigation }) {
         setDavUrl(url); setUsername(user); setPassword(pass);
         if (libs) setLibraries(JSON.parse(libs));
         setIsConnected(true);
-        setView('manager');
+        setView('main');
       } else {
         setView('login');
       }
@@ -79,23 +85,38 @@ export default function MediaGridScreen({ navigation }) {
         const alistUrl = cleanUrl + 'dav/';
         const retry = await fetch(alistUrl, { method: 'PROPFIND', headers });
         if (retry.status === 200 || retry.status === 207) {
-          response = retry;
-          cleanUrl = alistUrl;
+          response = retry; cleanUrl = alistUrl;
         }
       }
       if (response.status === 200 || response.status === 207) {
         await AsyncStorage.multiSet([
           ['@dav_url', cleanUrl], ['@dav_user', username], ['@dav_pass', password],
         ]);
-        setDavUrl(cleanUrl);
-        setIsConnected(true);
-        setView('manager');
+        setDavUrl(cleanUrl); setIsConnected(true); setView('main');
+        const savedLibs = await AsyncStorage.getItem('@media_libs');
+        if (savedLibs) setLibraries(JSON.parse(savedLibs));
       } else {
         Alert.alert('连接失败', `状态码: ${response.status}`);
       }
     } catch (e) {
       Alert.alert('网络错误', '无法连接');
     } finally { setIsTesting(false); }
+  };
+
+  const handleLogout = () => {
+    Alert.alert('注销', '确定退出吗？', [
+      { text: '取消' }, {
+        text: '注销', style: 'destructive', onPress: async () => {
+          await AsyncStorage.multiRemove(['@dav_url', '@dav_user', '@dav_pass', '@media_libs']);
+          setLibraries([]); setView('login'); setIsConnected(false); setItems([]);
+        }
+      }
+    ]);
+  };
+
+  const saveLibs = async (libs) => {
+    setLibraries(libs);
+    await AsyncStorage.setItem('@media_libs', JSON.stringify(libs));
   };
 
   const propfind = async (targetPath) => {
@@ -118,7 +139,7 @@ export default function MediaGridScreen({ navigation }) {
       if (href === targetPath.replace(/\/+$/, '') || href === normPath) continue;
       const props = r.propstat?.prop || (Array.isArray(r.propstat) ? r.propstat[0].prop : {});
       const isDir = props.resourcetype && props.resourcetype.collection === '';
-      const name = nfe(props.displayname, decodeURIComponent(href.split('/').filter(Boolean).pop() || ''));
+      const name = props.displayname || decodeURIComponent(href.split('/').filter(Boolean).pop() || '');
       if (!name || name.startsWith('.')) continue;
       entries.push({ name, href, isDir });
     }
@@ -161,107 +182,66 @@ export default function MediaGridScreen({ navigation }) {
     return { title, plot, episode: epNum, season: seasonNum };
   };
 
-  const getAuthUrl = (filePath) => {
-    const encU = encodeURIComponent(username);
-    const encP = encodeURIComponent(password);
-    return origin.replace('://', `://${encU}:${encP}@`) + filePath;
-  };
-
-  const startBrowse = async (dir) => {
-    setLoadingDirs(true);
-    setBrowsePath(dir);
-    try {
-      const entries = await propfind(dir);
-      setBrowseDirs(entries.filter(e => e.isDir));
-    } catch (e) { setBrowseDirs([]); }
-    setLoadingDirs(false);
-  };
-
-  const selectDir = (path) => {
-    setNewLibPath(path);
-    setBrowseDirs([]);
-    setBrowsePath('');
-  };
-
-  const handleLogout = () => {
-    Alert.alert('注销', '确定退出吗？', [
-      { text: '取消' }, {
-        text: '注销', style: 'destructive', onPress: async () => {
-          await AsyncStorage.multiRemove(['@dav_url', '@dav_user', '@dav_pass', '@media_libs']);
-          setLibraries([]); setView('login'); setIsConnected(false); setItems([]);
-        }
-      }
-    ]);
-  };
-
-  const saveLibs = async (libs) => {
-    setLibraries(libs);
-    await AsyncStorage.setItem('@media_libs', JSON.stringify(libs));
-  };
-
-  const handleAddLib = async () => {
-    if (!newLibName.trim() || !newLibPath.trim()) return Alert.alert('提示', '请填写完整信息');
-    let path = newLibPath.trim();
-    if (!path.startsWith('/')) path = '/' + path;
-    path = path.replace(/\/+$/, '');
-    const lib = {
-      id: Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
-      name: newLibName.trim(),
-      type: newLibType,
-      path,
-    };
-    await saveLibs([...libraries, lib]);
-    setNewLibName(''); setNewLibPath(''); setNewLibType('movie');
-    setShowAddLib(false);
-  };
-
-  const handleDeleteLib = async (libId) => {
-    await saveLibs(libraries.filter(l => l.id !== libId));
-    if (activeLib?.id === libId) setActiveLib(null);
-  };
-
-  const browseLibrary = async (lib) => {
-    setActiveLib(lib);
-    setTvShow(null); setEpisodes([]);
-    setLoading(true);
-    setView('grid');
-    try {
-      if (lib.type === 'movie') {
-        const entries = await propfind(lib.path);
+  const fetchLibItems = async (lib) => {
+    const result = [];
+    for (const folder of lib.folders) {
+      try {
+        const entries = await propfind(folder);
         const dirs = entries.filter(e => e.isDir);
-        const movieItems = [];
         for (const dir of dirs) {
-          const nfo = await readFile(dir.href + 'movie.nfo');
-          const meta = parseMovieNfo(nfo);
-          movieItems.push({
-            id: dir.href, title: meta.title || dir.name.replace(/\s*\(\d{4}\)\s*$/, '').trim(),
-            year: meta.year, plot: meta.plot, rating: meta.rating,
-            poster: dir.href + 'poster.jpg',
-            fanart: dir.href + 'fanart.jpg',
-            path: dir.href, dir: dir.name, type: 'movie',
-          });
+          if (lib.type === 'movie') {
+            const nfo = await readFile(dir.href + 'movie.nfo');
+            const meta = parseMovieNfo(nfo);
+            result.push({
+              id: dir.href, title: meta.title || dir.name.replace(/\s*\(\d{4}\)\s*$/, '').trim(),
+              year: meta.year, plot: meta.plot, rating: meta.rating,
+              poster: dir.href + 'poster.jpg', fanart: dir.href + 'fanart.jpg',
+              path: dir.href, type: 'movie',
+            });
+          } else {
+            const nfo = await readFile(dir.href + 'tvshow.nfo');
+            const meta = parseTvShowNfo(nfo);
+            result.push({
+              id: dir.href, title: meta.title || dir.name, plot: meta.plot, rating: meta.rating,
+              poster: dir.href + 'poster.jpg', fanart: dir.href + 'fanart.jpg',
+              path: dir.href, type: lib.type,
+            });
+          }
         }
-        movieItems.sort((a, b) => a.title.localeCompare(b.title));
-        setItems(movieItems);
+      } catch (e) {}
+    }
+    return result;
+  };
+
+  const fetchItems = async (libId) => {
+    setLoading(true); setTvShow(null); setEpisodes([]);
+    try {
+      let allItems = [];
+      if (libId === 'all') {
+        for (const lib of libraries) {
+          allItems = allItems.concat(await fetchLibItems(lib));
+        }
       } else {
-        const entries = await propfind(lib.path);
-        const dirs = entries.filter(e => e.isDir);
-        const showItems = [];
-        for (const dir of dirs) {
-          const nfo = await readFile(dir.href + 'tvshow.nfo');
-          const meta = parseTvShowNfo(nfo);
-          showItems.push({
-            id: dir.href, title: meta.title || dir.name, plot: meta.plot, rating: meta.rating,
-            poster: dir.href + 'poster.jpg', fanart: dir.href + 'fanart.jpg',
-            path: dir.href, type: lib.type === 'tv' ? 'tv' : 'anime',
-          });
-        }
-        showItems.sort((a, b) => a.title.localeCompare(b.title));
-        setItems(showItems);
+        const lib = libraries.find(l => l.id === libId);
+        if (lib) allItems = await fetchLibItems(lib);
       }
+      allItems.sort((a, b) => a.title.localeCompare(b.title));
+      setItems(allItems);
     } catch (e) { setItems([]); }
-    finally { setLoading(false); }
+    setLoading(false);
   };
+
+  const handleTabSelect = (libId) => {
+    setActiveLibId(libId);
+    fetchItems(libId);
+  };
+
+  useEffect(() => {
+    if (view === 'main') {
+      if (libraries.length > 0) fetchItems(activeLibId);
+      else setLoading(false);
+    }
+  }, [view, libraries]);
 
   const browseTvShow = async (show) => {
     setTvShow(show); setLoading(true);
@@ -273,8 +253,7 @@ export default function MediaGridScreen({ navigation }) {
         const sn = sd.name.match(/\d+/)?.[0] || sd.name;
         const files = await propfind(sd.href);
         for (const f of files) {
-          if (f.isDir) continue;
-          if (!/\.(mkv|mp4|avi|ts|mov|wmv)$/i.test(f.name)) continue;
+          if (f.isDir || !/\.(mkv|mp4|avi|ts|mov|wmv)$/i.test(f.name)) continue;
           const nfo = await readFile(sd.href + f.name.replace(/\.\w+$/, '.nfo'));
           const meta = parseEpisodeNfo(nfo);
           const tm = f.name.match(/S(\d+)E(\d+)/i);
@@ -289,7 +268,7 @@ export default function MediaGridScreen({ navigation }) {
       allEps.sort((a, b) => a.season - b.season || a.episode - b.episode);
       setEpisodes(allEps);
     } catch (e) { setEpisodes([]); }
-    finally { setLoading(false); }
+    setLoading(false);
   };
 
   const handlePlay = (item) => {
@@ -314,9 +293,65 @@ export default function MediaGridScreen({ navigation }) {
     });
   };
 
-  const goBack = () => {
-    if (tvShow) { setTvShow(null); setEpisodes([]); }
-    else { setActiveLib(null); setItems([]); setView('manager'); }
+  const startBrowse = async (dir) => {
+    setLoadingDirs(true);
+    setBrowsePath(dir);
+    try {
+      const entries = await propfind(dir);
+      setBrowseDirs(entries.filter(e => e.isDir));
+    } catch (e) { setBrowseDirs([]); }
+    setLoadingDirs(false);
+  };
+
+  const addFolderToLib = (path) => {
+    if (!editFolders.includes(path)) {
+      setEditFolders([...editFolders, path]);
+    }
+    setBrowseDirs([]); setBrowsePath(''); setAddingFolder(false);
+  };
+
+  const removeFolderFromLib = (path) => {
+    setEditFolders(editFolders.filter(f => f !== path));
+  };
+
+  const openNewLib = () => {
+    setEditingLib(null); setEditName(''); setEditType('movie'); setEditFolders([]);
+    setAddingFolder(false); setBrowseDirs([]); setBrowsePath('');
+    setShowSettings(true);
+  };
+
+  const openEditLib = (lib) => {
+    setEditingLib(lib); setEditName(lib.name); setEditType(lib.type); setEditFolders([...lib.folders]);
+    setAddingFolder(false); setBrowseDirs([]); setBrowsePath('');
+    setShowSettings(true);
+  };
+
+  const saveEditingLib = async () => {
+    if (!editName.trim()) return Alert.alert('提示', '请输入名称');
+    if (editFolders.length === 0) return Alert.alert('提示', '请至少添加一个路径');
+    let newLibs;
+    if (editingLib) {
+      newLibs = libraries.map(l => l.id === editingLib.id ? { ...l, name: editName.trim(), type: editType, folders: [...editFolders] } : l);
+    } else {
+      newLibs = [...libraries, { id: Date.now().toString(36) + Math.random().toString(36).substr(2, 4), name: editName.trim(), type: editType, folders: [...editFolders] }];
+    }
+    await saveLibs(newLibs);
+    setShowSettings(false);
+    if (view === 'main') fetchItems(activeLibId);
+  };
+
+  const deleteLib = (libId) => {
+    Alert.alert('删除媒体库', '确定要删除这个媒体库吗？', [
+      { text: '取消' }, {
+        text: '删除', style: 'destructive', onPress: async () => {
+          const newLibs = libraries.filter(l => l.id !== libId);
+          await saveLibs(newLibs);
+          setShowSettings(false);
+          if (activeLibId === libId) setActiveLibId('all');
+          if (view === 'main') fetchItems(activeLibId === libId ? 'all' : activeLibId);
+        }
+      }
+    ]);
   };
 
   if (view === 'loading') return <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View>;
@@ -327,7 +362,7 @@ export default function MediaGridScreen({ navigation }) {
         <View style={styles.setupCard}>
           <Film color="#3b82f6" size={48} style={{ alignSelf: 'center', marginBottom: 16 }} />
           <Text style={styles.setupTitle}>连接 WebDAV</Text>
-          <Text style={styles.setupSub}>输入你的 AList / WebDAV 服务地址</Text>
+          <Text style={styles.setupSub}>输入 AList / WebDAV 服务地址</Text>
           <View style={styles.inputBox}><Server color="#9ca3af" size={20} /><TextInput style={styles.input} placeholder="https://alist.5nas.asia" placeholderTextColor="#6b7280" value={davUrl} onChangeText={setDavUrl} autoCapitalize="none" keyboardType="url" /></View>
           <View style={styles.inputBox}><User color="#9ca3af" size={20} /><TextInput style={styles.input} placeholder="用户名" placeholderTextColor="#6b7280" value={username} onChangeText={setUsername} autoCapitalize="none" /></View>
           <View style={styles.inputBox}><Key color="#9ca3af" size={20} /><TextInput style={styles.input} placeholder="密码" placeholderTextColor="#6b7280" value={password} onChangeText={setPassword} secureTextEntry /></View>
@@ -337,119 +372,54 @@ export default function MediaGridScreen({ navigation }) {
     );
   }
 
-  if (view === 'manager') {
+  if (view === 'main') {
     return (
       <View style={styles.container}>
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>媒体库</Text>
+          <Text style={styles.headerTitle}>影音中心</Text>
           <TouchableOpacity onPress={handleLogout} style={styles.iconBtn}><LogOut color="#ef4444" size={20} /></TouchableOpacity>
         </View>
-        <FlatList
-          data={libraries}
-          keyExtractor={l => l.id}
-          contentContainerStyle={{ padding: 16 }}
-          ListEmptyComponent={
-            <View style={styles.emptyLib}>
-              <FolderOpen color="#4b5563" size={48} />
-              <Text style={{ color: '#9ca3af', marginTop: 12 }}>暂无媒体库，点击下方添加</Text>
-            </View>
-          }
-          renderItem={({ item: lib }) => (
-            <TouchableOpacity style={styles.libCard} onPress={() => browseLibrary(lib)}>
-              <Film color="#3b82f6" size={28} />
-              <View style={{ flex: 1, marginLeft: 14 }}>
-                <Text style={styles.libName}>{lib.name}</Text>
-                <Text style={styles.libMeta}>{LIB_TYPES.find(t => t.id === lib.type)?.label || lib.type} · {lib.path}</Text>
-              </View>
-              <ChevronRight color="#6b7280" size={20} />
-              <TouchableOpacity style={{ padding: 8 }} onPress={() => handleDeleteLib(lib.id)}><Trash2 color="#ef4444" size={18} /></TouchableOpacity>
+
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabRow} contentContainerStyle={{ paddingHorizontal: 16 }}>
+          <TouchableOpacity onPress={() => handleTabSelect('all')} style={[styles.tab, activeLibId === 'all' && styles.tabActive]}>
+            <Text style={[styles.tabText, activeLibId === 'all' && styles.tabTextActive]}>全部</Text>
+          </TouchableOpacity>
+          {libraries.map(lib => (
+            <TouchableOpacity key={lib.id} onPress={() => handleTabSelect(lib.id)} style={[styles.tab, activeLibId === lib.id && styles.tabActive]}>
+              <Text style={[styles.tabText, activeLibId === lib.id && styles.tabTextActive]}>{lib.name}</Text>
             </TouchableOpacity>
-          )}
-        />
-        <TouchableOpacity style={styles.fab} onPress={() => setShowAddLib(true)}><Plus color="#fff" size={28} /></TouchableOpacity>
+          ))}
+          <TouchableOpacity onPress={openNewLib} style={styles.tab}><Plus color="#9ca3af" size={18} /></TouchableOpacity>
+          <TouchableOpacity onPress={() => { setEditingLib(null); setEditName(''); setEditType('movie'); setEditFolders([]); setAddingFolder(false); setShowSettings(true); }} style={styles.tab}><Settings color="#9ca3af" size={18} /></TouchableOpacity>
+        </ScrollView>
 
-        <Modal visible={showAddLib} transparent animationType="fade">
-          <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => { setShowAddLib(false); setBrowseDirs([]); setBrowsePath(''); }}>
-            <View style={styles.modalPanel} onStartShouldSetResponder={() => true}>
-              <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 16 }}>添加媒体库</Text>
-              <View style={styles.inputBox}><TextInput style={styles.input} placeholder="名称（如：我的电影）" placeholderTextColor="#6b7280" value={newLibName} onChangeText={setNewLibName} /></View>
-              {browseDirs.length > 0 ? (
-                <View style={{ maxHeight: 200, marginBottom: 14 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                    <TouchableOpacity onPress={() => {
-                      const up = browsePath.replace(/\/+$/, '').split('/').slice(0, -1).join('/') || '/';
-                      startBrowse(up);
-                    }} style={{ padding: 4, marginRight: 8 }}><ChevronLeft color="#9ca3af" size={18} /></TouchableOpacity>
-                    <Text style={{ color: '#9ca3af', fontSize: 12, flex: 1 }} numberOfLines={1}>{browsePath || '/'}</Text>
-                    <TouchableOpacity onPress={() => selectDir(browsePath)} style={{ paddingHorizontal: 8 }}><Text style={{ color: '#3b82f6', fontSize: 13, fontWeight: 'bold' }}>选择此文件夹</Text></TouchableOpacity>
-                  </View>
-                  {loadingDirs ? <ActivityIndicator color="#3b82f6" /> : (
-                    <ScrollView style={{ maxHeight: 160 }} nestedScrollEnabled>
-                      {browseDirs.map((d, i) => (
-                        <TouchableOpacity key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#374151' }} onPress={() => startBrowse(d.href)}>
-                          <FolderOpen color="#f59e0b" size={18} style={{ marginRight: 8 }} />
-                          <Text style={{ color: '#e5e7eb', fontSize: 14 }} numberOfLines={1}>{d.name}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  )}
-                </View>
-              ) : (
-                <View style={[styles.inputBox, { marginBottom: 14 }]}>
-                  <TextInput style={styles.input} placeholder="路径（如：/媒体/电影）" placeholderTextColor="#6b7280" value={newLibPath} onChangeText={setNewLibPath} autoCapitalize="none" />
-                  <TouchableOpacity onPress={() => startBrowse(davPath || '/')} style={{ paddingLeft: 8 }}><FolderOpen color="#3b82f6" size={20} /></TouchableOpacity>
-                </View>
-              )}
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
-                {LIB_TYPES.map(t => (
-                  <TouchableOpacity key={t.id} onPress={() => setNewLibType(t.id)}
-                    style={[styles.typeChip, newLibType === t.id && styles.typeChipActive]}>
-                    <Text style={[styles.typeChipText, newLibType === t.id && styles.typeChipTextActive]}>{t.label}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-              <TouchableOpacity style={styles.primaryBtn} onPress={handleAddLib}><Text style={styles.btnText}>添加</Text></TouchableOpacity>
-            </View>
-          </TouchableOpacity>
-        </Modal>
-      </View>
-    );
-  }
-
-  if (view === 'grid') {
-    return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={goBack} style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <ChevronLeft color="#fff" size={24} /><Text style={styles.headerTitle}>{tvShow ? tvShow.title : activeLib?.name || '浏览'}</Text>
-          </TouchableOpacity>
-        </View>
         {tvShow ? (
-          loading ? <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View> : (
-            <FlatList
-              data={episodes}
-              keyExtractor={e => e.id}
-              contentContainerStyle={{ padding: 16 }}
-              ListEmptyComponent={<Text style={{ color: '#6b7280', textAlign: 'center', marginTop: 40 }}>暂无剧集</Text>}
-              renderItem={({ item: ep }) => (
-                <TouchableOpacity style={styles.epCard} onPress={() => handlePlayEpisode(ep)}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.epTitle} numberOfLines={1}>S{String(ep.season).padStart(2, '0')}E{String(ep.episode).padStart(2, '0')} - {ep.title}</Text>
-                    {ep.plot ? <Text style={styles.epOverview} numberOfLines={2}>{ep.plot}</Text> : null}
-                  </View>
-                  <Play color="#3b82f6" size={20} fill="#3b82f6" />
-                </TouchableOpacity>
-              )}
-            />
-          )
+          <View style={{ flex: 1 }}>
+            <View style={styles.subHeader}>
+              <TouchableOpacity onPress={() => { setTvShow(null); setEpisodes([]); }} style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <ChevronLeft color="#fff" size={22} /><Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>{tvShow.title}</Text>
+              </TouchableOpacity>
+            </View>
+            {loading ? <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View> : (
+              <FlatList data={episodes} keyExtractor={e => e.id} contentContainerStyle={{ padding: 16 }}
+                ListEmptyComponent={<Text style={{ color: '#6b7280', textAlign: 'center', marginTop: 40 }}>暂无剧集</Text>}
+                renderItem={({ item: ep }) => (
+                  <TouchableOpacity style={styles.epCard} onPress={() => handlePlayEpisode(ep)}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.epTitle} numberOfLines={1}>S{String(ep.season).padStart(2, '0')}E{String(ep.episode).padStart(2, '0')} - {ep.title}</Text>
+                      {ep.plot ? <Text style={styles.epOverview} numberOfLines={2}>{ep.plot}</Text> : null}
+                    </View>
+                    <Play color="#3b82f6" size={20} fill="#3b82f6" />
+                  </TouchableOpacity>
+                )}
+              />
+            )}
+          </View>
         ) : (
           loading ? <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View> : (
-            <FlatList
-              data={items}
-              keyExtractor={item => item.id}
-              numColumns={3}
+            <FlatList data={items} keyExtractor={item => item.id} numColumns={3}
               contentContainerStyle={{ padding: 16 }}
-              ListEmptyComponent={<Text style={{ color: '#6b7280', textAlign: 'center', marginTop: 40 }}>暂无内容</Text>}
+              ListEmptyComponent={<Text style={{ color: '#6b7280', textAlign: 'center', marginTop: 40 }}>暂无内容{'\n'}点右上角 + 添加媒体库</Text>}
               renderItem={({ item }) => (
                 <TouchableOpacity style={styles.gridItem} onPress={() => {
                   if (item.type === 'movie') handlePlay(item);
@@ -465,6 +435,67 @@ export default function MediaGridScreen({ navigation }) {
             />
           )
         )}
+
+        <Modal visible={showSettings} transparent animationType="slide">
+          <View style={styles.settingsOverlay}>
+            <View style={styles.settingsPanel}>
+              <View style={styles.settingsHeader}>
+                <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>{editingLib === null ? '添加媒体库' : '编辑媒体库'}</Text>
+                <TouchableOpacity onPress={() => setShowSettings(false)}><X color="#9ca3af" size={24} /></TouchableOpacity>
+              </View>
+              <ScrollView style={{ padding: 20, maxHeight: '80%' }} nestedScrollEnabled>
+                <View style={styles.inputBox}><TextInput style={styles.input} placeholder="媒体库名称" placeholderTextColor="#6b7280" value={editName} onChangeText={setEditName} /></View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
+                  {LIB_TYPES.map(t => (
+                    <TouchableOpacity key={t.id} onPress={() => setEditType(t.id)}
+                      style={[styles.typeChip, editType === t.id && styles.typeChipActive]}>
+                      <Text style={[styles.typeChipText, editType === t.id && styles.typeChipTextActive]}>{t.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+
+                <Text style={{ color: '#9ca3af', fontSize: 13, marginBottom: 8 }}>文件夹路径</Text>
+                {editFolders.map((fp, i) => (
+                  <View key={i} style={[styles.inputBox, { marginBottom: 8 }]}>
+                    <FolderOpen color="#f59e0b" size={18} style={{ marginRight: 6 }} />
+                    <Text style={{ color: '#e5e7eb', fontSize: 14, flex: 1 }} numberOfLines={1}>{fp}</Text>
+                    <TouchableOpacity onPress={() => removeFolderFromLib(fp)}><X color="#ef4444" size={18} /></TouchableOpacity>
+                  </View>
+                ))}
+
+                {addingFolder ? (
+                  <View style={{ marginTop: 8 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                      <TouchableOpacity onPress={() => { const up = browsePath.replace(/\/+$/, '').split('/').slice(0, -1).join('/') || '/'; startBrowse(up); }} style={{ padding: 4, marginRight: 8 }}><ChevronLeft color="#9ca3af" size={18} /></TouchableOpacity>
+                      <Text style={{ color: '#9ca3af', fontSize: 12, flex: 1 }} numberOfLines={1}>{browsePath || '/'}</Text>
+                      <TouchableOpacity onPress={() => addFolderToLib(browsePath)} style={{ paddingHorizontal: 8 }}><Text style={{ color: '#3b82f6', fontSize: 13, fontWeight: 'bold' }}>选择此文件夹</Text></TouchableOpacity>
+                    </View>
+                    {loadingDirs ? <ActivityIndicator color="#3b82f6" /> : (
+                      <ScrollView style={{ maxHeight: 150 }} nestedScrollEnabled>
+                        {browseDirs.length === 0 && <Text style={{ color: '#6b7280', textAlign: 'center' }}>无子文件夹</Text>}
+                        {browseDirs.map((d, i) => (
+                          <TouchableOpacity key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#374151' }} onPress={() => startBrowse(d.href)}>
+                            <FolderOpen color="#f59e0b" size={18} style={{ marginRight: 8 }} />
+                            <Text style={{ color: '#e5e7eb', fontSize: 14 }} numberOfLines={1}>{d.name}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    )}
+                  </View>
+                ) : (
+                  <TouchableOpacity onPress={() => { setAddingFolder(true); startBrowse(davPath || '/'); }} style={{ flexDirection: 'row', alignItems: 'center', padding: 10, marginBottom: 8 }}>
+                    <Plus color="#3b82f6" size={20} style={{ marginRight: 8 }} /><Text style={{ color: '#3b82f6', fontSize: 14 }}>添加文件夹</Text>
+                  </TouchableOpacity>
+                )}
+
+                <TouchableOpacity style={styles.primaryBtn} onPress={saveEditingLib}><Text style={styles.btnText}>保存</Text></TouchableOpacity>
+                {editingLib && (
+                  <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: '#dc2626', marginTop: 8 }]} onPress={() => deleteLib(editingLib.id)}><Text style={styles.btnText}>删除此媒体库</Text></TouchableOpacity>
+                )}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
       </View>
     );
   }
@@ -479,23 +510,18 @@ const styles = StyleSheet.create({
   setupTitle: { color: '#ffffff', fontSize: 22, fontWeight: 'bold', textAlign: 'center', marginBottom: 4 },
   setupSub: { color: '#9ca3af', fontSize: 13, textAlign: 'center', marginBottom: 20 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 50, paddingBottom: 12, backgroundColor: '#1f2937' },
-  headerTitle: { color: '#ffffff', fontSize: 20, fontWeight: 'bold', marginLeft: 4 },
+  headerTitle: { color: '#ffffff', fontSize: 20, fontWeight: 'bold' },
   iconBtn: { padding: 8 },
-  inputBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#374151', borderRadius: 10, paddingHorizontal: 14, marginBottom: 14, height: 48 },
+  inputBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#374151', borderRadius: 10, paddingHorizontal: 14, height: 48 },
   input: { flex: 1, color: '#e5e7eb', fontSize: 15, marginLeft: 8 },
   primaryBtn: { backgroundColor: '#3b82f6', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginTop: 6 },
   btnText: { color: '#ffffff', fontSize: 17, fontWeight: 'bold' },
-  emptyLib: { alignItems: 'center', marginTop: 80 },
-  libCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1f2937', padding: 16, borderRadius: 12, marginBottom: 10, elevation: 2 },
-  libName: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
-  libMeta: { color: '#6b7280', fontSize: 12, marginTop: 2 },
-  fab: { position: 'absolute', bottom: 24, right: 24, backgroundColor: '#3b82f6', width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', elevation: 6 },
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 24 },
-  modalPanel: { backgroundColor: '#1f2937', borderRadius: 16, padding: 20, elevation: 10 },
-  typeChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: '#374151', marginRight: 8 },
-  typeChipActive: { backgroundColor: 'rgba(59, 130, 246, 0.25)' },
-  typeChipText: { color: '#9ca3af', fontSize: 13, fontWeight: '600' },
-  typeChipTextActive: { color: '#60a5fa' },
+  tabRow: { backgroundColor: '#1f2937', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#374151' },
+  tab: { paddingHorizontal: 16, paddingVertical: 6, borderRadius: 16, marginRight: 8, backgroundColor: '#374151' },
+  tabActive: { backgroundColor: 'rgba(59, 130, 246, 0.25)' },
+  tabText: { color: '#9ca3af', fontSize: 14, fontWeight: '600' },
+  tabTextActive: { color: '#60a5fa' },
+  subHeader: { paddingHorizontal: 16, paddingVertical: 10, backgroundColor: '#1f2937', borderBottomWidth: 1, borderBottomColor: '#374151' },
   gridItem: { width: POSTER_W, marginRight: 8, marginBottom: 16 },
   gridPoster: { width: POSTER_W, height: POSTER_H, borderRadius: 8, backgroundColor: '#374151' },
   gridOverlay: { position: 'absolute', top: 4, right: 4, flexDirection: 'row' },
@@ -505,4 +531,11 @@ const styles = StyleSheet.create({
   epCard: { flexDirection: 'row', backgroundColor: '#1f2937', padding: 14, borderRadius: 10, marginBottom: 8, alignItems: 'center' },
   epTitle: { color: '#e5e7eb', fontSize: 14, fontWeight: 'bold' },
   epOverview: { color: '#6b7280', fontSize: 12, marginTop: 4 },
+  typeChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: '#374151', marginRight: 8 },
+  typeChipActive: { backgroundColor: 'rgba(59, 130, 246, 0.25)' },
+  typeChipText: { color: '#9ca3af', fontSize: 13, fontWeight: '600' },
+  typeChipTextActive: { color: '#60a5fa' },
+  settingsOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  settingsPanel: { backgroundColor: '#1f2937', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '85%' },
+  settingsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#374151' },
 });
