@@ -141,10 +141,9 @@ export default function MediaGridScreen({ navigation }) {
      setIsTesting(true);
      try {
        let baseUrl = serverUrl.trim().replace(/\/+$/, '');
-       const res = await fetch(`${baseUrl}/Users/AuthenticateByName?format=json`, {
+       const res = await fetch(`${baseUrl}/Users/AuthenticateByName?format=json&username=${encodeURIComponent(username)}&pw=${encodeURIComponent(password)}`, {
          method: 'POST',
-         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-         body: `username=${encodeURIComponent(username)}&pw=${encodeURIComponent(password)}`,
+         headers: { 'Accept': 'application/json' },
        });
       if (!res.ok) return Alert.alert('错误', '认证失败，请检查用户名或密码');
       const data = await res.json();
