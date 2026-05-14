@@ -143,7 +143,7 @@ export default function MediaGridScreen({ navigation }) {
        let baseUrl = serverUrl.trim().replace(/\/+$/, '');
        const res = await fetch(`${baseUrl}/Users/AuthenticateByName?format=json&username=${encodeURIComponent(username)}&pw=${encodeURIComponent(password)}`, {
          method: 'POST',
-         headers: { 'X-Emby-Client': 'UnraidManager', 'X-Emby-Device-Name': 'Android', 'X-Emby-Client-Version': '1.1.57' },
+         headers: { 'X-Emby-Client': 'UnraidManager', 'X-Emby-Device-Name': 'Android', 'X-Emby-Client-Version': '1.1.59', 'X-Emby-Device-Id': 'unraid-android-001' },
        });
        if (!res.ok) {
          const text = await res.text();
