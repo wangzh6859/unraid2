@@ -110,7 +110,13 @@ export default function MediaGridScreen({ navigation }) {
 
   const fetchItems = async (libId, url = serverUrl, token = authToken, uid = userId, start = 0, append = false, search = '', sort = sortBy, order = sortOrder) => {
     try {
-      let path = `/Users/${uid}/Items?Recursive=true&IncludeItemTypes=Movie,Series&SortBy=${sort}&SortOrder=${order}&Limit=${PER_PAGE}&StartIndex=${start}`;
+      const COLLECTION_TYPES = { movies: 'Movie', tvshows: 'Series', homevideos: 'Video', musicvideos: 'MusicVideo', trailers: 'Trailer', boxsets: 'BoxSet' };
+      let types = 'Movie,Series';
+      if (libId && libId !== 'all') {
+        const lib = libraries.find(l => l.Id === libId);
+        types = (lib && COLLECTION_TYPES[lib.CollectionType]) || 'Movie,Series';
+      }
+      let path = `/Users/${uid}/Items?Recursive=true&IncludeItemTypes=${types}&SortBy=${sort}&SortOrder=${order}&Limit=${PER_PAGE}&StartIndex=${start}`;
       if (libId && libId !== 'all') path += `&ParentId=${libId}`;
       if (search.trim()) path += `&SearchTerm=${encodeURIComponent(search.trim())}`;
       const data = await fetch(`${url}${path}&api_key=${token}`).then(r => r.json());
