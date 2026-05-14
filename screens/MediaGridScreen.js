@@ -146,19 +146,20 @@ export default function MediaGridScreen({ navigation }) {
     try {
       const base = serverUrl.trim().replace(/\/+$/, '');
       const auth = 'Basic ' + btoa(username + ':' + password);
-      let connected = false;
-      const testPaths = ['/', '/webdav', '/media', '/dav'];
-      for (const p of testPaths) {
-        try {
-          const r = await fetch(base + p, { method: 'PROPFIND', headers: { 'Authorization': auth, 'Depth': '0' }, body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>' });
-          if (r.ok) { connected = true; break; }
-        } catch (_) {}
+      let ok = false;
+      for (const p of ['/dav/', '/dav', '/webdav/', '/webdav', '/']) {
         try {
           const r = await fetch(base + p, { method: 'GET', headers: { 'Authorization': auth } });
-          if (r.ok || r.status === 401 || r.status === 403 || r.status === 405) { connected = true; break; }
+          if (r.ok || r.status === 401 || r.status === 403 || r.status === 404) { ok = true; break; }
         } catch (_) {}
       }
-      if (!connected) return Alert.alert('连接失败', '无法连接到该地址\n\n请确保输入的是 WebDAV 服务地址（不是 Emby 网页地址）\n提示：unRAID 的 WebDAV 通常在 端口或 /webdav 路径下');
+      if (!ok) {
+        try {
+          const r = await fetch(base + '/', { method: 'GET' });
+          if (r.ok) ok = true;
+        } catch (_) {}
+      }
+      if (!ok) return Alert.alert('连接失败', `无法连接到 ${base}\n\n请检查地址是否正确\n提示：AList 的 WebDAV 地址通常是 https://域名/dav/`);
       await AsyncStorage.multiSet([
         ['@webdav_url', base], ['@webdav_user', username], ['@webdav_pass', password],
       ]);
