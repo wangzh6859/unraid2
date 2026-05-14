@@ -81,7 +81,8 @@ export default function MediaDetailScreen({ route, navigation }) {
         const files = await propfind(sd.href);
         for (const f of files) {
           if (f.isDir || !/\.(mkv|mp4|avi|ts|mov|wmv|m4v|webm)$/i.test(f.name)) continue;
-          const nfoRes = await fetch(origin + sd.href + f.name.replace(/\.\w+$/, '.nfo'), { headers: { 'Authorization': authHeader() } });
+          const nfoPath = (sd.href.endsWith('/') ? sd.href : sd.href + '/') + f.name.replace(/\.\w+$/, '.nfo');
+           const nfoRes = await fetch(origin + nfoPath, { headers: { 'Authorization': authHeader() } });
           const nfoXml = nfoRes.ok ? await nfoRes.text() : '';
           const title = nfoXml.match(/<title>([\s\S]*?)<\/title>/)?.[1]?.trim() || f.name.replace(/\.[^.]+$/, '');
           const plot = nfoXml.match(/<plot>([\s\S]*?)<\/plot>/)?.[1]?.trim() || '';
@@ -204,13 +205,17 @@ export default function MediaDetailScreen({ route, navigation }) {
           </View>
         </View>
 
-        {type === 'tv' ? null : (
-          !playing ? (
-            <TouchableOpacity style={styles.playBtn} onPress={() => setPlaying(true)}>
-              <Play color="#fff" size={20} fill="#fff" /><Text style={styles.playText}>立即播放</Text>
-            </TouchableOpacity>
-          ) : null
-        )}
+{type === 'tv' ? null : (
+           !playing ? (
+             <TouchableOpacity style={styles.playBtn} onPress={() => setPlaying(true)}>
+               <Play color="#fff" size={20} fill="#fff" /><Text style={styles.playText}>立即播放</Text>
+             </TouchableOpacity>
+           ) : (
+             <View style={[styles.playBtn, { backgroundColor: 'rgba(229, 9, 20, 0.6)' }]}>
+               <Play color="#fff" size={20} fill="#fff" /><Text style={styles.playText}>正在播放</Text>
+             </View>
+           )
+         )}
 
         {plot ? (
           <View style={styles.section}>
