@@ -31,6 +31,9 @@ export default function MediaGridScreen({ navigation }) {
   const [newLibName, setNewLibName] = useState('');
   const [newLibType, setNewLibType] = useState('movie');
   const [newLibPath, setNewLibPath] = useState('');
+  const [browseDirs, setBrowseDirs] = useState([]);
+  const [browsePath, setBrowsePath] = useState('');
+  const [loadingDirs, setLoadingDirs] = useState(false);
 
   const [activeLib, setActiveLib] = useState(null);
   const [items, setItems] = useState([]);
@@ -162,6 +165,22 @@ export default function MediaGridScreen({ navigation }) {
     const encU = encodeURIComponent(username);
     const encP = encodeURIComponent(password);
     return origin.replace('://', `://${encU}:${encP}@`) + filePath;
+  };
+
+  const startBrowse = async (dir) => {
+    setLoadingDirs(true);
+    setBrowsePath(dir);
+    try {
+      const entries = await propfind(dir);
+      setBrowseDirs(entries.filter(e => e.isDir));
+    } catch (e) { setBrowseDirs([]); }
+    setLoadingDirs(false);
+  };
+
+  const selectDir = (path) => {
+    setNewLibPath(path);
+    setBrowseDirs([]);
+    setBrowsePath('');
   };
 
   const handleLogout = () => {
@@ -350,11 +369,37 @@ export default function MediaGridScreen({ navigation }) {
         <TouchableOpacity style={styles.fab} onPress={() => setShowAddLib(true)}><Plus color="#fff" size={28} /></TouchableOpacity>
 
         <Modal visible={showAddLib} transparent animationType="fade">
-          <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowAddLib(false)}>
+          <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => { setShowAddLib(false); setBrowseDirs([]); setBrowsePath(''); }}>
             <View style={styles.modalPanel} onStartShouldSetResponder={() => true}>
               <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 16 }}>添加媒体库</Text>
               <View style={styles.inputBox}><TextInput style={styles.input} placeholder="名称（如：我的电影）" placeholderTextColor="#6b7280" value={newLibName} onChangeText={setNewLibName} /></View>
-              <View style={styles.inputBox}><TextInput style={styles.input} placeholder="路径（如：/媒体/电影）" placeholderTextColor="#6b7280" value={newLibPath} onChangeText={setNewLibPath} autoCapitalize="none" /></View>
+              {browseDirs.length > 0 ? (
+                <View style={{ maxHeight: 200, marginBottom: 14 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                    <TouchableOpacity onPress={() => {
+                      const up = browsePath.replace(/\/+$/, '').split('/').slice(0, -1).join('/') || '/';
+                      startBrowse(up);
+                    }} style={{ padding: 4, marginRight: 8 }}><ChevronLeft color="#9ca3af" size={18} /></TouchableOpacity>
+                    <Text style={{ color: '#9ca3af', fontSize: 12, flex: 1 }} numberOfLines={1}>{browsePath || '/'}</Text>
+                    <TouchableOpacity onPress={() => selectDir(browsePath)} style={{ paddingHorizontal: 8 }}><Text style={{ color: '#3b82f6', fontSize: 13, fontWeight: 'bold' }}>选择此文件夹</Text></TouchableOpacity>
+                  </View>
+                  {loadingDirs ? <ActivityIndicator color="#3b82f6" /> : (
+                    <ScrollView style={{ maxHeight: 160 }} nestedScrollEnabled>
+                      {browseDirs.map((d, i) => (
+                        <TouchableOpacity key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#374151' }} onPress={() => startBrowse(d.href)}>
+                          <FolderOpen color="#f59e0b" size={18} style={{ marginRight: 8 }} />
+                          <Text style={{ color: '#e5e7eb', fontSize: 14 }} numberOfLines={1}>{d.name}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  )}
+                </View>
+              ) : (
+                <View style={[styles.inputBox, { marginBottom: 14 }]}>
+                  <TextInput style={styles.input} placeholder="路径（如：/媒体/电影）" placeholderTextColor="#6b7280" value={newLibPath} onChangeText={setNewLibPath} autoCapitalize="none" />
+                  <TouchableOpacity onPress={() => startBrowse(davPath || '/')} style={{ paddingLeft: 8 }}><FolderOpen color="#3b82f6" size={20} /></TouchableOpacity>
+                </View>
+              )}
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
                 {LIB_TYPES.map(t => (
                   <TouchableOpacity key={t.id} onPress={() => setNewLibType(t.id)}
