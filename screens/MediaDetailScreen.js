@@ -119,7 +119,7 @@ export default function MediaDetailScreen({ route, navigation }) {
      setActiveVideoUrl(url);
      setActiveVideoId(videoId);
      const initialPos = startTicks > 0 ? startTicks / 10000 : 0;
-     setInitialPosition(initialPos);
+     setInitialPositionMillis(initialPos);
      playbackRef.current = startTicks > 0 ? startTicks / 10000 : null;
    };
 
