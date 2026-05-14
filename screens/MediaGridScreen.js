@@ -145,12 +145,19 @@ export default function MediaGridScreen({ navigation }) {
     setIsTesting(true);
     try {
       const base = serverUrl.trim().replace(/\/+$/, '');
-      const res = await fetch(base + '/', {
-        method: 'PROPFIND',
-        headers: { 'Authorization': 'Basic ' + btoa(username + ':' + password), 'Depth': '0' },
-        body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>',
-      });
-      if (!res.ok) return Alert.alert('错误', `WebDAV 连接失败 (${res.status})`);
+      const auth = 'Basic ' + btoa(username + ':' + password);
+      let ok = false;
+      try {
+        const r = await fetch(base + '/', { method: 'PROPFIND', headers: { 'Authorization': auth, 'Depth': '0' }, body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>' });
+        ok = r.ok;
+      } catch (_) {}
+      if (!ok) {
+        try {
+          const r = await fetch(base + '/', { method: 'GET', headers: { 'Authorization': auth } });
+          ok = r.ok || r.status === 401 || r.status === 403;
+        } catch (_) { return Alert.alert('错误', '无法连接服务器，请检查地址和网络'); }
+      }
+      if (!ok) return Alert.alert('错误', '认证失败，请检查用户名和密码');
       await AsyncStorage.multiSet([
         ['@webdav_url', base], ['@webdav_user', username], ['@webdav_pass', password],
       ]);
