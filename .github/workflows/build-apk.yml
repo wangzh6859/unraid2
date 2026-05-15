@@ -80,7 +80,7 @@ jobs:
         with:
           tag_name: v1.1.${{ github.run_number }}
           release_name: Unraid v1.1.${{ github.run_number }}
-          body: "APK Build - 修复播放按钮错位和闪退问题"
+          body: "APK Build"
           draft: false
           prerelease: false
 

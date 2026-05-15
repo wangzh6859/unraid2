@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { Home, Folder, Film, Settings } from 'lucide-react-native'; 
+import { Home, Folder, Settings } from 'lucide-react-native';
 
 // 引入所有子页面
 import DashboardScreen from './screens/DashboardScreen';
@@ -12,14 +12,12 @@ import DockerDetailsScreen from './screens/DockerDetailsScreen';
 import VmDetailsScreen from './screens/VmDetailsScreen';
 import StorageDetailsScreen from './screens/StorageDetailsScreen';
 import SmartDetailsScreen from './screens/SmartDetailsScreen';
-import MediaGridScreen from './screens/MediaGridScreen';
-import MediaDetailScreen from './screens/MediaDetailScreen';
 import FilesScreen from './screens/FilesScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-// 💡 首页专属的内部堆栈 (去掉了写错位置的 MediaDetail)
+// 💡 首页专属的内部堆栈
 function HomeStack() {
   return (
     <Stack.Navigator
@@ -43,12 +41,11 @@ function MainTabs() {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
-        tabBarIcon: ({ color, size }) => {
-          if (route.name === '首页') return <Home color={color} size={size} />;
-          if (route.name === '文件') return <Folder color={color} size={size} />;
-          if (route.name === '影音') return <Film color={color} size={size} />;
-          if (route.name === '设置') return <Settings color={color} size={size} />;
-        },
+tabBarIcon: ({ color, size }) => {
+           if (route.name === '首页') return <Home color={color} size={size} />;
+           if (route.name === '文件') return <Folder color={color} size={size} />;
+           if (route.name === '设置') return <Settings color={color} size={size} />;
+         },
         tabBarActiveTintColor: '#60a5fa',
         tabBarInactiveTintColor: '#9ca3af',
         headerStyle: { backgroundColor: '#1f2937' },
@@ -57,10 +54,9 @@ function MainTabs() {
         sceneContainerStyle: { backgroundColor: '#111827' },
       })}
     >
-      <Tab.Screen name="首页" component={HomeStack} options={{ headerShown: false }} />
-      <Tab.Screen name="文件" component={FilesScreen} />
-      <Tab.Screen name="影音" component={MediaGridScreen} options={{ headerShown: false }} />
-      <Tab.Screen name="设置" component={SettingsScreen} />
+<Tab.Screen name="首页" component={HomeStack} options={{ headerShown: false }} />
+       <Tab.Screen name="文件" component={FilesScreen} />
+       <Tab.Screen name="设置" component={SettingsScreen} />
     </Tab.Navigator>
   );
 }
@@ -78,11 +74,6 @@ export default function App() {
         />
         
         {/* 第二层：全屏显示的详情页。它弹出时会完美覆盖掉底座的 Tab 栏！ */}
-        <Stack.Screen 
-          name="MediaDetail" 
-          component={MediaDetailScreen} 
-          options={{ headerShown: false }} 
-        />
       </Stack.Navigator>
     </NavigationContainer>
   );
