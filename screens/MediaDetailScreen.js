@@ -76,27 +76,33 @@ export default function MediaDetailScreen({ route, navigation }) {
       const entries = await propfind(showPath);
       const seasonDirs = entries.filter(e => e.isDir);
       const allEps = [];
-      for (const sd of seasonDirs) {
-        const sn = sd.name.match(/\d+/)?.[0] || sd.name;
-        const files = await propfind(sd.href);
-        for (const f of files) {
-          if (f.isDir || !/\.(mkv|mp4|avi|ts|mov|wmv|m4v|webm)$/i.test(f.name)) continue;
-          const nfoPath = (sd.href.endsWith('/') ? sd.href : sd.href + '/') + f.name.replace(/\.\w+$/, '.nfo');
-           const nfoRes = await fetch(origin + nfoPath, { headers: { 'Authorization': authHeader() } });
-          const nfoXml = nfoRes.ok ? await nfoRes.text() : '';
-          const title = nfoXml.match(/<title>([\s\S]*?)<\/title>/)?.[1]?.trim() || f.name.replace(/\.[^.]+$/, '');
-          const plot = nfoXml.match(/<plot>([\s\S]*?)<\/plot>/)?.[1]?.trim() || '';
-          const epNum = parseInt(nfoXml.match(/<episode>([\s\S]*?)<\/episode>/)?.[1]) || 0;
-          const seasonNum = parseInt(nfoXml.match(/<season>([\s\S]*?)<\/season>/)?.[1]) || 0;
-          const tm = f.name.match(/S(\d+)E(\d+)/i);
-          allEps.push({
-            id: f.href, title, plot,
-            episode: epNum || parseInt(tm?.[2]) || 0,
-            season: seasonNum || parseInt(tm?.[1]) || parseInt(sn) || 0,
-            file: f.href,
-          });
-        }
-      }
+for (const sd of seasonDirs) {
+         const sn = sd.name.match(/\d+/)?.[0] || sd.name;
+         let files;
+         try {
+           files = await propfind(sd.href);
+         } catch (e) { continue; }
+         for (const f of files) {
+           if (f.isDir || !/\.(mkv|mp4|avi|ts|mov|wmv|m4v|webm)$/i.test(f.name)) continue;
+           let nfoXml = '';
+           try {
+             const nfoPath = (sd.href.endsWith('/') ? sd.href : sd.href + '/') + f.name.replace(/\.\w+$/, '.nfo');
+             const nfoRes = await fetch(origin + nfoPath, { headers: { 'Authorization': authHeader() } });
+             if (nfoRes.ok) nfoXml = await nfoRes.text();
+           } catch (e) { /* skip nfo parse error */ }
+           const title = nfoXml.match(/<title>([\s\S]*?)<\/title>/)?.[1]?.trim() || f.name.replace(/\.[^.]+$/, '');
+           const plot = nfoXml.match(/<plot>([\s\S]*?)<\/plot>/)?.[1]?.trim() || '';
+           const epNum = parseInt(nfoXml.match(/<episode>([\s\S]*?)<\/episode>/)?.[1]) || 0;
+           const seasonNum = parseInt(nfoXml.match(/<season>([\s\S]*?)<\/season>/)?.[1]) || 0;
+           const tm = f.name.match(/S(\d+)E(\d+)/i);
+           allEps.push({
+             id: f.href, title, plot,
+             episode: epNum || parseInt(tm?.[2]) || 0,
+             season: seasonNum || parseInt(tm?.[1]) || parseInt(sn) || 0,
+             file: f.href,
+           });
+         }
+       }
       allEps.sort((a, b) => a.season - b.season || a.episode - b.episode);
       setEpisodes(allEps);
     } catch (e) { setEpisodes([]); }

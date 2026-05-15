@@ -1,0 +1,17 @@
+node_modules/
+.expo/
+build/
+dist/
+coverage/
+.env
+.env.*
+*.apk
+*.aab
+keystore_b64.txt
+release.keystore
+*.jks
+*.keystore
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
