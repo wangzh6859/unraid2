@@ -1,10 +1,14 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { StyleSheet, Text, View, ScrollView, ActivityIndicator, TouchableOpacity } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { HardDrive, Server, ThumbsUp, ThumbsDown, Thermometer, ChevronRight } from 'lucide-react-native';
+import { useTheme } from '../ThemeContext';
 
 export default function StorageDetailsScreen({ navigation }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const [disks, setDisks] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -41,7 +45,7 @@ export default function StorageDetailsScreen({ navigation }) {
     }, [])
   );
 
-  if (loading && disks.length === 0) return <View style={styles.center}><ActivityIndicator size="large" color="#10b981" /></View>;
+  if (loading && disks.length === 0) return <View style={styles.center}><ActivityIndicator size="large" color={colors.green} /></View>;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -62,11 +66,11 @@ export default function StorageDetailsScreen({ navigation }) {
               {/* 第一行：设备名称 和 容量总览 */}
               <View style={styles.cardHeader}>
                 <View style={styles.titleRow}>
-                  {isCache ? <Server size={20} color="#3b82f6" /> : <HardDrive size={20} color={isSmartError ? '#ef4444' : "#10b981"} />}
+                  {isCache ? <Server size={20} color={colors.accent} /> : <HardDrive size={20} color={isSmartError ? colors.red : colors.green} />}
                   <Text style={styles.diskName}>{disk.name}</Text>
                   <Text style={styles.deviceLabel}>({disk.device})</Text>
                 </View>
-                <ChevronRight size={18} color="#6b7280" />
+                <ChevronRight size={18} color={colors.muted} />
               </View>
 
               {/* 第二行：四宫格状态数据 */}
@@ -75,7 +79,7 @@ export default function StorageDetailsScreen({ navigation }) {
                 <View style={styles.gridItem}>
                   <Text style={styles.gridLabel}>状态</Text>
                   <View style={styles.statusRow}>
-                    <View style={[styles.statusDot, { backgroundColor: isStandby ? '#6b7280' : '#10b981' }]} />
+                    <View style={[styles.statusDot, { backgroundColor: isStandby ? colors.muted : colors.green }]} />
                     <Text style={styles.gridValue}>{isStandby ? '待机' : '活动'}</Text>
                   </View>
                 </View>
@@ -83,8 +87,8 @@ export default function StorageDetailsScreen({ navigation }) {
                 <View style={styles.gridItem}>
                   <Text style={styles.gridLabel}>温度</Text>
                   <View style={styles.statusRow}>
-                    <Thermometer size={14} color={isStandby ? '#6b7280' : '#10b981'} style={{marginRight: 4}} />
-                    <Text style={[styles.gridValue, { color: isStandby ? '#6b7280' : '#10b981' }]}>
+                    <Thermometer size={14} color={isStandby ? colors.muted : colors.green} style={{marginRight: 4}} />
+                    <Text style={[styles.gridValue, { color: isStandby ? colors.muted : colors.green }]}>
                       {disk.temp ? `${disk.temp} °C` : '*'}
                     </Text>
                   </View>
@@ -93,8 +97,8 @@ export default function StorageDetailsScreen({ navigation }) {
                 <View style={styles.gridItem}>
                   <Text style={styles.gridLabel}>S.M.A.R.T.</Text>
                   <View style={styles.statusRow}>
-                    {isSmartError ? <ThumbsDown size={14} color="#f59e0b" style={{marginRight: 4}} /> : <ThumbsUp size={14} color="#10b981" style={{marginRight: 4}} />}
-                    <Text style={[styles.gridValue, { color: isSmartError ? '#f59e0b' : '#10b981' }]}>
+                    {isSmartError ? <ThumbsDown size={14} color={colors.amber} style={{marginRight: 4}} /> : <ThumbsUp size={14} color={colors.green} style={{marginRight: 4}} />}
+                    <Text style={[styles.gridValue, { color: isSmartError ? colors.amber : colors.green }]}>
                       {isSmartError ? '错误' : '良好'}
                     </Text>
                   </View>
@@ -108,7 +112,7 @@ export default function StorageDetailsScreen({ navigation }) {
                   <Text style={styles.usageText}>{formatBytes(disk.used)} / {formatBytes(disk.total)}</Text>
                 </View>
                 <View style={styles.track}>
-                  <View style={[styles.bar, { width: `${disk.percentage}%`, backgroundColor: disk.percentage > 85 ? '#ef4444' : (isCache ? '#3b82f6' : '#10b981') }]} />
+                  <View style={[styles.bar, { width: `${disk.percentage}%`, backgroundColor: disk.percentage > 85 ? colors.red : (isCache ? colors.accent : colors.green) }]} />
                 </View>
               </View>
             </TouchableOpacity>
@@ -119,25 +123,25 @@ export default function StorageDetailsScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#111827' },
+const createStyles = (colors) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16, paddingBottom: 40 },
-  center: { flex: 1, backgroundColor: '#111827', justifyContent: 'center', alignItems: 'center' },
-  emptyText: { color: '#9ca3af', fontSize: 16 },
-  card: { backgroundColor: '#1f2937', borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#374151' },
-  cardError: { borderColor: '#ef4444', backgroundColor: '#3f1c1c' }, // 报错时卡片变红
+  center: { flex: 1, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center' },
+  emptyText: { color: colors.sub, fontSize: 16 },
+  card: { backgroundColor: colors.card, borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: colors.divider },
+  cardError: { borderColor: colors.red, backgroundColor: 'rgba(239, 68, 68, 0.10)' }, // 报错时卡片变红
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  diskName: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
-  deviceLabel: { color: '#6b7280', fontSize: 14 },
+  diskName: { color: colors.textStrong, fontSize: 18, fontWeight: 'bold' },
+  deviceLabel: { color: colors.muted, fontSize: 14 },
   gridRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 },
   gridItem: { flex: 1 },
-  gridLabel: { color: '#9ca3af', fontSize: 12, marginBottom: 4 },
+  gridLabel: { color: colors.sub, fontSize: 12, marginBottom: 4 },
   statusRow: { flexDirection: 'row', alignItems: 'center' },
   statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
-  gridValue: { color: '#ffffff', fontSize: 14, fontWeight: 'bold' },
+  gridValue: { color: colors.textStrong, fontSize: 14, fontWeight: 'bold' },
   usageContainer: { marginTop: 4 },
-  usageText: { color: '#9ca3af', fontSize: 12 },
-  track: { height: 8, backgroundColor: '#374151', borderRadius: 4, overflow: 'hidden' },
+  usageText: { color: colors.sub, fontSize: 12 },
+  track: { height: 8, backgroundColor: colors.input, borderRadius: 4, overflow: 'hidden' },
   bar: { height: '100%', borderRadius: 4 },
 });

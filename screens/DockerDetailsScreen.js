@@ -1,11 +1,14 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { StyleSheet, Text, View, ScrollView, Alert, ActivityIndicator, TouchableOpacity } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
-// 💡 引入了新的图标: Play(播放) 和 Power(电源)
 import { Cpu, Database, RotateCw, Play, Power } from 'lucide-react-native';
+import { useTheme } from '../ThemeContext';
 
 export default function DockerDetailsScreen() {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const [dockers, setDockers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [sortRule, setSortRule] = useState('name'); 
@@ -13,8 +16,8 @@ export default function DockerDetailsScreen() {
   const getAvatarColor = (name) => {
     let hash = 0;
     for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-    const colors = ['#f87171', '#fb923c', '#fbbf24', '#a3e635', '#34d399', '#2dd4bf', '#38bdf8', '#818cf8', '#a78bfa', '#e879f9', '#f43f5e'];
-    return colors[Math.abs(hash) % colors.length];
+    const palette = ['#f87171', '#fb923c', '#fbbf24', '#a3e635', '#34d399', '#2dd4bf', '#38bdf8', '#818cf8', '#a78bfa', '#e879f9', '#f43f5e'];
+    return palette[Math.abs(hash) % palette.length];
   };
 
   const fetchDockerData = async () => {
@@ -88,7 +91,7 @@ export default function DockerDetailsScreen() {
     return a.name.localeCompare(b.name); 
   });
 
-  if (loading && dockers.length === 0) return <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View>;
+  if (loading && dockers.length === 0) return <View style={styles.center}><ActivityIndicator size="large" color={colors.accent} /></View>;
 
   return (
     <View style={styles.container}>
@@ -111,25 +114,25 @@ export default function DockerDetailsScreen() {
                 <Text style={styles.nameText} numberOfLines={1}>{docker.name}</Text>
                 {docker.status === 'running' && (
                   <View style={styles.statsRow}>
-                    <View style={styles.statBadge}><Cpu size={12} color="#f59e0b" /><Text style={styles.statText}>{docker.cpu}</Text></View>
-                    <View style={styles.statBadge}><Database size={12} color="#10b981" /><Text style={styles.statText}>{shortMemory}</Text></View>
+                    <View style={styles.statBadge}><Cpu size={12} color={colors.amber} /><Text style={styles.statText}>{docker.cpu}</Text></View>
+                    <View style={styles.statBadge}><Database size={12} color={colors.green} /><Text style={styles.statText}>{shortMemory}</Text></View>
                   </View>
                 )}
               </View>
 
               <View style={styles.controlContainer}>
-                <View style={[styles.statusDot, { backgroundColor: docker.status === 'running' ? '#10b981' : '#ef4444' }]} />
+                <View style={[styles.statusDot, { backgroundColor: docker.status === 'running' ? colors.green : colors.red }]} />
                 <View style={styles.btnRow}>
                   {/* 💡 重启按钮 */}
                   {docker.status === 'running' && (
-                    <TouchableOpacity onPress={() => restartDocker(docker.name)} style={[styles.actionBtn, { backgroundColor: '#6366f1' }]}>
+                    <TouchableOpacity onPress={() => restartDocker(docker.name)} style={[styles.actionBtn, { backgroundColor: colors.purple }]}>
                       <RotateCw size={16} color="#ffffff" />
                     </TouchableOpacity>
                   )}
                   {/* 💡 启停按钮 (替代了 Switch) */}
                   <TouchableOpacity 
                     onPress={() => toggleDocker(docker.name, docker.status)} 
-                    style={[styles.actionBtn, { backgroundColor: docker.status === 'running' ? '#ef4444' : '#10b981' }]}
+                    style={[styles.actionBtn, { backgroundColor: docker.status === 'running' ? colors.red : colors.green }]}
                   >
                     {docker.status === 'running' ? <Power size={16} color="#ffffff" /> : <Play size={16} color="#ffffff" />}
                   </TouchableOpacity>
@@ -143,26 +146,25 @@ export default function DockerDetailsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#111827' },
-  sortBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#1f2937', borderBottomWidth: 1, borderBottomColor: '#374151' },
-  sortLabel: { color: '#9ca3af', marginRight: 12, fontSize: 14 },
-  sortBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, backgroundColor: '#374151', marginRight: 8 },
-  sortBtnActive: { backgroundColor: '#3b82f6' },
+const createStyles = (colors) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.bg },
+  sortBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.divider },
+  sortLabel: { color: colors.sub, marginRight: 12, fontSize: 14 },
+  sortBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, backgroundColor: colors.input, marginRight: 8 },
+  sortBtnActive: { backgroundColor: colors.accent },
   sortBtnText: { color: '#ffffff', fontSize: 12, fontWeight: 'bold' },
   content: { padding: 16, paddingBottom: 40 },
-  center: { flex: 1, backgroundColor: '#111827', justifyContent: 'center', alignItems: 'center' },
-  card: { flexDirection: 'row', backgroundColor: '#1f2937', borderRadius: 16, padding: 16, marginBottom: 12, alignItems: 'center' },
+  center: { flex: 1, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center' },
+  card: { flexDirection: 'row', backgroundColor: colors.card, borderRadius: 16, padding: 16, marginBottom: 12, alignItems: 'center' },
   avatar: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
   avatarText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
   infoContainer: { flex: 1, marginRight: 8, overflow: 'hidden' },
-  nameText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', marginBottom: 6 },
+  nameText: { color: colors.textStrong, fontSize: 16, fontWeight: 'bold', marginBottom: 6 },
   statsRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
-  statBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#374151', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, gap: 4 },
-  statText: { color: '#d1d5db', fontSize: 11, fontWeight: 'bold' },
+  statBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.input, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, gap: 4 },
+  statText: { color: colors.text, fontSize: 11, fontWeight: 'bold' },
   controlContainer: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 60 },
   statusDot: { width: 8, height: 8, borderRadius: 4, marginBottom: 10 },
   btnRow: { flexDirection: 'row', alignItems: 'center' },
-  // 💡 统一的正方形按钮样式
   actionBtn: { width: 34, height: 34, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
 });

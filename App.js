@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StatusBar, StyleSheet, Text, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -66,10 +66,15 @@ tabBarIcon: ({ color, size }) => {
   );
 }
 
-// 🚀 真正的 App 顶级入口
-export default function App() {
+// 💡 主题根组件：跟随主题渲染系统状态栏（解决浅色背景下状态栏仍是深色的割裂感）
+function ThemedRoot() {
+  const { colors } = useTheme();
   return (
-    <ThemeProvider>
+    <>
+      <StatusBar
+        barStyle={colors.mode === 'dark' ? 'light-content' : 'dark-content'}
+        backgroundColor={colors.bg}
+      />
       <NavigationContainer>
         <Stack.Navigator>
           {/* 第一层：底座（包含底部那 4 个按钮的页面） */}
@@ -82,6 +87,15 @@ export default function App() {
           {/* 第二层：全屏显示的详情页。它弹出时会完美覆盖掉底座的 Tab 栏！ */}
         </Stack.Navigator>
       </NavigationContainer>
+    </>
+  );
+}
+
+// 🚀 真正的 App 顶级入口
+export default function App() {
+  return (
+    <ThemeProvider>
+      <ThemedRoot />
     </ThemeProvider>
   );
 }
