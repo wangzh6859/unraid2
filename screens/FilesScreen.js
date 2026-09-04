@@ -143,21 +143,28 @@ export default function FilesScreen({ navigation }) {
 
       const parsedFiles = [];
       responses.forEach((res) => {
-        let href = res.href;
+        let href = typeof res.href === 'string' ? res.href : (res.href && res.href['#text']) || '';
         if (href.startsWith('http')) {
           const hMatch = href.match(/^https?:\/\/[^\/]+(.*)$/);
           href = hMatch ? hMatch[1] : href;
         }
         if (href === targetPath || href === targetPath + '/') return;
         const props = res.propstat?.prop || (Array.isArray(res.propstat) ? res.propstat[0].prop : {});
-        const isFolder = props.resourcetype && props.resourcetype.collection === '';
+        const rt = props.resourcetype;
+        // 兼容不同服务器对 <collection/> 的解析形式（'' 或 true 或空对象）
+        const isFolder = !!rt && (rt.collection === '' || rt.collection === true || (typeof rt === 'object' && rt.collection !== undefined));
         let displayName = props.displayname;
         if (!displayName) {
           const parts = href.split('/').filter(p => p !== '');
-          displayName = parts[parts.length - 1];
+          displayName = parts[parts.length - 1] || '未命名';
           try { displayName = decodeURIComponent(displayName); } catch (e) {}
         }
-        parsedFiles.push({ name: displayName, href, isFolder, size: props.getcontentlength || 0 });
+        // 记录最后修改时间（getlastmodified）用于详情展示
+        parsedFiles.push({
+          name: displayName, href, isFolder,
+          size: props.getcontentlength || 0,
+          mtime: props.getlastmodified || '',
+        });
       });
       parsedFiles.sort((a, b) => {
         if (a.isFolder === b.isFolder) return a.name.localeCompare(b.name);
@@ -165,7 +172,10 @@ export default function FilesScreen({ navigation }) {
       });
       setFileList(parsedFiles);
       setCurrentPath(targetPath);
-    } catch (error) { Alert.alert('错误', '读取目录失败'); } finally { setIsLoadingList(false); }
+    } catch (error) {
+      // 区分错误类型，给出更具体的提示
+      Alert.alert('读取目录失败', error.message || '无法读取该目录，请检查网络或目录权限。');
+    } finally { setIsLoadingList(false); }
   }, [davUrl, username, password]);
 
   useEffect(() => {
@@ -386,11 +396,38 @@ export default function FilesScreen({ navigation }) {
   };
 
   // 详情：底部操作栏「详情」，单选一个
+
+
+  // 统计文件夹内的条目数量（用于详情展示）
+  const countChildren = async (href) => {
+    try {
+      const response = await fetch(getDirectUrl(href), {
+        method: 'PROPFIND',
+        headers: { ...authHeaders(), 'Depth': '1', 'Content-Type': 'application/xml' },
+      });
+      const xmlText = await response.text();
+      const parser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true });
+      const result = parser.parse(xmlText);
+      let responses = result?.multistatus?.response;
+      if (!responses) return 0;
+      if (!Array.isArray(responses)) responses = [responses];
+      return responses.filter(r => (r.href !== href && r.href !== href + '/')).length;
+    } catch (e) { return 0; }
+  };
+
   const openDetail = () => {
     const items = fileList.filter(f => selected.has(f.href));
     if (items.length !== 1) { Alert.alert('提示', '详情操作仅支持单选一个文件/文件夹'); return; }
     exitMultiSelect();
-    setDetailItem(items[0]);
+    const target = items[0];
+    setDetailItem(target);
+    // 计算文件夹的下级数量
+    if (target.isFolder) {
+      setDetailInfo({ childCount: null, isCounting: true });
+      countChildren(target.href).then(c => setDetailInfo({ childCount: c, isCounting: false }));
+    } else {
+      setDetailInfo({ childCount: null, isCounting: false });
+    }
   };
 
   // 重命名（WebDAV MOVE 到同目录新名）
@@ -443,19 +480,20 @@ export default function FilesScreen({ navigation }) {
       if (!Array.isArray(responses)) responses = [responses];
       const folders = [];
       responses.forEach((res) => {
-        let href = res.href;
+        let href = typeof res.href === 'string' ? res.href : (res.href && res.href['#text']) || '';
         if (href.startsWith('http')) {
           const hMatch = href.match(/^https?:\/\/[^\/]+(.*)$/);
           href = hMatch ? hMatch[1] : href;
         }
         if (href === path || href === path + '/') return;
         const props = res.propstat?.prop || (Array.isArray(res.propstat) ? res.propstat[0].prop : {});
-        const isFolder = props.resourcetype && props.resourcetype.collection === '';
+        const rt = props.resourcetype;
+        const isFolder = !!rt && (rt.collection === '' || rt.collection === true || (typeof rt === 'object' && rt.collection !== undefined));
         if (!isFolder) return;
         let displayName = props.displayname;
         if (!displayName) {
           const parts = href.split('/').filter(p => p !== '');
-          displayName = parts[parts.length - 1];
+          displayName = parts[parts.length - 1] || '未命名';
           try { displayName = decodeURIComponent(displayName); } catch (e) {}
         }
         folders.push({ name: displayName, href });
@@ -463,7 +501,9 @@ export default function FilesScreen({ navigation }) {
       folders.sort((a, b) => a.name.localeCompare(b.name));
       setPickerFolders(folders);
       setPickerPath(path);
-    } catch (error) { Alert.alert('错误', '读取目录失败'); } finally { setPickerLoading(false); }
+    } catch (error) {
+      Alert.alert('读取目录失败', error.message || '无法读取该目录，请检查网络或目录权限。');
+    } finally { setPickerLoading(false); }
   };
   const pickerGoUp = () => {
     if (pickerPath === rootPath || pickerPath === rootPath + '/') return;
@@ -769,22 +809,31 @@ export default function FilesScreen({ navigation }) {
                 <Text style={styles.detailValue} numberOfLines={1}>{detailItem?.href}</Text>
               </View>
             </View>
-            <View style={styles.actionGrid}>
-              <TouchableOpacity style={styles.actionBtn} onPress={() => { setDetailItem(null); handleDownload(detailItem); }}>
-                <Download color={colors.accent} size={22} /><Text style={styles.actionBtnText}>下载</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionBtn} onPress={() => openRename(detailItem)}>
-                <Pencil color={colors.amber} size={22} /><Text style={styles.actionBtnText}>重命名</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionBtn} onPress={() => openPicker('copy', [detailItem])}>
-                <Copy color={colors.accent} size={22} /><Text style={styles.actionBtnText}>复制</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionBtn} onPress={() => openPicker('move', [detailItem])}>
-                <MoveRight color={colors.accent} size={22} /><Text style={styles.actionBtnText}>移动</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.actionBtn, styles.actionBtnDanger]} onPress={() => handleDelete(detailItem)}>
-                <Trash2 color={colors.red} size={22} /><Text style={[styles.actionBtnText, { color: colors.red }]}>删除</Text>
-              </TouchableOpacity>
+            <View style={styles.detailRows}>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>类型</Text>
+                <Text style={styles.detailValue}>{detailItem?.isFolder ? '文件夹' : '文件'}</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>大小</Text>
+                <Text style={styles.detailValue}>{detailItem?.isFolder ? '-' : formatBytes(detailItem?.size)}</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>下级数量</Text>
+                <Text style={styles.detailValue}>
+                  {detailItem?.isFolder
+                    ? (detailInfo?.isCounting ? '统计中…' : (detailInfo?.childCount ?? 0) + ' 项')
+                    : '-'}
+                </Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>修改时间</Text>
+                <Text style={styles.detailValue}>{detailItem?.mtime || '未知'}</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>路径</Text>
+                <Text style={styles.detailValue} numberOfLines={1}>{detailItem?.href}</Text>
+              </View>
             </View>
             <TouchableOpacity style={styles.actionSheetCancel} onPress={() => setDetailItem(null)}>
               <Text style={styles.actionSheetCancelText}>关闭</Text>
