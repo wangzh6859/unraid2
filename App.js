@@ -14,17 +14,21 @@ import StorageDetailsScreen from './screens/StorageDetailsScreen';
 import SmartDetailsScreen from './screens/SmartDetailsScreen';
 import FilesScreen from './screens/FilesScreen';
 
+// 💡 全局主题上下文
+import { ThemeProvider, useTheme } from './ThemeContext';
+
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-// 💡 首页专属的内部堆栈
+// 💡 首页专属的内部堆栈（跟随主题）
 function HomeStack() {
+  const { colors } = useTheme();
   return (
     <Stack.Navigator
       screenOptions={{
-        headerStyle: { backgroundColor: '#1f2937' },
-        headerTintColor: '#ffffff',
-        contentStyle: { backgroundColor: '#111827' }
+        headerStyle: { backgroundColor: colors.bar },
+        headerTintColor: colors.textStrong,
+        contentStyle: { backgroundColor: colors.bg }
       }}
     >
       <Stack.Screen name="仪表盘" component={DashboardScreen} options={{ headerShown: false }} />
@@ -36,8 +40,9 @@ function HomeStack() {
   );
 }
 
-// 💡 将原来的 Tab 导航器打包成一个独立的“底座组件”
+// 💡 将原来的 Tab 导航器打包成一个独立的“底座组件”（跟随主题）
 function MainTabs() {
+  const { colors } = useTheme();
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -46,12 +51,12 @@ tabBarIcon: ({ color, size }) => {
            if (route.name === '文件') return <Folder color={color} size={size} />;
            if (route.name === '设置') return <Settings color={color} size={size} />;
          },
-        tabBarActiveTintColor: '#60a5fa',
-        tabBarInactiveTintColor: '#9ca3af',
-        headerStyle: { backgroundColor: '#1f2937' },
-        headerTintColor: '#ffffff',
-        tabBarStyle: { backgroundColor: '#1f2937', borderTopColor: '#374151' },
-        sceneContainerStyle: { backgroundColor: '#111827' },
+        tabBarActiveTintColor: colors.accent,
+        tabBarInactiveTintColor: colors.sub,
+        headerStyle: { backgroundColor: colors.bar },
+        headerTintColor: colors.textStrong,
+        tabBarStyle: { backgroundColor: colors.bar, borderTopColor: colors.divider },
+        sceneContainerStyle: { backgroundColor: colors.bg },
       })}
     >
 <Tab.Screen name="首页" component={HomeStack} options={{ headerShown: false }} />
@@ -64,18 +69,20 @@ tabBarIcon: ({ color, size }) => {
 // 🚀 真正的 App 顶级入口
 export default function App() {
   return (
-    <NavigationContainer>
-      <Stack.Navigator>
-        {/* 第一层：底座（包含底部那 4 个按钮的页面） */}
-        <Stack.Screen 
-          name="MainTabs" 
-          component={MainTabs} 
-          options={{ headerShown: false }} 
-        />
-        
-        {/* 第二层：全屏显示的详情页。它弹出时会完美覆盖掉底座的 Tab 栏！ */}
-      </Stack.Navigator>
-    </NavigationContainer>
+    <ThemeProvider>
+      <NavigationContainer>
+        <Stack.Navigator>
+          {/* 第一层：底座（包含底部那 4 个按钮的页面） */}
+          <Stack.Screen
+            name="MainTabs"
+            component={MainTabs}
+            options={{ headerShown: false }}
+          />
+
+          {/* 第二层：全屏显示的详情页。它弹出时会完美覆盖掉底座的 Tab 栏！ */}
+        </Stack.Navigator>
+      </NavigationContainer>
+    </ThemeProvider>
   );
 }
 
