@@ -4,7 +4,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants'; // 💡 引入动态变量库，用于获取真实版本号
-import { X, HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server, LogOut, Moon, Sun, FolderDown, RefreshCw, Trash2 } from 'lucide-react-native';
+import { X, HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server, LogOut, Moon, Sun, FolderDown, RefreshCw, Trash2, Key, User } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import {
   getDownloadDir, setDownloadDir, resetDownloadDir,

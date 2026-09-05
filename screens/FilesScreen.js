@@ -52,6 +52,8 @@ export default function FilesScreen({ navigation }) {
 
   // 详情弹窗目标（复用原 actionItem 状态）
   const [detailItem, setDetailItem] = useState(null);
+  // 详情弹窗的附加信息（文件夹下级数量统计）
+  const [detailInfo, setDetailInfo] = useState({ childCount: null, isCounting: false });
 
   // 重命名
   const [renameItem, setRenameItem] = useState(null);
