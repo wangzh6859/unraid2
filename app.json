@@ -18,19 +18,6 @@
     "android": {
       "package": "com.yourname.unraidmanager",
       "versionCode": 1,
-      "queries": {
-        "package": [
-          "com.mxtech.videoplayer.ad",
-          "com.mxtech.videoplayer.pro",
-          "org.videolan.vlc"
-        ],
-        "intent": [
-          {
-            "action": "android.intent.action.VIEW",
-            "data": { "mimeType": "video/*" }
-          }
-        ]
-      },
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#111827"
