@@ -8,6 +8,7 @@ coverage/
 *.apk
 *.aab
 keystore_b64.txt
+keystore_base64.txt
 release.keystore
 *.jks
 *.keystore
