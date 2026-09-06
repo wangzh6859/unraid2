@@ -10,10 +10,9 @@ import base64 from 'base-64';
 import { XMLParser } from 'fast-xml-parser';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
-import { Video } from 'expo-av';
 import { useTheme } from '../ThemeContext';
-import { getDownloadDir, ensureCacheDir, enforceCacheLimit } from '../utils/cacheManager';
-import { getFileKind } from '../utils/fileTypes';
+import { getDownloadDir } from '../utils/cacheManager';
+import FilePreviewer from '../components/FilePreviewer';
 
 export default function FilesScreen({ navigation }) {
   const { colors } = useTheme();
@@ -36,14 +35,8 @@ export default function FilesScreen({ navigation }) {
   const [isTransferVisible, setIsTransferVisible] = useState(false);
   const [transfers, setTransfers] = useState([]);
 
-  // 预览控件状态
+  // 当前预览文件（传给 FilePreviewer，null 表示关闭）
   const [previewItem, setPreviewItem] = useState(null);
-  // 文本预览状态（即时阅读器）
-  const [textState, setTextState] = useState(null);
-  // 媒体播放状态（即时阅读器：视频 / 音频）
-  const [mediaState, setMediaState] = useState({ kind: null, loading: false, uri: null });
-  // 图片解码失败标记（某些格式当前设备无法解码时给出提示）
-  const [imageFailed, setImageFailed] = useState(false);
 
   // 多选模式
   const [multiSelect, setMultiSelect] = useState(false);
@@ -235,70 +228,11 @@ export default function FilesScreen({ navigation }) {
     else toggleSelect(item);
   };
 
-  // 点击：文件夹进入；文件按类型即时预览（text/image/video/audio，其余走下载引导）
+  // 点击：文件夹进入；文件交给 FilePreviewer 按类型即时预览
   const handleFileClick = (item) => {
     if (multiSelect) { toggleSelect(item); return; }
     if (item.isFolder) { fetchDirectory(item.href); return; }
-    const kind = getFileKind(item.name);
-    if (kind === 'video' || kind === 'audio') { loadMediaPreview(item, kind); return; }
-    if (kind === 'text') { loadTextPreview(item); return; }
-    setMediaState({ kind: null, loading: false, uri: null });
-    setTextState(null);
-    setImageFailed(false);
-    setPreviewItem(item); // image / other 在此渲染或引导下载
-  };
-
-  // 文本即时阅读：下载到缓存读取内容（可编辑）
-  const loadTextPreview = async (item) => {
-    setTextState({ loading: true, content: '', saving: false });
-    setMediaState({ kind: null, loading: false, uri: null });
-    setImageFailed(false);
     setPreviewItem(item);
-    try {
-      const dir = await ensureCacheDir();
-      const localUri = dir + encodeURIComponent(item.name);
-      const res = await FileSystem.downloadAsync(getDirectUrl(item.href), localUri, { headers: authHeaders() });
-      const content = await FileSystem.readAsStringAsync(res.uri);
-      await enforceCacheLimit();
-      setTextState({ loading: false, content, saving: false });
-    } catch (e) {
-      setTextState({ loading: false, content: '⚠️ 无法读取文本内容：' + e.message, saving: false });
-    }
-  };
-
-  // 保存编辑后的文本回服务器（WebDAV PUT）
-  const saveTextPreview = async () => {
-    if (!previewItem || !textState) return;
-    setTextState(prev => (prev ? { ...prev, saving: true } : prev));
-    try {
-      const res = await fetch(getDirectUrl(previewItem.href), {
-        method: 'PUT',
-        headers: { ...authHeaders(), 'Content-Type': 'text/plain' },
-        body: textState.content,
-      });
-      if (res.status === 201 || res.status === 204 || res.status === 200) {
-        Alert.alert('保存成功', '文件已写回服务器');
-      } else { Alert.alert('保存失败', `HTTP ${res.status}`); }
-    } catch (e) { Alert.alert('保存失败', e.message); }
-    finally { setTextState(prev => (prev ? { ...prev, saving: false } : prev)); }
-  };
-
-  // 媒体即时预览（视频 / 音频）：下载到缓存后用系统原生播放器播放
-  const loadMediaPreview = async (item, kind) => {
-    setMediaState({ kind, loading: true, uri: null });
-    setTextState(null);
-    setImageFailed(false);
-    setPreviewItem(item);
-    try {
-      const dir = await ensureCacheDir();
-      const localUri = dir + encodeURIComponent(item.name);
-      const res = await FileSystem.downloadAsync(getDirectUrl(item.href), localUri, { headers: authHeaders() });
-      await enforceCacheLimit();
-      setMediaState({ kind, loading: false, uri: res.uri });
-    } catch (e) {
-      setMediaState({ kind, loading: false, uri: null });
-      Alert.alert('预览失败', `${kind === 'audio' ? '音频' : '视频'}加载失败，请先下载后查看。`);
-    }
   };
 
   const disconnect = async () => {
@@ -717,88 +651,14 @@ export default function FilesScreen({ navigation }) {
         </View>
       )}
 
-      {/* 全屏沉浸式预览控件（即时阅读器） */}
-      <Modal visible={!!previewItem} transparent={true} animationType="fade" onRequestClose={() => setPreviewItem(null)}>
-        <View style={styles.previewContainer}>
-          <View style={styles.previewHeader}>
-            <TouchableOpacity onPress={() => setPreviewItem(null)} style={styles.previewCloseBtn}>
-              <X color="#ffffff" size={24} />
-            </TouchableOpacity>
-            <Text style={styles.previewTitle} numberOfLines={1}>{previewItem?.name}</Text>
-            <TouchableOpacity onPress={() => handleDownload(previewItem)} style={styles.previewDownloadBtn}>
-              <DownloadCloud color="#3b82f6" size={24} />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.previewContent}>
-            {previewItem && mediaState.uri ? (
-              <Video
-                key={mediaState.uri}
-                source={{ uri: mediaState.uri }}
-                style={styles.previewVideo}
-                useNativeControls
-                resizeMode="contain"
-                shouldPlay
-                onError={() => {
-                  Alert.alert('无法播放', '当前设备不支持解码该媒体格式，请下载后用本地播放器打开。');
-                  setMediaState({ kind: null, loading: false, uri: null });
-                }}
-              />
-            ) : previewItem && mediaState.loading ? (
-              <View style={styles.previewFallback}>
-                <ActivityIndicator size="large" color={colors.accent} />
-                <Text style={styles.previewFallbackName}>{mediaState.kind === 'audio' ? '正在加载音频…' : '正在加载视频…'}</Text>
-              </View>
-            ) : previewItem && getFileKind(previewItem.name) === 'image' && !imageFailed ? (
-              <Image
-                source={{ uri: getDirectUrl(previewItem.href), headers: authHeaders() }}
-                style={styles.previewImage}
-                resizeMode="contain"
-                onError={() => setImageFailed(true)}
-              />
-            ) : previewItem && textState ? (
-              textState.loading ? (
-                <View style={styles.previewFallback}>
-                  <ActivityIndicator size="large" color={colors.accent} />
-                  <Text style={styles.previewFallbackName}>正在加载文本…</Text>
-                </View>
-              ) : (
-                <View style={styles.textEditorWrap}>
-                  <ScrollView style={styles.textScroll} keyboardShouldPersistTaps="handled">
-                    <TextInput
-                      style={styles.textEditor}
-                      multiline
-                      value={textState.content}
-                      onChangeText={(t) => setTextState(prev => (prev ? { ...prev, content: t } : prev))}
-                      editable={!textState.saving}
-                      textAlignVertical="top"
-                      placeholder="文本内容"
-                      placeholderTextColor={colors.muted}
-                    />
-                  </ScrollView>
-                  <TouchableOpacity style={[styles.previewBigDownloadBtn, { backgroundColor: colors.accent, marginTop: 12 }]} onPress={saveTextPreview}>
-                    <Save color="#ffffff" size={20} />
-                    <Text style={styles.previewBigDownloadText}>{textState.saving ? '保存中…' : '保存到服务器'}</Text>
-                  </TouchableOpacity>
-                </View>
-              )
-            ) : (
-              <View style={styles.previewFallback}>
-                <File color="#4b5563" size={80} style={{ marginBottom: 20 }} />
-                <Text style={styles.previewFallbackName}>{previewItem?.name}</Text>
-                <Text style={styles.previewFallbackSize}>{formatBytes(previewItem?.size)}</Text>
-                <Text style={styles.previewFallbackHint}>
-                  {imageFailed ? '图片解码失败：当前设备不支持该图片格式，请下载后查看。' : '该格式暂不支持在线预览/播放，请下载后用相应应用打开。'}
-                </Text>
-                <TouchableOpacity style={styles.previewBigDownloadBtn} onPress={() => handleDownload(previewItem)}>
-                  <Download color="#ffffff" size={20} />
-                  <Text style={styles.previewBigDownloadText}>下载到手机查看</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-        </View>
-      </Modal>
+      {/* 全屏沉浸式文件预览器（渲染与加载逻辑已内聚到 FilePreviewer） */}
+      <FilePreviewer
+        item={previewItem}
+        getDirectUrl={getDirectUrl}
+        authHeaders={authHeaders}
+        onClose={() => setPreviewItem(null)}
+        onDownload={handleDownload}
+      />
 
       {/* 右上角下拉菜单 */}
       <Modal visible={isMenuVisible} transparent={true} animationType="fade" onRequestClose={() => setIsMenuVisible(false)}>
@@ -1011,25 +871,7 @@ const createStyles = (colors) => StyleSheet.create({
   bottomBarBtn: { alignItems: 'center', paddingVertical: 6, paddingHorizontal: 12 },
   bottomBarBtnText: { color: colors.text, fontSize: 12, marginTop: 4, fontWeight: 'bold' },
 
-  // 预览控件
-  previewContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)' },
-  previewHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: Platform.OS === 'ios' ? 60 : 20, paddingHorizontal: 16, paddingBottom: 16, backgroundColor: 'rgba(0,0,0,0.5)' },
-  previewCloseBtn: { padding: 8 },
-  previewDownloadBtn: { padding: 8 },
-  previewTitle: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', flex: 1, textAlign: 'center', paddingHorizontal: 10 },
-  previewContent: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  previewVideo: { width: '100%', height: '100%' },
-  previewImage: { width: '100%', height: '100%' },
-  previewFallback: { alignItems: 'center', padding: 40, width: '100%' },
-  previewFallbackName: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 },
-  previewFallbackSize: { color: '#9ca3af', fontSize: 14, marginBottom: 12 },
-  previewFallbackHint: { color: '#9ca3af', fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 24 },
-  previewBigDownloadBtn: { flexDirection: 'row', backgroundColor: '#3b82f6', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 30, alignItems: 'center' },
-  previewBigDownloadText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', marginLeft: 8 },
-  textEditorWrap: { flex: 1, width: '100%', padding: 16 },
-  textScroll: { flex: 1 },
-  textEditor: { color: colors.text, fontSize: 14, lineHeight: 22, minHeight: 300, textAlignVertical: 'top' },
-
+  // 预览相关样式已迁至 components/FilePreviewer.js
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   dropdownMenu: { position: 'absolute', top: Platform.OS === 'ios' ? 100 : 60, right: 16, backgroundColor: colors.card, borderRadius: 12, padding: 8, width: 200, elevation: 5 },
   menuItem: { flexDirection: 'row', alignItems: 'center', padding: 12 },
