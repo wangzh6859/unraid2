@@ -22,6 +22,11 @@ import { X, DownloadCloud, Download, File, Save } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import { getFileKind } from '../utils/fileTypes';
 import { ensureCacheDir, enforceCacheLimit, formatBytes } from '../utils/cacheManager';
+import DocxViewer from './previewers/DocxViewer';
+import XlsxViewer from './previewers/XlsxViewer';
+import EpubViewer from './previewers/EpubViewer';
+import ArchiveViewer from './previewers/ArchiveViewer';
+import PdfViewer from './previewers/PdfViewer';
 
 export default function FilePreviewer({ item, getDirectUrl, authHeaders, onClose, onDownload }) {
   const { colors } = useTheme();
@@ -106,6 +111,16 @@ export default function FilePreviewer({ item, getDirectUrl, authHeaders, onClose
   // 媒体就绪前显示加载中（含 effect 尚未触发的首帧）；error 后走 fallback 引导下载
   const mediaLoading = isMedia && !mediaState.uri && !mediaState.error;
 
+  // 富文档渲染器注册表（新增格式在此登记即可）
+  const RICH = {
+    docx: DocxViewer,
+    sheet: XlsxViewer,
+    ebook: EpubViewer,
+    archive: ArchiveViewer,
+    pdf: PdfViewer,
+  };
+  const RichViewer = RICH[kind];
+
   // fallback 原因文案（other / 图片解码失败 / 媒体解码失败 / 加载失败）
   let fallbackHint = '该格式暂不支持在线预览/播放，请下载后用相应应用打开。';
   if (imageFailed) fallbackHint = '图片解码失败：当前设备不支持该图片格式，请下载后查看。';
@@ -178,6 +193,12 @@ export default function FilePreviewer({ item, getDirectUrl, authHeaders, onClose
         </View>
       );
     }
+  } else if (item && RichViewer) {
+    content = (
+      <View style={styles.richWrap}>
+        <RichViewer item={item} getDirectUrl={getDirectUrl} authHeaders={authHeaders} onDownload={onDownload} />
+      </View>
+    );
   } else if (item && kind === 'image' && !imageFailed) {
     content = (
       <Image
@@ -218,6 +239,7 @@ const createStyles = (colors) => StyleSheet.create({
   previewDownloadBtn: { padding: 8 },
   previewTitle: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', flex: 1, textAlign: 'center', paddingHorizontal: 10 },
   previewContent: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  richWrap: { flex: 1, width: '100%' },
   previewVideo: { width: '100%', height: '100%' },
   previewImage: { width: '100%', height: '100%' },
   previewFallback: { alignItems: 'center', padding: 40, width: '100%' },
