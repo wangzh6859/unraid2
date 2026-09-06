@@ -13,10 +13,7 @@ import * as FileSystem from 'expo-file-system';
 import { Video } from 'expo-av';
 import { useTheme } from '../ThemeContext';
 import { getDownloadDir, ensureCacheDir, enforceCacheLimit } from '../utils/cacheManager';
-
-const isImageFile = (name) => /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(name);
-const isVideoFile = (name) => /\.(mp4|mkv|webm|mov|avi|3gp|flv)$/i.test(name);
-const isTextFile = (name) => /\.(txt|md|log|json|xml|html|htm|css|js|jsx|ts|tsx|py|sh|c|h|cpp|java|go|rb|yml|yaml|ini|conf|cfg|nfo)$/i.test(name);
+import { getFileKind } from '../utils/fileTypes';
 
 export default function FilesScreen({ navigation }) {
   const { colors } = useTheme();
@@ -43,8 +40,10 @@ export default function FilesScreen({ navigation }) {
   const [previewItem, setPreviewItem] = useState(null);
   // 文本预览状态（即时阅读器）
   const [textState, setTextState] = useState(null);
-  // 视频预览状态（即时阅读器）
-  const [videoState, setVideoState] = useState({ loading: false, uri: null });
+  // 媒体播放状态（即时阅读器：视频 / 音频）
+  const [mediaState, setMediaState] = useState({ kind: null, loading: false, uri: null });
+  // 图片解码失败标记（某些格式当前设备无法解码时给出提示）
+  const [imageFailed, setImageFailed] = useState(false);
 
   // 多选模式
   const [multiSelect, setMultiSelect] = useState(false);
@@ -236,21 +235,24 @@ export default function FilesScreen({ navigation }) {
     else toggleSelect(item);
   };
 
-  // 点击：文件夹进入；文件按类型即时预览
+  // 点击：文件夹进入；文件按类型即时预览（text/image/video/audio，其余走下载引导）
   const handleFileClick = (item) => {
     if (multiSelect) { toggleSelect(item); return; }
     if (item.isFolder) { fetchDirectory(item.href); return; }
-    if (isVideoFile(item.name)) { loadVideoPreview(item); return; }
-    if (isTextFile(item.name)) { loadTextPreview(item); return; }
-    setVideoState({ loading: false, uri: null });
+    const kind = getFileKind(item.name);
+    if (kind === 'video' || kind === 'audio') { loadMediaPreview(item, kind); return; }
+    if (kind === 'text') { loadTextPreview(item); return; }
+    setMediaState({ kind: null, loading: false, uri: null });
     setTextState(null);
-    setPreviewItem(item);
+    setImageFailed(false);
+    setPreviewItem(item); // image / other 在此渲染或引导下载
   };
 
   // 文本即时阅读：下载到缓存读取内容（可编辑）
   const loadTextPreview = async (item) => {
     setTextState({ loading: true, content: '', saving: false });
-    setVideoState({ loading: false, uri: null });
+    setMediaState({ kind: null, loading: false, uri: null });
+    setImageFailed(false);
     setPreviewItem(item);
     try {
       const dir = await ensureCacheDir();
@@ -281,20 +283,21 @@ export default function FilesScreen({ navigation }) {
     finally { setTextState(prev => (prev ? { ...prev, saving: false } : prev)); }
   };
 
-  // 视频即时预览：下载到缓存后用播放器播放
-  const loadVideoPreview = async (item) => {
-    setVideoState({ loading: true, uri: null });
+  // 媒体即时预览（视频 / 音频）：下载到缓存后用系统原生播放器播放
+  const loadMediaPreview = async (item, kind) => {
+    setMediaState({ kind, loading: true, uri: null });
     setTextState(null);
+    setImageFailed(false);
     setPreviewItem(item);
     try {
       const dir = await ensureCacheDir();
       const localUri = dir + encodeURIComponent(item.name);
       const res = await FileSystem.downloadAsync(getDirectUrl(item.href), localUri, { headers: authHeaders() });
       await enforceCacheLimit();
-      setVideoState({ loading: false, uri: res.uri });
+      setMediaState({ kind, loading: false, uri: res.uri });
     } catch (e) {
-      setVideoState({ loading: false, uri: null });
-      Alert.alert('预览失败', '视频加载失败，请先下载后查看。');
+      setMediaState({ kind, loading: false, uri: null });
+      Alert.alert('预览失败', `${kind === 'audio' ? '音频' : '视频'}加载失败，请先下载后查看。`);
     }
   };
 
@@ -728,15 +731,31 @@ export default function FilesScreen({ navigation }) {
           </View>
 
           <View style={styles.previewContent}>
-            {previewItem && videoState.uri ? (
-              <Video source={{ uri: videoState.uri }} style={styles.previewVideo} useNativeControls resizeMode="contain" shouldPlay />
-            ) : previewItem && videoState.loading ? (
+            {previewItem && mediaState.uri ? (
+              <Video
+                key={mediaState.uri}
+                source={{ uri: mediaState.uri }}
+                style={styles.previewVideo}
+                useNativeControls
+                resizeMode="contain"
+                shouldPlay
+                onError={() => {
+                  Alert.alert('无法播放', '当前设备不支持解码该媒体格式，请下载后用本地播放器打开。');
+                  setMediaState({ kind: null, loading: false, uri: null });
+                }}
+              />
+            ) : previewItem && mediaState.loading ? (
               <View style={styles.previewFallback}>
                 <ActivityIndicator size="large" color={colors.accent} />
-                <Text style={styles.previewFallbackName}>正在加载视频…</Text>
+                <Text style={styles.previewFallbackName}>{mediaState.kind === 'audio' ? '正在加载音频…' : '正在加载视频…'}</Text>
               </View>
-            ) : previewItem && isImageFile(previewItem.name) ? (
-              <Image source={{ uri: getDirectUrl(previewItem.href), headers: authHeaders() }} style={styles.previewImage} resizeMode="contain" />
+            ) : previewItem && getFileKind(previewItem.name) === 'image' && !imageFailed ? (
+              <Image
+                source={{ uri: getDirectUrl(previewItem.href), headers: authHeaders() }}
+                style={styles.previewImage}
+                resizeMode="contain"
+                onError={() => setImageFailed(true)}
+              />
             ) : previewItem && textState ? (
               textState.loading ? (
                 <View style={styles.previewFallback}>
@@ -768,6 +787,9 @@ export default function FilesScreen({ navigation }) {
                 <File color="#4b5563" size={80} style={{ marginBottom: 20 }} />
                 <Text style={styles.previewFallbackName}>{previewItem?.name}</Text>
                 <Text style={styles.previewFallbackSize}>{formatBytes(previewItem?.size)}</Text>
+                <Text style={styles.previewFallbackHint}>
+                  {imageFailed ? '图片解码失败：当前设备不支持该图片格式，请下载后查看。' : '该格式暂不支持在线预览/播放，请下载后用相应应用打开。'}
+                </Text>
                 <TouchableOpacity style={styles.previewBigDownloadBtn} onPress={() => handleDownload(previewItem)}>
                   <Download color="#ffffff" size={20} />
                   <Text style={styles.previewBigDownloadText}>下载到手机查看</Text>
@@ -1000,7 +1022,8 @@ const createStyles = (colors) => StyleSheet.create({
   previewImage: { width: '100%', height: '100%' },
   previewFallback: { alignItems: 'center', padding: 40, width: '100%' },
   previewFallbackName: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 },
-  previewFallbackSize: { color: '#9ca3af', fontSize: 14, marginBottom: 40 },
+  previewFallbackSize: { color: '#9ca3af', fontSize: 14, marginBottom: 12 },
+  previewFallbackHint: { color: '#9ca3af', fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 24 },
   previewBigDownloadBtn: { flexDirection: 'row', backgroundColor: '#3b82f6', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 30, alignItems: 'center' },
   previewBigDownloadText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', marginLeft: 8 },
   textEditorWrap: { flex: 1, width: '100%', padding: 16 },
