@@ -137,7 +137,9 @@ export default function FilesScreen({ navigation }) {
         headers: { ...authHeaders(), 'Depth': '1', 'Content-Type': 'application/xml' },
       });
       const xmlText = await response.text();
-      const parser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true });
+      // parseTagValue:false —— 防止纯数字/布尔名称(如 "2024"、"true")被解析成 number/boolean，
+      // 导致后续 name.localeCompare 崩溃(Hermes: undefined is not a function)
+      const parser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true, parseTagValue: false });
       const result = parser.parse(xmlText);
       let responses = result?.multistatus?.response;
       if (!responses) { setFileList([]); setCurrentPath(targetPath); return; }
@@ -155,28 +157,33 @@ export default function FilesScreen({ navigation }) {
         const rt = props.resourcetype;
         // 兼容不同服务器对 <collection/> 的解析形式（'' 或 true 或空对象）
         const isFolder = !!rt && (rt.collection === '' || rt.collection === true || (typeof rt === 'object' && rt.collection !== undefined));
-        let displayName = props.displayname;
+        // displayname 可能缺失或解析为对象({#text})，统一收敛为字符串
+        let displayName = typeof props.displayname === 'string' ? props.displayname
+          : (props.displayname && props.displayname['#text']) || '';
         if (!displayName) {
           const parts = href.split('/').filter(p => p !== '');
           displayName = parts[parts.length - 1] || '未命名';
           try { displayName = decodeURIComponent(displayName); } catch (e) {}
         }
+        const name = typeof displayName === 'string' ? displayName : String(displayName);
         // 记录最后修改时间（getlastmodified）用于详情展示
         parsedFiles.push({
-          name: displayName, href, isFolder,
+          name, href, isFolder,
           size: props.getcontentlength || 0,
           mtime: props.getlastmodified || '',
         });
       });
       parsedFiles.sort((a, b) => {
-        if (a.isFolder === b.isFolder) return a.name.localeCompare(b.name);
+        if (a.isFolder === b.isFolder) return String(a.name).localeCompare(String(b.name));
         return a.isFolder ? -1 : 1;
       });
       setFileList(parsedFiles);
       setCurrentPath(targetPath);
     } catch (error) {
       // 区分错误类型，给出更具体的提示
-      Alert.alert('读取目录失败', error.message || '无法读取该目录，请检查网络或目录权限。');
+      console.error('[FilesScreen] 读取目录失败 =>', targetPath, '|', error && error.name, error && error.message);
+      if (error && error.stack) console.error('[FilesScreen] 错误堆栈:', error.stack);
+      Alert.alert('读取目录失败', `${error ? error.name + ': ' + error.message : '未知错误'}\n(以上为调试信息，请截图反馈)`);
     } finally { setIsLoadingList(false); }
   }, [davUrl, username, password]);
 
@@ -475,7 +482,8 @@ export default function FilesScreen({ navigation }) {
         headers: { ...authHeaders(), 'Depth': '1', 'Content-Type': 'application/xml' },
       });
       const xmlText = await response.text();
-      const parser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true });
+      // parseTagValue:false —— 防止纯数字/布尔名称被解析成 number/boolean 导致 localeCompare 崩溃
+      const parser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true, parseTagValue: false });
       const result = parser.parse(xmlText);
       let responses = result?.multistatus?.response;
       if (!responses) { setPickerFolders([]); setPickerPath(path); return; }
@@ -492,19 +500,23 @@ export default function FilesScreen({ navigation }) {
         const rt = props.resourcetype;
         const isFolder = !!rt && (rt.collection === '' || rt.collection === true || (typeof rt === 'object' && rt.collection !== undefined));
         if (!isFolder) return;
-        let displayName = props.displayname;
+        // displayname 可能缺失或解析为对象({#text})，统一收敛为字符串
+        let displayName = typeof props.displayname === 'string' ? props.displayname
+          : (props.displayname && props.displayname['#text']) || '';
         if (!displayName) {
           const parts = href.split('/').filter(p => p !== '');
           displayName = parts[parts.length - 1] || '未命名';
           try { displayName = decodeURIComponent(displayName); } catch (e) {}
         }
-        folders.push({ name: displayName, href });
+        folders.push({ name: typeof displayName === 'string' ? displayName : String(displayName), href });
       });
-      folders.sort((a, b) => a.name.localeCompare(b.name));
+      folders.sort((a, b) => String(a.name).localeCompare(String(b.name)));
       setPickerFolders(folders);
       setPickerPath(path);
     } catch (error) {
-      Alert.alert('读取目录失败', error.message || '无法读取该目录，请检查网络或目录权限。');
+      console.error('[FilesScreen] 读取目标目录失败 =>', path, '|', error && error.name, error && error.message);
+      if (error && error.stack) console.error('[FilesScreen] 错误堆栈:', error.stack);
+      Alert.alert('读取目录失败', `${error ? error.name + ': ' + error.message : '未知错误'}\n(以上为调试信息，请截图反馈)`);
     } finally { setPickerLoading(false); }
   };
   const pickerGoUp = () => {
