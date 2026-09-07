@@ -27,9 +27,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-// Suppress error display and buffer output to ensure clean JSON responses
-error_reporting(0);
+// Set error reporting and buffer output to ensure clean JSON responses
+error_reporting(E_ALL);
 @ini_set('display_errors', '0');
+
+// Diagnostic logger for file transfers and critical operations
+function log_upload_debug($msg) {
+    $logFile = '/tmp/unraid_upload_debug.log';
+    $time = date('Y-m-d H:i:s');
+    @file_put_contents($logFile, "[{$time}] {$msg}\n", FILE_APPEND);
+}
+
+// Comprehensive shutdown handler: if script terminates prematurely or with fatal error, ALWAYS return JSON
+register_shutdown_function(function() {
+    $err = error_get_last();
+    if ($err !== null && in_array($err['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR])) {
+        while (ob_get_level() > 0) {
+            @ob_end_clean();
+        }
+        if (!headers_sent()) {
+            http_response_code(500);
+            header('Content-Type: application/json; charset=utf-8');
+        }
+        log_upload_debug("FATAL ERROR: " . $err['message'] . " in " . basename($err['file']) . ":" . $err['line']);
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'PHP Fatal Error: ' . $err['message'] . ' in ' . basename($err['file']) . ':' . $err['line']
+        ], JSON_UNESCAPED_UNICODE);
+        @flush();
+        exit;
+    }
+
+    // Guard against silent empty termination
+    if (ob_get_length() === 0 && !headers_sent()) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'PHP script terminated unexpectedly with empty output'
+        ], JSON_UNESCAPED_UNICODE);
+        @flush();
+    }
+});
+
 ob_start();
 
 // Runtime performance and upload settings
@@ -251,11 +290,44 @@ switch ($action) {
 // -------------------------------------------------------------
 function json_output($data, $code = 200) {
     while (ob_get_level() > 0) {
-        ob_end_clean();
+        @ob_end_clean();
     }
-    http_response_code($code);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode($data, JSON_UNESCAPED_UNICODE);
+    if (!headers_sent()) {
+        http_response_code($code);
+        header('Content-Type: application/json; charset=utf-8');
+    }
+
+    // Recursively guarantee all string values are valid UTF-8
+    array_walk_recursive($data, function(&$val) {
+        if (is_string($val)) {
+            if (!mb_check_encoding($val, 'UTF-8')) {
+                $val = @mb_convert_encoding($val, 'UTF-8', 'UTF-8, GB18030, GBK, BIG5, ISO-8859-1');
+            }
+        }
+    });
+
+    $flags = JSON_UNESCAPED_UNICODE;
+    if (defined('JSON_PARTIAL_OUTPUT_ON_ERROR')) {
+        $flags |= JSON_PARTIAL_OUTPUT_ON_ERROR;
+    }
+    if (defined('JSON_INVALID_UTF8_SUBSTITUTE')) {
+        $flags |= JSON_INVALID_UTF8_SUBSTITUTE;
+    }
+
+    $json = @json_encode($data, $flags);
+    if ($json === false || $json === '' || $json === null) {
+        $json = json_encode([
+            'status' => 'error',
+            'message' => 'JSON encoding failed: ' . json_last_error_msg()
+        ]);
+    }
+
+    if (empty($json)) {
+        $json = '{"status":"error","message":"Unknown JSON generation failure"}';
+    }
+
+    echo $json;
+    @flush();
     exit;
 }
 
@@ -1171,107 +1243,152 @@ function handle_file_upload() {
  * completely bypassing upload_max_filesize and post_max_size limits.
  */
 function handle_file_chunk() {
-    $rawInput = file_get_contents('php://input');
-    $payload = json_decode($rawInput, true);
-    if (!is_array($payload)) {
-        $payload = $_POST;
-    }
+    try {
+        $rawInput = file_get_contents('php://input');
+        $rawLen = strlen((string)$rawInput);
+        log_upload_debug("chunk_recv: method=" . (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'UNKNOWN') . " rawLen={$rawLen}");
 
-    $rawPath = isset($payload['path']) ? $payload['path'] : (isset($_GET['path']) ? $_GET['path'] : ALLOWED_ROOT);
-    $targetDir = sanitize_path($rawPath);
+        $payload = json_decode($rawInput, true);
+        if (!is_array($payload)) {
+            $payload = $_POST;
+        }
 
-    if ($targetDir === '/mnt' || $targetDir === '/mnt/user') {
+        $rawPath = isset($payload['path']) ? $payload['path'] : (isset($_GET['path']) ? $_GET['path'] : ALLOWED_ROOT);
+        $targetDir = sanitize_path($rawPath);
+
+        if ($targetDir === '/mnt' || $targetDir === '/mnt/user') {
+            log_upload_debug("chunk_err: direct root target {$targetDir}");
+            json_output([
+                'status' => 'error',
+                'message' => '无法直接上传到共享根目录 /mnt/user，请先点击进入具体的共享文件夹（例如 downloads、appdata 等）后再上传。'
+            ], 400);
+        }
+
+        if (!is_dir($targetDir)) {
+            if (!@mkdir($targetDir, 0777, true)) {
+                log_upload_debug("chunk_err: cannot create dir {$targetDir}");
+                json_output(['status' => 'error', 'message' => "目标目录不存在且无法创建: {$targetDir}"], 500);
+            }
+            @chmod($targetDir, 0777);
+            if (function_exists('posix_getuid') && @posix_getuid() === 0) {
+                @chown($targetDir, 'nobody');
+                @chgrp($targetDir, 'users');
+            }
+        }
+
+        $filename = isset($payload['filename']) ? trim($payload['filename']) : (isset($_GET['filename']) ? trim($_GET['filename']) : '');
+        if (stripos($filename, '%') !== false) {
+            $filename = rawurldecode($filename);
+        }
+        $cleanName = safe_basename($filename);
+        if (empty($cleanName)) {
+            log_upload_debug("chunk_err: empty filename");
+            json_output(['status' => 'error', 'message' => '文件名不能为空'], 400);
+        }
+
+        $destPath = rtrim($targetDir, '/') . '/' . $cleanName;
+        $chunkIndex = isset($payload['chunk_index']) ? intval($payload['chunk_index']) : 0;
+        $totalChunks = isset($payload['total_chunks']) ? intval($payload['total_chunks']) : 1;
+        $offset = isset($payload['offset']) ? floatval($payload['offset']) : 0;
+        $totalSize = isset($payload['total_size']) ? floatval($payload['total_size']) : 0;
+        $base64Data = isset($payload['data']) ? $payload['data'] : '';
+
+        $binaryData = ($base64Data !== '') ? base64_decode($base64Data) : '';
+        if ($base64Data !== '' && $binaryData === false) {
+            log_upload_debug("chunk_err: base64 decode failed for {$cleanName}");
+            json_output(['status' => 'error', 'message' => 'Base64 数据解码失败'], 400);
+        }
+
+        // First chunk creates/truncates the file, subsequent chunks append/seek
+        $fp = false;
+        if ($chunkIndex === 0 && $offset == 0) {
+            $fp = @fopen($destPath, 'wb');
+        } else {
+            if (file_exists($destPath)) {
+                $fp = @fopen($destPath, 'r+b');
+            }
+            if (!$fp) {
+                $fp = @fopen($destPath, 'c+b');
+            }
+            if (!$fp) {
+                $fp = @fopen($destPath, 'ab');
+            }
+        }
+
+        if (!$fp) {
+            $err = error_get_last();
+            $msg = $err ? $err['message'] : '无法打开或创建目标文件';
+            log_upload_debug("chunk_err: fopen failed for {$destPath}: {$msg}");
+            json_output(['status' => 'error', 'message' => "无法打开或创建目标文件: {$destPath} ({$msg})"], 500);
+        }
+
+        if ($offset > 0) {
+            @fseek($fp, (int)$offset);
+        }
+
+        $written = 0;
+        if (strlen($binaryData) > 0) {
+            $written = @fwrite($fp, $binaryData);
+        }
+        @fflush($fp);
+        @fclose($fp);
+
+        if (strlen($binaryData) > 0 && ($written === false || $written !== strlen($binaryData))) {
+            log_upload_debug("chunk_err: write partial for {$destPath}, expected=" . strlen($binaryData) . " wrote={$written}");
+            json_output(['status' => 'error', 'message' => "分片写入失败，目标磁盘可能空间不足。"], 500);
+        }
+
+        @chmod($destPath, 0666);
+        if (function_exists('posix_getuid') && @posix_getuid() === 0) {
+            @chown($destPath, 'nobody');
+            @chgrp($destPath, 'users');
+        }
+        clearstatcache(true, $destPath);
+        $currentSize = @filesize($destPath);
+        $isComplete = ($chunkIndex + 1 >= $totalChunks);
+
+        log_upload_debug("chunk_ok: file={$cleanName} chunk={$chunkIndex}/{$totalChunks} written={$written} curSize={$currentSize} complete=" . ($isComplete ? '1' : '0'));
+
+        if ($isComplete) {
+            json_output([
+                'status' => 'success',
+                'complete' => true,
+                'message' => '文件已成功写入 Unraid 存储',
+                'path' => $destPath,
+                'size' => $currentSize,
+                'total_size' => $totalSize
+            ]);
+        } else {
+            json_output([
+                'status' => 'success',
+                'complete' => false,
+                'chunk_index' => $chunkIndex,
+                'bytes_written' => $written,
+                'current_size' => $currentSize
+            ]);
+        }
+    } catch (\Throwable $e) {
+        log_upload_debug("chunk_exception: " . $e->getMessage() . " in " . basename($e->getFile()) . ":" . $e->getLine());
         json_output([
             'status' => 'error',
-            'message' => '无法直接上传到共享根目录 /mnt/user，请先点击进入具体的共享文件夹（例如 downloads、appdata 等）后再上传。'
-        ], 400);
-    }
-
-    if (!is_dir($targetDir)) {
-        if (!@mkdir($targetDir, 0777, true)) {
-            json_output(['status' => 'error', 'message' => "目标目录不存在且无法创建: {$targetDir}"], 500);
-        }
-        @chmod($targetDir, 0777);
-        @chown($targetDir, 'nobody');
-        @chgrp($targetDir, 'users');
-    }
-
-    $filename = isset($payload['filename']) ? trim($payload['filename']) : (isset($_GET['filename']) ? trim($_GET['filename']) : '');
-    if (stripos($filename, '%') !== false) {
-        $filename = rawurldecode($filename);
-    }
-    $cleanName = safe_basename($filename);
-    if (empty($cleanName)) {
-        json_output(['status' => 'error', 'message' => '文件名不能为空'], 400);
-    }
-
-    $destPath = rtrim($targetDir, '/') . '/' . $cleanName;
-    $chunkIndex = isset($payload['chunk_index']) ? intval($payload['chunk_index']) : 0;
-    $totalChunks = isset($payload['total_chunks']) ? intval($payload['total_chunks']) : 1;
-    $offset = isset($payload['offset']) ? floatval($payload['offset']) : 0;
-    $totalSize = isset($payload['total_size']) ? floatval($payload['total_size']) : 0;
-    $base64Data = isset($payload['data']) ? $payload['data'] : '';
-
-    $binaryData = ($base64Data !== '') ? base64_decode($base64Data) : '';
-    if ($base64Data !== '' && $binaryData === false) {
-        json_output(['status' => 'error', 'message' => 'Base64 数据解码失败'], 400);
-    }
-
-    // First chunk creates or truncates the file, subsequent chunks append / seek
-    $mode = ($chunkIndex === 0 && $offset == 0) ? 'wb' : 'c+b';
-    $fp = @fopen($destPath, $mode);
-    if (!$fp) {
-        json_output(['status' => 'error', 'message' => "无法打开或创建目标文件: {$destPath}，请检查存储目录写入权限。"], 500);
-    }
-
-    if ($offset > 0) {
-        @fseek($fp, (int)$offset);
-    }
-
-    $written = 0;
-    if (strlen($binaryData) > 0) {
-        $written = @fwrite($fp, $binaryData);
-    }
-    @fflush($fp);
-    @fclose($fp);
-
-    if (strlen($binaryData) > 0 && ($written === false || $written !== strlen($binaryData))) {
-        json_output(['status' => 'error', 'message' => "分片写入失败，目标磁盘可能空间不足。"], 500);
-    }
-
-    @chmod($destPath, 0666);
-    @chown($destPath, 'nobody');
-    @chgrp($destPath, 'users');
-    clearstatcache(true, $destPath);
-    $currentSize = @filesize($destPath);
-    $isComplete = ($chunkIndex + 1 >= $totalChunks);
-
-    if ($isComplete) {
-        json_output([
-            'status' => 'success',
-            'complete' => true,
-            'message' => '文件已成功写入 Unraid 存储',
-            'path' => $destPath,
-            'size' => $currentSize,
-            'total_size' => $totalSize
-        ]);
-    } else {
-        json_output([
-            'status' => 'success',
-            'complete' => false,
-            'chunk_index' => $chunkIndex,
-            'bytes_written' => $written,
-            'current_size' => $currentSize
-        ]);
+            'message' => '分片处理异常: ' . $e->getMessage() . ' (' . basename($e->getFile()) . ':' . $e->getLine() . ')'
+        ], 500);
     }
 }
 
 function handle_upload_debug() {
     $logFile = '/tmp/unraid_upload_debug.log';
-    $content = file_exists($logFile) ? file_get_contents($logFile) : 'No upload log recorded yet.';
+    $content = 'No upload log recorded yet.';
+    if (file_exists($logFile)) {
+        $lines = @file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if ($lines && count($lines) > 0) {
+            $content = implode("\n", array_slice($lines, -40));
+        }
+    }
     json_output([
         'status' => 'success',
         'log' => $content,
+        'php_version' => PHP_VERSION,
         'php_upload_max_filesize' => ini_get('upload_max_filesize'),
         'php_post_max_size' => ini_get('post_max_size'),
         'php_memory_limit' => ini_get('memory_limit'),

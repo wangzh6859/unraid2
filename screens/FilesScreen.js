@@ -274,7 +274,7 @@ export default function FilesScreen({ navigation }) {
       }
 
       const totalSize = (fileInfo.size !== undefined && fileInfo.size !== null) ? fileInfo.size : (taskItem.size || 0);
-      const CHUNK_SIZE = 512 * 1024; // 512 KB per chunk
+      const CHUNK_SIZE = 128 * 1024; // 128 KB per chunk (optimal stability & lightweight payload)
       const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
 
       let startChunk = taskItem.chunkIndex || 0;
@@ -320,7 +320,12 @@ export default function FilesScreen({ navigation }) {
           signal: abortController.signal,
         });
 
-        const resText = await res.text();
+        let resText = '';
+        try {
+          resText = await res.text();
+        } catch (readErr) {
+          throw new Error(`读取服务端响应失败: ${readErr.message}`);
+        }
 
         if (!res.ok) {
           let msg = `HTTP ${res.status}`;
@@ -328,7 +333,7 @@ export default function FilesScreen({ navigation }) {
             const errJson = JSON.parse(resText);
             if (errJson.message) msg = errJson.message;
           } catch (_) {
-            if (resText) msg = resText.slice(0, 120);
+            if (resText) msg = resText.slice(0, 150);
           }
           if (msg.includes('Unknown action')) {
             msg = '服务端 api.php 缺少分片上传功能，请更新 api.php 后重试。';
@@ -337,14 +342,26 @@ export default function FilesScreen({ navigation }) {
         }
 
         if (!resText || !resText.trim()) {
-          throw new Error('服务端返回空数据 (0 字节)，请确保 Unraid 已更新最新的 api.php');
+          // Attempt to fetch server-side diagnostic log to pinpoint failure reason
+          let serverDiag = '';
+          try {
+            const diagRes = await fetch(`${serverUrl}/api.php?token=${apiToken}&action=upload_debug`, {
+              headers: { 'X-API-Token': apiToken }
+            });
+            const diagJson = await diagRes.json();
+            if (diagJson && diagJson.log) {
+              serverDiag = `\n\n【服务端诊断日志】:\n${diagJson.log}`;
+            }
+          } catch (_) {}
+
+          throw new Error(`服务端返回空数据 (0 字节)。请确保 Unraid 已更新最新的 api.php。${serverDiag}`);
         }
 
         let resData = null;
         try {
           resData = JSON.parse(resText);
         } catch (parseErr) {
-          throw new Error(`服务端响应异常: ${resText.slice(0, 100)}`);
+          throw new Error(`服务端响应异常: ${resText.slice(0, 120)}`);
         }
 
         if (resData.status !== 'success') {
