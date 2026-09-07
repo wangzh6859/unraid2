@@ -75,6 +75,29 @@ export default function SmartDetailsScreen({ route }) {
     fetchSmart();
   }, [fetchSmart]);
 
+  const formatCapacity = (capStr) => {
+    if (!capStr) return '未知';
+    const s = String(capStr).trim();
+    // 1. Prefer bracketed human-readable size, e.g. [4.00 TB] or [500 GB]
+    const bracketMatch = s.match(/\[([0-9\.]+\s*[KMGTPE]?B)\]/i);
+    if (bracketMatch) return bracketMatch[1];
+
+    // 2. If already cleanly formatted (e.g. "4.00 TB", "500 GB")
+    if (/^[0-9\.]+\s*(?:TB|GB|MB|KB)$/i.test(s)) return s;
+
+    // 3. If it has bytes, convert to human-friendly decimal unit
+    const byteMatch = s.match(/([\d,]+)/);
+    if (byteMatch) {
+      const num = parseFloat(byteMatch[1].replace(/,/g, ''));
+      if (!isNaN(num) && num > 0) {
+        if (num >= 1e12) return (num / 1e12).toFixed(2) + ' TB';
+        if (num >= 1e9) return (num / 1e9).toFixed(1) + ' GB';
+        if (num >= 1e6) return (num / 1e6).toFixed(1) + ' MB';
+      }
+    }
+    return s;
+  };
+
   const isHealthy = useMemo(() => {
     if (!parsed || !parsed.health) return true;
     const h = parsed.health.toUpperCase();
@@ -167,7 +190,7 @@ export default function SmartDetailsScreen({ route }) {
                   <Text style={styles.gridLabel}>标称容量</Text>
                 </View>
                 <Text style={styles.gridValue} numberOfLines={1}>
-                  {parsed.capacity || '未知'}
+                  {formatCapacity(parsed.capacity)}
                 </Text>
               </View>
             </View>

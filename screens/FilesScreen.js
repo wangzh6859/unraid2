@@ -293,10 +293,29 @@ export default function FilesScreen({ navigation }) {
           respMsg = (bodyJson && bodyJson.message) ? bodyJson.message : '服务器保存失败';
         }
       } catch (e) {
-        isSuccess = false;
-        let cleanBody = (res.body || '').replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim();
-        if (cleanBody.length > 120) cleanBody = cleanBody.substring(0, 120) + '...';
-        respMsg = cleanBody ? `服务端异常: ${cleanBody}` : `服务端未确认写入成功 (HTTP ${res.status})`;
+        // If response body is empty or unparseable on HTTP 2xx, verify file directly on server
+        if (res.status >= 200 && res.status < 300) {
+          try {
+            const checkUrl = `${serverUrl}/api.php?token=${apiToken}&action=file_list&path=${encodeURIComponent(taskItem.targetPath)}`;
+            const checkRes = await fetch(checkUrl);
+            const checkData = await checkRes.json();
+            if (checkData && checkData.status === 'success' && Array.isArray(checkData.items)) {
+              const fileFound = checkData.items.find(it => it.name === taskItem.name);
+              if (fileFound) {
+                isSuccess = true;
+                savedPath = fileFound.path || `${taskItem.targetPath}/${taskItem.name}`;
+              }
+            }
+          } catch (checkErr) {
+            console.log('[FilesScreen] Secondary upload check error:', checkErr);
+          }
+        }
+
+        if (!isSuccess) {
+          let cleanBody = (res.body || '').replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim();
+          if (cleanBody.length > 120) cleanBody = cleanBody.substring(0, 120) + '...';
+          respMsg = cleanBody ? `服务端异常: ${cleanBody}` : `服务端未确认写入成功 (HTTP ${res.status})`;
+        }
       }
 
       if (isSuccess) {

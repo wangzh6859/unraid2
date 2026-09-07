@@ -242,12 +242,22 @@ switch ($action) {
 // Helper Output Function
 // -------------------------------------------------------------
 function json_output($data, $code = 200) {
-    while (ob_get_level() > 0) {
-        ob_end_clean();
+    if (ob_get_length()) {
+        ob_clean();
     }
     http_response_code($code);
     header('Content-Type: application/json; charset=utf-8');
-    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    header('Connection: close');
+    $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    header('Content-Length: ' . strlen($json));
+    echo $json;
+    if (ob_get_level() > 0) {
+        ob_end_flush();
+    }
+    flush();
+    if (function_exists('fastcgi_finish_request')) {
+        fastcgi_finish_request();
+    }
     exit;
 }
 
@@ -750,7 +760,33 @@ function handle_smart_info() {
     }
 
     if (preg_match('/(?:User Capacity|Total NVM Capacity):\s+(.+)/i', $out, $m)) {
-        $parsed['capacity'] = trim($m[1]);
+        $rawCap = trim($m[1]);
+        // 1. Prefer bracketed human-readable size e.g. "[4.00 TB]" or "[500 GB]"
+        if (preg_match('/\[([0-9\.]+\s*[KMGTPE]?B)\]/i', $rawCap, $bMatch)) {
+            $parsed['capacity'] = $bMatch[1];
+        } elseif (preg_match('/([\d,]+)\s*(?:bytes|B)?/i', $rawCap, $numMatch)) {
+            $bytes = (float)str_replace(',', '', $numMatch[1]);
+            if ($bytes >= 1e12) {
+                $parsed['capacity'] = round($bytes / 1e12, 2) . ' TB';
+            } elseif ($bytes >= 1e9) {
+                $parsed['capacity'] = round($bytes / 1e9, 1) . ' GB';
+            } elseif ($bytes >= 1e6) {
+                $parsed['capacity'] = round($bytes / 1e6, 1) . ' MB';
+            } else {
+                $parsed['capacity'] = $rawCap;
+            }
+        } else {
+            $parsed['capacity'] = $rawCap;
+        }
+    } elseif ($uInfo && !empty($uInfo['size'])) {
+        $bytes = (float)$uInfo['size'] * 1024;
+        if ($bytes >= 1e12) {
+            $parsed['capacity'] = round($bytes / 1e12, 2) . ' TB';
+        } elseif ($bytes >= 1e9) {
+            $parsed['capacity'] = round($bytes / 1e9, 1) . ' GB';
+        } else {
+            $parsed['capacity'] = round($bytes / 1e6, 1) . ' MB';
+        }
     }
 
     if (preg_match('/(?:SMART overall-health self-assessment test result|SMART Health Status):\s+(.+)/i', $out, $m)) {
