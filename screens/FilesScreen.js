@@ -320,22 +320,33 @@ export default function FilesScreen({ navigation }) {
           signal: abortController.signal,
         });
 
+        const resText = await res.text();
+
         if (!res.ok) {
-          const errText = await res.text();
           let msg = `HTTP ${res.status}`;
           try {
-            const errJson = JSON.parse(errText);
+            const errJson = JSON.parse(resText);
             if (errJson.message) msg = errJson.message;
           } catch (_) {
-            if (errText) msg = errText.slice(0, 100);
+            if (resText) msg = resText.slice(0, 120);
           }
           if (msg.includes('Unknown action')) {
-            msg = '服务端 api.php 版本过低，请按部署指南在 Unraid 终端更新 api.php 后重试。';
+            msg = '服务端 api.php 缺少分片上传功能，请更新 api.php 后重试。';
           }
           throw new Error(msg);
         }
 
-        const resData = await res.json();
+        if (!resText || !resText.trim()) {
+          throw new Error('服务端返回空数据 (0 字节)，请确保 Unraid 已更新最新的 api.php');
+        }
+
+        let resData = null;
+        try {
+          resData = JSON.parse(resText);
+        } catch (parseErr) {
+          throw new Error(`服务端响应异常: ${resText.slice(0, 100)}`);
+        }
+
         if (resData.status !== 'success') {
           throw new Error(resData.message || '分片写入失败');
         }

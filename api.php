@@ -250,22 +250,12 @@ switch ($action) {
 // Helper Output Function
 // -------------------------------------------------------------
 function json_output($data, $code = 200) {
-    if (ob_get_length()) {
-        ob_clean();
+    while (ob_get_level() > 0) {
+        ob_end_clean();
     }
     http_response_code($code);
     header('Content-Type: application/json; charset=utf-8');
-    header('Connection: close');
-    $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
-    header('Content-Length: ' . strlen($json));
-    echo $json;
-    if (ob_get_level() > 0) {
-        ob_end_flush();
-    }
-    flush();
-    if (function_exists('fastcgi_finish_request')) {
-        fastcgi_finish_request();
-    }
+    echo json_encode($data, JSON_UNESCAPED_UNICODE);
     exit;
 }
 
