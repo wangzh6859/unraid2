@@ -213,6 +213,14 @@ switch ($action) {
         handle_file_upload();
         break;
 
+    case 'file_chunk':
+        handle_file_chunk();
+        break;
+
+    case 'upload_debug':
+        handle_upload_debug();
+        break;
+
     case 'file_mkdir':
         handle_file_mkdir();
         break;
@@ -1067,6 +1075,9 @@ function handle_file_upload() {
         if (!@mkdir($targetDir, 0777, true)) {
             json_output(['status' => 'error', 'message' => "目标目录不存在且无法创建: {$targetDir}"], 500);
         }
+        @chmod($targetDir, 0777);
+        @chown($targetDir, 'nobody');
+        @chgrp($targetDir, 'users');
     }
 
     $filename = isset($_GET['filename']) ? trim($_GET['filename']) : (isset($_POST['filename']) ? trim($_POST['filename']) : '');
@@ -1110,6 +1121,8 @@ function handle_file_upload() {
         }
 
         @chmod($destPath, 0666);
+        @chown($destPath, 'nobody');
+        @chgrp($destPath, 'users');
         clearstatcache(true, $destPath);
         if (!file_exists($destPath) || filesize($destPath) === 0) {
             json_output(['status' => 'error', 'message' => "文件写入校验失败，目标文件不存在或大小为0: {$destPath}"], 500);
@@ -1151,6 +1164,8 @@ function handle_file_upload() {
         }
 
         @chmod($destPath, 0666);
+        @chown($destPath, 'nobody');
+        @chgrp($destPath, 'users');
         json_output([
             'status' => 'success',
             'message' => 'Raw stream upload complete',
@@ -1158,6 +1173,120 @@ function handle_file_upload() {
             'size' => filesize($destPath)
         ]);
     }
+}
+
+/**
+ * Robust chunked upload handler:
+ * Receives Base64 chunks via JSON payload, writes into file at specified offset,
+ * completely bypassing upload_max_filesize and post_max_size limits.
+ */
+function handle_file_chunk() {
+    $rawInput = file_get_contents('php://input');
+    $payload = json_decode($rawInput, true);
+    if (!is_array($payload)) {
+        $payload = $_POST;
+    }
+
+    $rawPath = isset($payload['path']) ? $payload['path'] : (isset($_GET['path']) ? $_GET['path'] : ALLOWED_ROOT);
+    $targetDir = sanitize_path($rawPath);
+
+    if ($targetDir === '/mnt' || $targetDir === '/mnt/user') {
+        json_output([
+            'status' => 'error',
+            'message' => '无法直接上传到共享根目录 /mnt/user，请先点击进入具体的共享文件夹（例如 downloads、appdata 等）后再上传。'
+        ], 400);
+    }
+
+    if (!is_dir($targetDir)) {
+        if (!@mkdir($targetDir, 0777, true)) {
+            json_output(['status' => 'error', 'message' => "目标目录不存在且无法创建: {$targetDir}"], 500);
+        }
+        @chmod($targetDir, 0777);
+        @chown($targetDir, 'nobody');
+        @chgrp($targetDir, 'users');
+    }
+
+    $filename = isset($payload['filename']) ? trim($payload['filename']) : (isset($_GET['filename']) ? trim($_GET['filename']) : '');
+    if (stripos($filename, '%') !== false) {
+        $filename = rawurldecode($filename);
+    }
+    $cleanName = safe_basename($filename);
+    if (empty($cleanName)) {
+        json_output(['status' => 'error', 'message' => '文件名不能为空'], 400);
+    }
+
+    $destPath = rtrim($targetDir, '/') . '/' . $cleanName;
+    $chunkIndex = isset($payload['chunk_index']) ? intval($payload['chunk_index']) : 0;
+    $totalChunks = isset($payload['total_chunks']) ? intval($payload['total_chunks']) : 1;
+    $offset = isset($payload['offset']) ? floatval($payload['offset']) : 0;
+    $totalSize = isset($payload['total_size']) ? floatval($payload['total_size']) : 0;
+    $base64Data = isset($payload['data']) ? $payload['data'] : '';
+
+    $binaryData = ($base64Data !== '') ? base64_decode($base64Data) : '';
+    if ($base64Data !== '' && $binaryData === false) {
+        json_output(['status' => 'error', 'message' => 'Base64 数据解码失败'], 400);
+    }
+
+    // First chunk creates or truncates the file, subsequent chunks append / seek
+    $mode = ($chunkIndex === 0 && $offset == 0) ? 'wb' : 'c+b';
+    $fp = @fopen($destPath, $mode);
+    if (!$fp) {
+        json_output(['status' => 'error', 'message' => "无法打开或创建目标文件: {$destPath}，请检查存储目录写入权限。"], 500);
+    }
+
+    if ($offset > 0) {
+        @fseek($fp, (int)$offset);
+    }
+
+    $written = 0;
+    if (strlen($binaryData) > 0) {
+        $written = @fwrite($fp, $binaryData);
+    }
+    @fflush($fp);
+    @fclose($fp);
+
+    if (strlen($binaryData) > 0 && ($written === false || $written !== strlen($binaryData))) {
+        json_output(['status' => 'error', 'message' => "分片写入失败，目标磁盘可能空间不足。"], 500);
+    }
+
+    @chmod($destPath, 0666);
+    @chown($destPath, 'nobody');
+    @chgrp($destPath, 'users');
+    clearstatcache(true, $destPath);
+    $currentSize = @filesize($destPath);
+    $isComplete = ($chunkIndex + 1 >= $totalChunks);
+
+    if ($isComplete) {
+        json_output([
+            'status' => 'success',
+            'complete' => true,
+            'message' => '文件已成功写入 Unraid 存储',
+            'path' => $destPath,
+            'size' => $currentSize,
+            'total_size' => $totalSize
+        ]);
+    } else {
+        json_output([
+            'status' => 'success',
+            'complete' => false,
+            'chunk_index' => $chunkIndex,
+            'bytes_written' => $written,
+            'current_size' => $currentSize
+        ]);
+    }
+}
+
+function handle_upload_debug() {
+    $logFile = '/tmp/unraid_upload_debug.log';
+    $content = file_exists($logFile) ? file_get_contents($logFile) : 'No upload log recorded yet.';
+    json_output([
+        'status' => 'success',
+        'log' => $content,
+        'php_upload_max_filesize' => ini_get('upload_max_filesize'),
+        'php_post_max_size' => ini_get('post_max_size'),
+        'php_memory_limit' => ini_get('memory_limit'),
+        'upload_tmp_dir' => sys_get_temp_dir()
+    ]);
 }
 
 function handle_file_mkdir() {
@@ -1176,6 +1305,10 @@ function handle_file_mkdir() {
     if (!@mkdir($newDir, 0777, true)) {
         json_output(['status' => 'error', 'message' => 'Failed to create directory'], 500);
     }
+
+    @chmod($newDir, 0777);
+    @chown($newDir, 'nobody');
+    @chgrp($newDir, 'users');
 
     json_output(['status' => 'success', 'message' => 'Folder created', 'path' => $newDir]);
 }

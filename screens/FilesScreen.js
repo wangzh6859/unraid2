@@ -250,112 +250,177 @@ export default function FilesScreen({ navigation }) {
   };
 
   const startUploadTask = async (taskItem) => {
-    const uploadUrl = `${serverUrl}/api.php?token=${apiToken}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}`;
+    const taskId = taskItem.id;
+    const abortController = new AbortController();
+    activeTasksRef.current[taskId] = { abortController, cancelled: false };
+
+    let tempLocalUri = null;
     try {
-      const uploadTask = FileSystem.createUploadTask(
-        uploadUrl,
-        taskItem.uri,
-        {
-          httpMethod: 'POST',
-          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-          fieldName: 'file',
-          parameters: {
-            filename: taskItem.name,
-            path: taskItem.targetPath,
+      let fileUri = taskItem.uri;
+      if (fileUri.startsWith('content://')) {
+        try {
+          tempLocalUri = `${FileSystem.cacheDirectory}up_${Date.now()}_${encodeURIComponent(taskItem.name)}`;
+          await FileSystem.copyAsync({ from: fileUri, to: tempLocalUri });
+          fileUri = tempLocalUri;
+        } catch (copyErr) {
+          console.log('[FilesScreen] Cache copy error, fallback to uri:', copyErr);
+        }
+      }
+
+      // Check if file exists and get real size
+      const fileInfo = await FileSystem.getInfoAsync(fileUri);
+      if (!fileInfo.exists) {
+        throw new Error('本地文件无法读取或已丢失');
+      }
+
+      const totalSize = (fileInfo.size !== undefined && fileInfo.size !== null) ? fileInfo.size : (taskItem.size || 0);
+      const CHUNK_SIZE = 512 * 1024; // 512 KB per chunk
+      const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
+
+      let startChunk = taskItem.chunkIndex || 0;
+      if (startChunk >= totalChunks) startChunk = 0;
+
+      let lastTime = Date.now();
+      let lastBytes = startChunk * CHUNK_SIZE;
+
+      for (let i = startChunk; i < totalChunks; i++) {
+        if (activeTasksRef.current[taskId]?.cancelled) {
+          return;
+        }
+
+        const offset = i * CHUNK_SIZE;
+        const length = Math.min(CHUNK_SIZE, totalSize - offset);
+
+        let base64Chunk = '';
+        if (totalSize > 0 && length > 0) {
+          base64Chunk = await FileSystem.readAsStringAsync(fileUri, {
+            encoding: FileSystem.EncodingType.Base64,
+            position: offset,
+            length: length,
+          });
+        }
+
+        const chunkUrl = `${serverUrl}/api.php?token=${apiToken}&action=file_chunk`;
+        const res = await fetch(chunkUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-API-Token': apiToken,
           },
-        },
-        (progressEvent) => {
-          const sent = progressEvent.totalBytesSent;
-          const total = progressEvent.totalBytesExpectedToSend;
-          const pct = total > 0 ? Math.round((sent / total) * 100) : 0;
-          setTransfers(prev => prev.map(t => {
-            if (t.id === taskItem.id) {
-              return { ...t, progress: pct, speed: `${formatBytes(sent)} / ${formatBytes(total)} (${pct}%)` };
-            }
-            return t;
-          }));
-        }
-      );
+          body: JSON.stringify({
+            path: taskItem.targetPath,
+            filename: taskItem.name,
+            chunk_index: i,
+            total_chunks: totalChunks,
+            offset: offset,
+            total_size: totalSize,
+            data: base64Chunk,
+          }),
+          signal: abortController.signal,
+        });
 
-      activeTasksRef.current[taskItem.id] = uploadTask;
-      const res = await uploadTask.uploadAsync();
-      delete activeTasksRef.current[taskItem.id];
-
-      let isSuccess = false;
-      let respMsg = '';
-      let savedPath = '';
-      try {
-        const bodyJson = JSON.parse(res.body);
-        if (bodyJson && bodyJson.status === 'success') {
-          isSuccess = true;
-          savedPath = bodyJson.path || `${taskItem.targetPath}/${taskItem.name}`;
-        } else {
-          respMsg = (bodyJson && bodyJson.message) ? bodyJson.message : '服务器保存失败';
-        }
-      } catch (e) {
-        // If response body is empty or unparseable on HTTP 2xx, verify file directly on server
-        if (res.status >= 200 && res.status < 300) {
+        if (!res.ok) {
+          const errText = await res.text();
+          let msg = `HTTP ${res.status}`;
           try {
-            const checkUrl = `${serverUrl}/api.php?token=${apiToken}&action=file_list&path=${encodeURIComponent(taskItem.targetPath)}`;
-            const checkRes = await fetch(checkUrl);
-            const checkData = await checkRes.json();
-            if (checkData && checkData.status === 'success' && Array.isArray(checkData.items)) {
-              const fileFound = checkData.items.find(it => it.name === taskItem.name);
-              if (fileFound) {
-                isSuccess = true;
-                savedPath = fileFound.path || `${taskItem.targetPath}/${taskItem.name}`;
-              }
-            }
-          } catch (checkErr) {
-            console.log('[FilesScreen] Secondary upload check error:', checkErr);
+            const errJson = JSON.parse(errText);
+            if (errJson.message) msg = errJson.message;
+          } catch (_) {
+            if (errText) msg = errText.slice(0, 100);
           }
+          if (msg.includes('Unknown action')) {
+            msg = '服务端 api.php 版本过低，请按部署指南在 Unraid 终端更新 api.php 后重试。';
+          }
+          throw new Error(msg);
         }
 
-        if (!isSuccess) {
-          let cleanBody = (res.body || '').replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim();
-          if (cleanBody.length > 120) cleanBody = cleanBody.substring(0, 120) + '...';
-          respMsg = cleanBody ? `服务端异常: ${cleanBody}` : `服务端未确认写入成功 (HTTP ${res.status})`;
+        const resData = await res.json();
+        if (resData.status !== 'success') {
+          throw new Error(resData.message || '分片写入失败');
         }
+
+        // Calculate progress & speed
+        const currentBytes = offset + length;
+        const now = Date.now();
+        const timeDiff = (now - lastTime) / 1000;
+        let speedStr = '';
+        if (timeDiff >= 0.5) {
+          const bytesDiff = currentBytes - lastBytes;
+          const currentSpeed = bytesDiff / timeDiff;
+          speedStr = ` · ${formatBytes(currentSpeed)}/s`;
+          lastTime = now;
+          lastBytes = currentBytes;
+        }
+
+        const pct = totalSize > 0 ? Math.min(99, Math.round((currentBytes / totalSize) * 100)) : 100;
+
+        setTransfers(prev => prev.map(t => {
+          if (t.id === taskId) {
+            return {
+              ...t,
+              status: 'running',
+              chunkIndex: i + 1,
+              progress: pct,
+              speed: `${formatBytes(currentBytes)} / ${formatBytes(totalSize)} (${pct}%)${speedStr}`,
+            };
+          }
+          return t;
+        }));
       }
 
-      if (isSuccess) {
-        setTransfers(prev => prev.map(t => (t.id === taskItem.id ? {
-          ...t,
-          status: 'success',
-          progress: 100,
-          speed: `已保存: ${savedPath}`,
-        } : t)));
-        // Refresh directory
-        loadDirectory(serverUrl, apiToken, currentPath);
-        Alert.alert('上传成功', `文件已成功写入 Unraid 存储：\n${savedPath}`);
-      } else {
-        setTransfers(prev => prev.map(t => (t.id === taskItem.id ? { ...t, status: 'error', speed: respMsg || `上传失败 (HTTP ${res.status})` } : t)));
-        Alert.alert('上传失败', respMsg || `服务器响应异常 (HTTP ${res.status})`);
+      delete activeTasksRef.current[taskId];
+
+      if (tempLocalUri) {
+        FileSystem.deleteAsync(tempLocalUri, { idempotent: true }).catch(() => {});
       }
+
+      const savedPath = `${taskItem.targetPath}/${taskItem.name}`;
+      setTransfers(prev => prev.map(t => (t.id === taskId ? {
+        ...t,
+        status: 'success',
+        progress: 100,
+        speed: `已保存: ${savedPath}`,
+      } : t)));
+
+      // Refresh directory list
+      loadDirectory(serverUrl, apiToken, currentPath);
+      Alert.alert('上传成功', `文件已成功写入 Unraid 存储：\n${savedPath}`);
     } catch (err) {
-      delete activeTasksRef.current[taskItem.id];
-      const isCancelled = err.message && err.message.includes('cancel');
-      setTransfers(prev => prev.map(t => {
-        if (t.id === taskItem.id) {
-          return isCancelled
-            ? { ...t, status: 'paused', speed: '已中断 / 暂停' }
-            : { ...t, status: 'error', speed: `错误: ${err.message}` };
-        }
-        return t;
-      }));
+      delete activeTasksRef.current[taskId];
+      if (tempLocalUri) {
+        FileSystem.deleteAsync(tempLocalUri, { idempotent: true }).catch(() => {});
+      }
+
+      const isCancelled = err.name === 'AbortError' || (err.message && err.message.includes('abort'));
+      if (isCancelled) {
+        setTransfers(prev => prev.map(t => (t.id === taskId ? {
+          ...t,
+          status: 'paused',
+          speed: `已暂停 (${t.progress || 0}%)`,
+        } : t)));
+      } else {
+        setTransfers(prev => prev.map(t => (t.id === taskId ? {
+          ...t,
+          status: 'error',
+          speed: `失败: ${err.message}`,
+        } : t)));
+        Alert.alert('上传失败', err.message || '网络或服务端异常');
+      }
     }
   };
 
   // Pause / Cancel active upload
-  const pauseUploadTask = async (taskId) => {
+  const pauseUploadTask = (taskId) => {
     const task = activeTasksRef.current[taskId];
     if (task) {
+      task.cancelled = true;
       try {
-        await task.cancelAsync();
-      } catch (e) {}
+        task.abortController.abort();
+      } catch (_) {}
       delete activeTasksRef.current[taskId];
     }
-    setTransfers(prev => prev.map(t => (t.id === taskId ? { ...t, status: 'paused', speed: '已暂停' } : t)));
+    setTransfers(prev => prev.map(t => (t.id === taskId ? { ...t, status: 'paused', speed: `已暂停 (${t.progress || 0}%)` } : t)));
   };
 
   // Resume / Retry upload
