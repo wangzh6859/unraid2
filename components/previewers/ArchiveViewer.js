@@ -75,7 +75,7 @@ export default function ArchiveViewer({ item, getDirectUrl, authHeaders, onDownl
       }
     })();
     return () => { alive = false; };
-  }, [item && item.href]);
+  }, [item && (item.path || item.href)]);
 
   const openEntry = async (entry) => {
     const kind = getFileKind(entry.name);

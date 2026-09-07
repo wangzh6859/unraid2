@@ -14,7 +14,9 @@ import { ensureCacheDir, enforceCacheLimit } from './cacheManager';
 export const downloadToCache = async ({ file, getDirectUrl, authHeaders }) => {
   const dir = await ensureCacheDir();
   const localUri = dir + encodeURIComponent(file.name);
-  const res = await FileSystem.downloadAsync(getDirectUrl(file.href), localUri, { headers: authHeaders() });
+  const targetUrl = getDirectUrl ? getDirectUrl(file.path || file.href) : (file.url || file.href);
+  const headers = (typeof authHeaders === 'function' ? authHeaders() : authHeaders) || {};
+  const res = await FileSystem.downloadAsync(targetUrl, localUri, { headers });
   await enforceCacheLimit();
   return res.uri;
 };

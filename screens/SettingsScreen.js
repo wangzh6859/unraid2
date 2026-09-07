@@ -1,10 +1,17 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Alert, ActivityIndicator, ScrollView, Switch, Modal, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
+import {
+  StyleSheet, Text, View, TouchableOpacity, Alert, ActivityIndicator,
+  ScrollView, Switch, Modal, TextInput, KeyboardAvoidingView, Platform,
+} from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants'; // 💡 引入动态变量库，用于获取真实版本号
-import { HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server, LogOut, Moon, Sun, FolderDown, RefreshCw, Trash2, Key, User } from 'lucide-react-native';
+import Constants from 'expo-constants';
+import {
+  HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server,
+  LogOut, Moon, Sun, FolderDown, RefreshCw, Trash2, Key, Power,
+  RotateCw, AlertTriangle, CheckCircle,
+} from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import {
   getDownloadDir, setDownloadDir, resetDownloadDir,
@@ -16,14 +23,11 @@ export default function SettingsScreen({ navigation }) {
   const [cacheSize, setCacheSize] = useState('计算中...');
   const [isClearing, setIsClearing] = useState(false);
 
-  // 新增设置状态
+  // Unraid Server credentials
   const [unraidUrl, setUnraidUrl] = useState('未连接');
   const [apiToken, setApiToken] = useState('');
-  // 文件服务器（WebDAV）配置状态
-  const [davUrl, setDavUrl] = useState('');
-  const [davUser, setDavUser] = useState('');
-  const [davPass, setDavPass] = useState('');
-  // 下载与缓存设置
+
+  // Download & Cache settings
   const [downloadDir, setDownloadDirState] = useState(null);
   const [cacheLimitMB, setCacheLimitMBState] = useState(500);
   const [cacheSizeBytes, setCacheSizeBytes] = useState(0);
@@ -33,29 +37,19 @@ export default function SettingsScreen({ navigation }) {
   const [serverEditField, setServerEditField] = useState('url');
   const [serverInput, setServerInput] = useState('');
 
-  // 💡 全局主题（由 ThemeProvider 管理，切换即时全局生效并自动持久化）
+  // Power action state
+  const [powerLoading, setPowerLoading] = useState(false);
+
   const { isDark, colors, toggleTheme } = useTheme();
-
-  // 💡 动态生成跟随主题的样式
   const styles = useMemo(() => createStyles(colors), [colors]);
-
-  // 💡 动态获取 app.json 中的真实版本号，获取不到则默认 1.0.0
   const appVersion = Constants.expoConfig?.version || '1.0.0';
 
-  // 💡 加载下载目录 + 缓存设置
   const loadSettings = async () => {
     try {
       const savedUrl = await AsyncStorage.getItem('@server_url');
       if (savedUrl) setUnraidUrl(savedUrl);
       const token = await AsyncStorage.getItem('@api_token');
       if (token) setApiToken(token);
-      // 文件服务器（WebDAV）配置
-      const dUrl = await AsyncStorage.getItem('@dav_url');
-      const dUser = await AsyncStorage.getItem('@dav_user');
-      const dPass = await AsyncStorage.getItem('@dav_pass');
-      if (dUrl) setDavUrl(dUrl);
-      if (dUser) setDavUser(dUser);
-      if (dPass) setDavPass(dPass);
 
       const dir = await getDownloadDir();
       setDownloadDirState(dir);
@@ -66,7 +60,9 @@ export default function SettingsScreen({ navigation }) {
       const bytes = await getPreviewCacheSize();
       setCacheSizeBytes(bytes);
       setCacheSize(fmtBytes(bytes));
-    } catch (e) { console.log(e); }
+    } catch (e) {
+      console.log(e);
+    }
   };
 
   useFocusEffect(
@@ -75,34 +71,36 @@ export default function SettingsScreen({ navigation }) {
     }, [])
   );
 
-  // 💡 选择下载目录（SAF 授权，软件仅能访问此目录）
+  // Download directory permissions via SAF
   const chooseDownloadDir = async () => {
     try {
       const perm = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
       if (perm.granted && perm.directoryUri) {
         await setDownloadDir(perm.directoryUri, '已授权目录');
         setDownloadDirState({ uri: perm.directoryUri, name: '已授权目录', configured: true });
-        Alert.alert('设置成功', '已将下载目录指向你授权的文件夹。');
+        Alert.alert('设置成功', '已将下载目录指向你授权的系统文件夹。');
       } else {
         Alert.alert('已取消', '未授权任何文件夹。');
       }
-    } catch (e) { Alert.alert('失败', e.message); }
+    } catch (e) {
+      Alert.alert('失败', e.message);
+    }
   };
 
-  // 💡 恢复默认下载目录
   const resetDownloadDirHandler = async () => {
     await resetDownloadDir();
     const dir = await getDownloadDir();
     setDownloadDirState(dir);
-    Alert.alert('已恢复', '下载位置已恢复为应用默认目录。');
+    Alert.alert('已恢复', '下载位置已恢复为应用内置默认目录。');
   };
 
-  // 💡 清理预览缓存
+  // Preview cache
   const clearPreviewCacheHandler = async () => {
-    Alert.alert('清理预览缓存', '确定要清除所有预览缓存文件吗？', [
+    Alert.alert('清理预览缓存', '确定要清除所有本地预览缓存文件吗？', [
       { text: '取消', style: 'cancel' },
       {
-        text: '彻底清除', style: 'destructive',
+        text: '彻底清除',
+        style: 'destructive',
         onPress: async () => {
           setIsClearing(true);
           try {
@@ -110,33 +108,38 @@ export default function SettingsScreen({ navigation }) {
             const bytes = await getPreviewCacheSize();
             setCacheSizeBytes(bytes);
             setCacheSize(fmtBytes(bytes));
-            Alert.alert('清理完成', '预览缓存已清空！');
-          } catch (e) { Alert.alert('清理失败', e.message); }
-          finally { setIsClearing(false); }
-        }
-      }
+            Alert.alert('清理完成', '本地预览缓存已清空！');
+          } catch (e) {
+            Alert.alert('清理失败', e.message);
+          } finally {
+            setIsClearing(false);
+          }
+        },
+      },
     ]);
   };
 
-  // 💡 调整缓存上限
   const openLimitInput = () => {
     setLimitValue(String(cacheLimitMB));
     setLimitVisible(true);
   };
+
   const confirmLimitInput = async () => {
     const n = parseInt(limitValue, 10);
-    if (isNaN(n) || n <= 0) { Alert.alert('无效', '请输入有效的正整数（MB）'); return; }
+    if (isNaN(n) || n <= 0) {
+      Alert.alert('无效', '请输入有效的正整数（MB）');
+      return;
+    }
     const saved = await setCacheLimitMB(n);
     setCacheLimitMBState(saved);
     setLimitVisible(false);
-    Alert.alert('已保存', `缓存上限已设为 ${saved} MB，超出时将自动清理最早文件。`);
+    Alert.alert('已保存', `缓存上限已设为 ${saved} MB，超出时将自动清理最早缓存。`);
   };
 
-  // 💡 修改主服务器连接地址（弹输入框）
+  // Edit Server URL & Token
   const editServerUrl = () => {
-    let prompt = '请输入 Unraid 服务器地址';
     if (Platform.OS === 'ios') {
-      Alert.prompt(prompt, undefined, (text) => {
+      Alert.prompt('请输入 Unraid 服务器地址', undefined, (text) => {
         const v = (text || '').trim();
         let cleanUrl = v;
         if (cleanUrl && !cleanUrl.startsWith('http')) cleanUrl = 'http://' + cleanUrl;
@@ -144,12 +147,12 @@ export default function SettingsScreen({ navigation }) {
         AsyncStorage.setItem('@server_url', cleanUrl).then(() => setUnraidUrl(cleanUrl));
       });
     } else {
-      // Android 无 Alert.prompt，用自定义 Modal
-      setServerInput(unraidUrl);
+      setServerInput(unraidUrl === '未连接' ? '' : unraidUrl);
       setServerEditField('url');
       setServerEditVisible(true);
     }
   };
+
   const editApiToken = () => {
     if (Platform.OS === 'ios') {
       Alert.prompt('请输入 API Token', undefined, (text) => {
@@ -162,7 +165,6 @@ export default function SettingsScreen({ navigation }) {
     }
   };
 
-  // 💡 保存服务器配置修改
   const confirmServerEdit = async () => {
     const v = (serverInput || '').trim();
     if (serverEditField === 'url') {
@@ -174,128 +176,175 @@ export default function SettingsScreen({ navigation }) {
     } else if (serverEditField === 'token') {
       await AsyncStorage.setItem('@api_token', v);
       setApiToken(v);
-    } else if (serverEditField === 'dav_url') {
-      let cleanUrl = v;
-      if (cleanUrl && !cleanUrl.endsWith('/')) cleanUrl += '/';
-      await AsyncStorage.setItem('@dav_url', cleanUrl);
-      setDavUrl(cleanUrl);
-    } else if (serverEditField === 'dav_user') {
-      await AsyncStorage.setItem('@dav_user', v);
-      setDavUser(v);
-    } else if (serverEditField === 'dav_pass') {
-      await AsyncStorage.setItem('@dav_pass', v);
-      setDavPass(v);
     }
     setServerEditVisible(false);
-    Alert.alert('已保存', '连接配置已更新，重新连接后生效。');
-  };
-
-  // 💡 编辑文件服务器字段
-  const editDavField = (field) => {
-    if (Platform.OS === 'ios') {
-      const labels = { url: '文件服务器地址 (WebDAV)', user: '用户名', pass: '密码' };
-      const cur = field === 'url' ? davUrl : field === 'user' ? davUser : davPass;
-      Alert.prompt(labels[field] || '值', undefined, (text) => {
-        let v = text || '';
-        if (field === 'url') { if (v && !v.endsWith('/')) v += '/'; AsyncStorage.setItem('@dav_url', v).then(() => setDavUrl(v)); }
-        else if (field === 'user') AsyncStorage.setItem('@dav_user', v).then(() => setDavUser(v));
-        else AsyncStorage.setItem('@dav_pass', v).then(() => setDavPass(v));
-      }, undefined, cur);
-    } else {
-      setServerInput(field === 'url' ? davUrl : field === 'user' ? davUser : davPass);
-      setServerEditField('dav_' + field);
-      setServerEditVisible(true);
-    }
+    Alert.alert('已保存', '连接配置已实时保存并即时生效！');
   };
 
   const handleUnraidLogout = () => {
-    Alert.alert('注销主服务器', '确定要断开与当前 Unraid 系统的连接吗？\n(这不会影响您的 WebDAV 和影音配置)', [
+    Alert.alert('注销服务器凭据', '确定要清除当前 Unraid 系统的连接配置吗？', [
       { text: '取消', style: 'cancel' },
       {
-        text: '断开连接', style: 'destructive',
+        text: '清除并断开',
+        style: 'destructive',
         onPress: async () => {
           await AsyncStorage.removeItem('@server_url');
           await AsyncStorage.removeItem('@api_token');
           setUnraidUrl('未连接');
-          // 跳转回首页，触发仪表盘的重新登录逻辑
+          setApiToken('');
           navigation.navigate('首页');
-        }
-      }
+        },
+      },
     ]);
+  };
+
+  // =========================================================================
+  // Server Power Management (Remote Reboot & Shutdown)
+  // =========================================================================
+  const handleServerReboot = () => {
+    if (!unraidUrl || unraidUrl === '未连接' || !apiToken) {
+      Alert.alert('未连接', '请先配置有效的服务器连接地址与 API Token。');
+      return;
+    }
+
+    Alert.alert(
+      '⚠️ 确认重启 Unraid 服务器？',
+      '服务器将在数秒内开始安全重启流程。系统所有 Docker 容器与虚拟机服务将短暂离线，约需 1~3 分钟恢复。',
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '确定重启',
+          style: 'destructive',
+          onPress: async () => {
+            setPowerLoading(true);
+            try {
+              const res = await fetch(`${unraidUrl}/api.php?token=${apiToken}&action=reboot`);
+              const data = await res.json();
+              Alert.alert('重启指令已发送', data.message || '服务器正在执行安全重启...');
+            } catch (e) {
+              Alert.alert('请求异常', e.message);
+            } finally {
+              setPowerLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleServerPoweroff = () => {
+    if (!unraidUrl || unraidUrl === '未连接' || !apiToken) {
+      Alert.alert('未连接', '请先配置有效的服务器连接地址与 API Token。');
+      return;
+    }
+
+    Alert.alert(
+      '🚨 危险：确认关闭 Unraid 服务器？',
+      '执行关机后，主机将彻底切断电源停止运行！\n\n注意：除非您的服务器主板已配置 WOL (网络唤醒) 或由管理员手动按下物理开机键，否则此 App 将无法再远程唤醒开机！',
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '彻底关机',
+          style: 'destructive',
+          onPress: async () => {
+            setPowerLoading(true);
+            try {
+              const res = await fetch(`${unraidUrl}/api.php?token=${apiToken}&action=poweroff`);
+              const data = await res.json();
+              Alert.alert('关机指令已发送', data.message || '服务器正在安全关机...');
+            } catch (e) {
+              Alert.alert('请求异常', e.message);
+            } finally {
+              setPowerLoading(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-
       <View style={styles.header}>
         <SettingsIcon color={colors.accent} size={48} style={{ marginBottom: 12 }} />
-        <Text style={styles.title}>系统设置</Text>
-        {/* 💡 显示真实的动态版本号 */}
-        <Text style={styles.subtitle}>Version {appVersion}</Text>
+        <Text style={styles.title}>系统控制与设置</Text>
+        <Text style={styles.subtitle}>Unraid Manager v{appVersion}</Text>
       </View>
 
-      {/* 💡 新增：Unraid 服务器管理面板 */}
-      <Text style={styles.sectionTitle}>主控服务器</Text>
+      {/* Unraid Core Server Card */}
+      <Text style={styles.sectionTitle}>主控连接凭证</Text>
       <View style={styles.card}>
         <TouchableOpacity style={styles.row} onPress={editServerUrl}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}><Server color={colors.accent} size={20} /></View>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+            <Server color={colors.accent} size={20} />
+          </View>
           <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>连接地址</Text>
+            <Text style={styles.rowTitle}>服务器地址</Text>
             <Text style={styles.rowSub} numberOfLines={1}>{unraidUrl || '未设置'}</Text>
           </View>
           <Text style={styles.editHint}>修改</Text>
         </TouchableOpacity>
+
         <View style={styles.divider} />
+
         <TouchableOpacity style={styles.row} onPress={editApiToken}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(139, 92, 246, 0.15)' }]}><Key color={colors.purple} size={20} /></View>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(139, 92, 246, 0.15)' }]}>
+            <Key color={colors.purple} size={20} />
+          </View>
           <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>API Token</Text>
+            <Text style={styles.rowTitle}>统一 API Token</Text>
             <Text style={styles.rowSub} numberOfLines={1}>{apiToken ? '••••••••' : '未设置'}</Text>
           </View>
           <Text style={styles.editHint}>修改</Text>
         </TouchableOpacity>
+
         <View style={styles.divider} />
+
         <TouchableOpacity style={styles.row} onPress={handleUnraidLogout}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}><LogOut color={colors.red} size={20} /></View>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
+            <LogOut color={colors.red} size={20} />
+          </View>
           <View style={styles.infoBox}>
-            <Text style={[styles.rowTitle, { color: colors.red }]}>断开并重新配置</Text>
-            <Text style={styles.rowSub}>清除 API 令牌与连接信息</Text>
+            <Text style={[styles.rowTitle, { color: colors.red }]}>清除凭据</Text>
+            <Text style={styles.rowSub}>清除本地保存的 API 访问凭据</Text>
           </View>
         </TouchableOpacity>
       </View>
 
-      <Text style={styles.sectionTitle}>文件服务器 (WebDAV)</Text>
+      {/* Server Power Controls Card */}
+      <Text style={styles.sectionTitle}>服务器电源控制</Text>
       <View style={styles.card}>
-        <TouchableOpacity style={styles.row} onPress={() => editDavField('url')}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}><FolderDown color={colors.accent} size={20} /></View>
-          <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>WebDAV 地址</Text>
-            <Text style={styles.rowSub} numberOfLines={1}>{davUrl || '未设置'}</Text>
+        <TouchableOpacity style={styles.row} onPress={handleServerReboot} disabled={powerLoading}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}>
+            <RotateCw color={colors.amber} size={20} />
           </View>
-          <Text style={styles.editHint}>修改</Text>
+          <View style={styles.infoBox}>
+            <Text style={[styles.rowTitle, { color: colors.amber }]}>重启服务器 (Reboot)</Text>
+            <Text style={styles.rowSub}>安全重启 Unraid 主机与容器系统</Text>
+          </View>
+          <View style={styles.powerActionTag}>
+            <Text style={[styles.powerActionTagText, { color: colors.amber }]}>执行</Text>
+          </View>
         </TouchableOpacity>
+
         <View style={styles.divider} />
-        <TouchableOpacity style={styles.row} onPress={() => editDavField('user')}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}><User color={colors.green} size={20} /></View>
-          <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>用户名</Text>
-            <Text style={styles.rowSub} numberOfLines={1}>{davUser || '未设置'}</Text>
+
+        <TouchableOpacity style={styles.row} onPress={handleServerPoweroff} disabled={powerLoading}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
+            <Power color={colors.red} size={20} />
           </View>
-          <Text style={styles.editHint}>修改</Text>
-        </TouchableOpacity>
-        <View style={styles.divider} />
-        <TouchableOpacity style={styles.row} onPress={() => editDavField('pass')}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}><Key color={colors.amber} size={20} /></View>
           <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>密码</Text>
-            <Text style={styles.rowSub} numberOfLines={1}>{davPass ? '••••••••' : '未设置'}</Text>
+            <Text style={[styles.rowTitle, { color: colors.red }]}>关闭服务器 (Poweroff)</Text>
+            <Text style={styles.rowSub}>安全卸载存储池并切断电源</Text>
           </View>
-          <Text style={styles.editHint}>修改</Text>
+          <View style={[styles.powerActionTag, { borderColor: 'rgba(239, 68, 68, 0.3)', backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
+            <Text style={[styles.powerActionTagText, { color: colors.red }]}>关机</Text>
+          </View>
         </TouchableOpacity>
       </View>
 
-      {/* 💡 新增：外观与个性化面板（真正的全局主题切换） */}
-      <Text style={styles.sectionTitle}>外观与个性化</Text>
+      {/* Appearance & Themes */}
+      <Text style={styles.sectionTitle}>外观与沉浸显示</Text>
       <View style={styles.card}>
         <View style={styles.row}>
           <View style={[styles.iconBox, { backgroundColor: isDark ? 'rgba(139, 92, 246, 0.15)' : 'rgba(245, 158, 11, 0.15)' }]}>
@@ -303,101 +352,121 @@ export default function SettingsScreen({ navigation }) {
           </View>
           <View style={styles.infoBox}>
             <Text style={styles.rowTitle}>深色模式</Text>
-            <Text style={styles.rowSub}>{isDark ? '当前：深色主题（护眼沉浸）' : '当前：浅色主题'}</Text>
+            <Text style={styles.rowSub}>{isDark ? '当前：深色主题（夜间护眼）' : '当前：明亮浅色主题'}</Text>
           </View>
           <Switch
             value={isDark}
-            onValueChange={(value) => toggleTheme(value)}
+            onValueChange={(val) => toggleTheme(val)}
             trackColor={{ false: colors.input, true: colors.purple }}
             thumbColor={'#ffffff'}
           />
         </View>
       </View>
 
-      <Text style={styles.sectionTitle}>下载位置</Text>
+      {/* Download Directory */}
+      <Text style={styles.sectionTitle}>本地存储与下载</Text>
       <View style={styles.card}>
         <View style={styles.row}>
-          <View style={styles.iconBox}><FolderDown color={colors.accent} size={20} /></View>
+          <View style={styles.iconBox}>
+            <FolderDown color={colors.accent} size={20} />
+          </View>
           <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>保存到目录</Text>
-            <Text style={styles.rowSub} numberOfLines={1}>{downloadDir ? downloadDir.name : '加载中...'}</Text>
+            <Text style={styles.rowTitle}>保存目标位置</Text>
+            <Text style={styles.rowSub} numberOfLines={1}>
+              {downloadDir ? downloadDir.name : '加载中...'}
+            </Text>
           </View>
         </View>
         <View style={styles.divider} />
         <View style={styles.btnRow}>
           <TouchableOpacity style={styles.miniBtn} onPress={chooseDownloadDir}>
-            <FolderDown color={colors.accent} size={16} /><Text style={styles.miniBtnText}>更改位置</Text>
+            <FolderDown color={colors.accent} size={16} />
+            <Text style={styles.miniBtnText}>选择系统目录</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.miniBtn} onPress={resetDownloadDirHandler}>
-            <RefreshCw color={colors.amber} size={16} /><Text style={styles.miniBtnText}>恢复默认</Text>
+            <RefreshCw color={colors.amber} size={16} />
+            <Text style={styles.miniBtnText}>恢复应用内置</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      <Text style={styles.sectionTitle}>预览缓存</Text>
+      {/* Preview Cache Management */}
+      <Text style={styles.sectionTitle}>即时预览缓存</Text>
       <View style={styles.card}>
         <View style={styles.row}>
-          <View style={styles.iconBox}><HardDrive color={colors.green} size={20} /></View>
+          <View style={styles.iconBox}>
+            <HardDrive color={colors.green} size={20} />
+          </View>
           <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>缓存占用</Text>
-            <Text style={styles.rowSub}>图片/视频/文本预览缓存</Text>
+            <Text style={styles.rowTitle}>当前缓存占用</Text>
+            <Text style={styles.rowSub}>图片、文档、音频预览本地缓存</Text>
           </View>
           <Text style={styles.valueText}>{cacheSize}</Text>
         </View>
+
         <View style={styles.divider} />
+
         <TouchableOpacity style={styles.row} onPress={openLimitInput}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}><Info color={colors.amber} size={20} /></View>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}>
+            <Info color={colors.amber} size={20} />
+          </View>
           <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>缓存上限</Text>
-            <Text style={styles.rowSub}>超出自动清理最早文件</Text>
+            <Text style={styles.rowTitle}>LRU 缓存上限</Text>
+            <Text style={styles.rowSub}>超出时自动剔除最早未读缓存</Text>
           </View>
           <Text style={styles.valueText}>{cacheLimitMB} MB</Text>
         </TouchableOpacity>
+
         <View style={styles.divider} />
+
         <TouchableOpacity style={styles.row} onPress={clearPreviewCacheHandler} disabled={isClearing}>
           <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
             {isClearing ? <ActivityIndicator color={colors.red} size="small" /> : <Trash2 color={colors.red} size={20} />}
           </View>
           <View style={styles.infoBox}>
-            <Text style={[styles.rowTitle, { color: colors.red }]}>清理预览缓存</Text>
-            <Text style={styles.rowSub}>释放存储空间</Text>
+            <Text style={[styles.rowTitle, { color: colors.red }]}>清空预览缓存</Text>
+            <Text style={styles.rowSub}>即刻释放手机存储空间</Text>
           </View>
         </TouchableOpacity>
       </View>
 
-      <Text style={styles.sectionTitle}>安全与底层协议</Text>
+      {/* Architecture & Protocol */}
+      <Text style={styles.sectionTitle}>底层核心架构</Text>
       <View style={styles.card}>
         <View style={styles.row}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}><ShieldCheck color={colors.accent} size={20} /></View>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+            <ShieldCheck color={colors.accent} size={20} />
+          </View>
           <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>原生沙盒隔离 (SAF)</Text>
-            <Text style={styles.rowSub}>已开启·按需授权访问</Text>
+            <Text style={styles.rowTitle}>统一后端核心</Text>
+            <Text style={styles.rowSub}>Unraid Native API · 单令牌鉴权</Text>
           </View>
         </View>
         <View style={styles.divider} />
         <View style={styles.row}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}><Info color={colors.amber} size={20} /></View>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+            <CheckCircle color={colors.green} size={20} />
+          </View>
           <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>文件系统</Text>
-            <Text style={styles.rowSub}>PROPFIND & HTTP Basic Auth</Text>
+            <Text style={styles.rowTitle}>流式媒体协议</Text>
+            <Text style={styles.rowSub}>RFC 7233 HTTP 206 Partial Content 分片流</Text>
           </View>
         </View>
       </View>
 
-
-      {/* 服务器配置编辑输入框 */}
-      <Modal visible={serverEditVisible} transparent={true} animationType="fade" onRequestClose={() => setServerEditVisible(false)}>
+      {/* Server Config Input Modal */}
+      <Modal visible={serverEditVisible} transparent animationType="fade" onRequestClose={() => setServerEditVisible(false)}>
         <KeyboardAvoidingView style={styles.overlayCenter} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={styles.limitBox}>
-            <Text style={styles.limitTitle}>{serverEditField === 'url' ? '连接地址' : serverEditField === 'token' ? 'API Token' : serverEditField === 'dav_url' ? 'WebDAV 地址' : serverEditField === 'dav_user' ? '用户名' : '密码'}</Text>
+            <Text style={styles.limitTitle}>{serverEditField === 'url' ? 'Unraid 服务器地址' : 'API 访问 Token'}</Text>
             <TextInput
               style={styles.limitInput}
               value={serverInput}
               onChangeText={setServerInput}
               autoFocus
               autoCapitalize="none"
-              secureTextEntry={serverEditField === 'token' || serverEditField === 'dav_pass'}
-              placeholder="请输入"
+              secureTextEntry={serverEditField === 'token'}
+              placeholder={serverEditField === 'url' ? 'http://192.168.1.100' : '输入密钥'}
               placeholderTextColor={colors.muted}
             />
             <View style={styles.renameBtns}>
@@ -405,18 +474,18 @@ export default function SettingsScreen({ navigation }) {
                 <Text style={styles.renameBtnText}>取消</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.renameBtn, { backgroundColor: colors.accent }]} onPress={confirmServerEdit}>
-                <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>保存</Text>
+                <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>保存并生效</Text>
               </TouchableOpacity>
             </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* 缓存上限输入 */}
-      <Modal visible={limitVisible} transparent={true} animationType="fade" onRequestClose={() => setLimitVisible(false)}>
+      {/* Cache Limit Input Modal */}
+      <Modal visible={limitVisible} transparent animationType="fade" onRequestClose={() => setLimitVisible(false)}>
         <KeyboardAvoidingView style={styles.overlayCenter} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={styles.limitBox}>
-            <Text style={styles.limitTitle}>缓存大小上限 (MB)</Text>
+            <Text style={styles.limitTitle}>设置预览缓存上限 (MB)</Text>
             <TextInput
               style={styles.limitInput}
               keyboardType="numeric"
@@ -437,40 +506,52 @@ export default function SettingsScreen({ navigation }) {
           </View>
         </KeyboardAvoidingView>
       </Modal>
-
     </ScrollView>
   );
 }
 
 const createStyles = (colors) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 16, paddingBottom: 40 },
-  header: { alignItems: 'center', marginVertical: 30 },
+  content: { padding: 16, paddingBottom: 50 },
+  header: { alignItems: 'center', marginVertical: 24 },
   title: { color: colors.textStrong, fontSize: 24, fontWeight: 'bold' },
-  subtitle: { color: colors.muted, fontSize: 14, marginTop: 4 },
+  subtitle: { color: colors.muted, fontSize: 13, marginTop: 4 },
 
-  sectionTitle: { color: colors.sub, fontSize: 14, fontWeight: 'bold', marginLeft: 8, marginBottom: 8, marginTop: 16 },
+  sectionTitle: { color: colors.sub, fontSize: 13, fontWeight: 'bold', marginLeft: 8, marginBottom: 8, marginTop: 16 },
   card: { backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden', elevation: 3 },
 
   row: { flexDirection: 'row', alignItems: 'center', padding: 16 },
-  iconBox: { width: 40, height: 40, borderRadius: 10, backgroundColor: 'rgba(16, 185, 129, 0.15)', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+  iconBox: { width: 40, height: 40, borderRadius: 10, backgroundColor: 'rgba(16, 185, 129, 0.15)', justifyContent: 'center', alignItems: 'center', marginRight: 14 },
   infoBox: { flex: 1, justifyContent: 'center' },
-  rowTitle: { color: colors.text, fontSize: 16, fontWeight: '500', marginBottom: 4 },
-  rowSub: { color: colors.sub, fontSize: 13 },
-  valueText: { color: colors.green, fontSize: 16, fontWeight: 'bold' },
-  editHint: { color: colors.accent, fontSize: 14, fontWeight: 'bold' },
+  rowTitle: { color: colors.text, fontSize: 15, fontWeight: '500', marginBottom: 3 },
+  rowSub: { color: colors.sub, fontSize: 12 },
+  valueText: { color: colors.green, fontSize: 15, fontWeight: 'bold' },
+  editHint: { color: colors.accent, fontSize: 13, fontWeight: 'bold' },
 
-  divider: { height: 1, backgroundColor: colors.divider, marginLeft: 72 },
+  powerActionTag: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.3)',
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+  },
+  powerActionTagText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+
+  divider: { height: 1, backgroundColor: colors.divider, marginLeft: 68 },
 
   btnRow: { flexDirection: 'row', padding: 12, justifyContent: 'space-around' },
   miniBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.input, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8 },
-  miniBtnText: { color: colors.text, fontSize: 14, fontWeight: 'bold', marginLeft: 6 },
+  miniBtnText: { color: colors.text, fontSize: 13, fontWeight: 'bold', marginLeft: 6 },
 
-  overlayCenter: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 24 },
+  overlayCenter: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 },
   limitBox: { backgroundColor: colors.card, borderRadius: 16, padding: 20 },
   limitTitle: { color: colors.textStrong, fontSize: 16, fontWeight: 'bold', textAlign: 'center', marginBottom: 16 },
-  limitInput: { backgroundColor: colors.input, borderRadius: 8, paddingHorizontal: 12, height: 48, color: colors.textStrong, fontSize: 16, marginBottom: 16 },
+  limitInput: { backgroundColor: colors.input, borderRadius: 8, paddingHorizontal: 12, height: 48, color: colors.textStrong, fontSize: 15, marginBottom: 16 },
   renameBtns: { flexDirection: 'row', justifyContent: 'space-between' },
   renameBtn: { flex: 1, borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginHorizontal: 6 },
-  renameBtnText: { color: colors.text, fontSize: 15, fontWeight: 'bold' },
+  renameBtnText: { color: colors.text, fontSize: 14, fontWeight: 'bold' },
 });

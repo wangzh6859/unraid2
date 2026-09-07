@@ -66,7 +66,7 @@ export default function EpubViewer({ item, getDirectUrl, authHeaders, onDownload
       }
     })();
     return () => { alive = false; };
-  }, [item && item.href]);
+  }, [item && (item.path || item.href)]);
 
   if (state.loading) {
     return (

@@ -1,502 +1,547 @@
-import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, ScrollView, Modal, BackHandler, Pressable, RefreshControl, Image } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import {
-  Folder, Server, Key, User, File, ChevronLeft, LogOut, HardDrive, Plus, ArrowDownUp,
+  StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator,
+  KeyboardAvoidingView, Platform, Alert, ScrollView, Modal, BackHandler,
+  Pressable, RefreshControl,
+} from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
+import {
+  Folder, Server, Key, File, ChevronLeft, HardDrive, Plus, ArrowDownUp,
   FolderPlus, UploadCloud, DownloadCloud, X, Download, Pencil, Copy, MoveRight,
-  Trash2, CheckCircle, Circle, ArrowUp, FolderOpen, Info,
+  Trash2, CheckCircle, Circle, ArrowUp, FolderOpen, Info, Pause, Play,
+  RefreshCw, Settings, Check, Search, Filter,
 } from 'lucide-react-native';
-import base64 from 'base-64';
-import { XMLParser } from 'fast-xml-parser';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import { useTheme } from '../ThemeContext';
-import { getDownloadDir } from '../utils/cacheManager';
+import { getDownloadDir, formatBytes } from '../utils/cacheManager';
 import FilePreviewer from '../components/FilePreviewer';
 
 export default function FilesScreen({ navigation }) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const [davUrl, setDavUrl] = useState('');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  // Server credentials synced from Settings / AsyncStorage
+  const [serverUrl, setServerUrl] = useState('');
+  const [apiToken, setApiToken] = useState('');
+  const [isConfigured, setIsConfigured] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
 
-  const [isConnected, setIsConnected] = useState(false);
-  const [isTesting, setIsTesting] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-
-  const [currentPath, setCurrentPath] = useState('');
+  // File browser state
+  const DEFAULT_ROOT = '/mnt/user';
+  const [currentPath, setCurrentPath] = useState(DEFAULT_ROOT);
   const [fileList, setFileList] = useState([]);
   const [isLoadingList, setIsLoadingList] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState('name'); // 'name' | 'date' | 'size'
 
-  const [isMenuVisible, setIsMenuVisible] = useState(false);
-  const [isTransferVisible, setIsTransferVisible] = useState(false);
-  const [transfers, setTransfers] = useState([]);
-
-  // 当前预览文件（传给 FilePreviewer，null 表示关闭）
-  const [previewItem, setPreviewItem] = useState(null);
-
-  // 多选模式
+  // Selection & UI Modals
   const [multiSelect, setMultiSelect] = useState(false);
   const [selected, setSelected] = useState(new Set());
+  const [previewItem, setPreviewItem] = useState(null);
+  const [isMenuVisible, setIsMenuVisible] = useState(false);
 
-  // 详情弹窗目标（复用原 actionItem 状态）
-  const [detailItem, setDetailItem] = useState(null);
-  // 详情弹窗的附加信息（文件夹下级数量统计）
-  const [detailInfo, setDetailInfo] = useState({ childCount: null, isCounting: false });
+  // Create folder modal
+  const [mkdirVisible, setMkdirVisible] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
 
-  // 重命名
+  // Rename modal
   const [renameItem, setRenameItem] = useState(null);
   const [renameValue, setRenameValue] = useState('');
 
-  // 目标目录选择器（复制 / 移动）
+  // Item details modal
+  const [detailItem, setDetailItem] = useState(null);
+
+  // Picker modal (Copy / Move destination)
   const [pickerVisible, setPickerVisible] = useState(false);
-  const [pickerMode, setPickerMode] = useState(null);
+  const [pickerMode, setPickerMode] = useState(null); // 'move' | 'copy'
   const [pickerItems, setPickerItems] = useState([]);
-  const [pickerPath, setPickerPath] = useState('');
+  const [pickerPath, setPickerPath] = useState(DEFAULT_ROOT);
   const [pickerFolders, setPickerFolders] = useState([]);
   const [pickerLoading, setPickerLoading] = useState(false);
 
-  useEffect(() => {
-    const loadConfig = async () => {
-      try {
-        const savedUrl = await AsyncStorage.getItem('@dav_url');
-        const savedUser = await AsyncStorage.getItem('@dav_user');
-        const savedPass = await AsyncStorage.getItem('@dav_pass');
-        if (savedUrl) setDavUrl(savedUrl);
-        if (savedUser) setUsername(savedUser);
-        if (savedPass) setPassword(savedPass);
-        if (savedUrl && savedUser && savedPass) {
-          setIsConnected(true);
-          const urlObj = savedUrl.match(/^(https?:\/\/[^\/]+)(.*)$/);
-          setCurrentPath(urlObj && urlObj[2] ? urlObj[2] : '/');
+  // Transfer Manager (Uploads & Downloads)
+  const [isTransferVisible, setIsTransferVisible] = useState(false);
+  const [transfers, setTransfers] = useState([]);
+  const activeTasksRef = useRef({}); // taskId -> FileSystem.UploadTask
+
+  /**
+   * 💡 Real-Time Sync on Screen Focus:
+   * Whenever user navigates to Files tab, check if server URL or token changed in Settings.
+   */
+  useFocusEffect(
+    useCallback(() => {
+      let isMounted = true;
+      const checkAndSyncConfig = async () => {
+        try {
+          const savedUrl = await AsyncStorage.getItem('@server_url');
+          const savedToken = await AsyncStorage.getItem('@api_token');
+
+          if (!savedUrl || !savedToken) {
+            if (isMounted) {
+              setServerUrl('');
+              setApiToken('');
+              setIsConfigured(false);
+              setCheckingAuth(false);
+            }
+            return;
+          }
+
+          // If changed or first load
+          if (savedUrl !== serverUrl || savedToken !== apiToken || !isConfigured) {
+            if (isMounted) {
+              setServerUrl(savedUrl);
+              setApiToken(savedToken);
+              setIsConfigured(true);
+              setCheckingAuth(false);
+              // Fetch file list with updated credentials
+              loadDirectory(savedUrl, savedToken, currentPath || DEFAULT_ROOT);
+            }
+          }
+        } catch (e) {
+          console.log('[FilesScreen] Error syncing config:', e);
+          if (isMounted) setCheckingAuth(false);
         }
-      } catch (e) { console.log(e); } finally { setIsLoading(false); }
-    };
-    loadConfig();
-  }, []);
+      };
 
-  const formatBytes = (bytes) => {
-    if (!bytes || bytes === 0 || bytes === '0') return '-';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
+      checkAndSyncConfig();
+      return () => { isMounted = false; };
+    }, [serverUrl, apiToken, isConfigured, currentPath])
+  );
 
-  const getDirectUrl = (href) => {
-    const originMatch = davUrl.match(/^(https?:\/\/[^\/]+)/);
-    return (originMatch ? originMatch[1] : '') + href;
-  };
-
-  const authHeaders = () => ({ 'Authorization': `Basic ${base64.encode(`${username}:${password}`)}` });
-
-  const testConnection = async () => {
-    if (!davUrl || !username || !password) { Alert.alert('提示', '请完整填写信息'); return; }
-    let cleanUrl = davUrl.trim();
-    if (!cleanUrl.endsWith('/')) cleanUrl += '/';
-    setIsTesting(true);
-    try {
-      const headers = { ...authHeaders(), 'Depth': '1', 'Content-Type': 'application/xml' };
-      let response = await fetch(cleanUrl, { method: 'PROPFIND', headers });
-      if (response.status === 405 && !cleanUrl.endsWith('/dav/')) {
-        const alistUrl = cleanUrl + 'dav/';
-        const retryResponse = await fetch(alistUrl, { method: 'PROPFIND', headers });
-        if (retryResponse.status === 200 || retryResponse.status === 207) {
-          response = retryResponse;
-          cleanUrl = alistUrl;
-        }
-      }
-      if (response.status === 200 || response.status === 207) {
-        await AsyncStorage.setItem('@dav_url', cleanUrl);
-        await AsyncStorage.setItem('@dav_user', username);
-        await AsyncStorage.setItem('@dav_pass', password);
-        const urlObj = cleanUrl.match(/^(https?:\/\/[^\/]+)(.*)$/);
-        setCurrentPath(urlObj && urlObj[2] ? urlObj[2] : '/');
-        setIsConnected(true);
-      } else { Alert.alert('连接失败', `状态码：${response.status}`); }
-    } catch (error) { Alert.alert('网络错误', '无法连接'); } finally { setIsTesting(false); }
-  };
-
-  const fetchDirectory = useCallback(async (targetPath) => {
+  /**
+   * Fetch directory items via Unraid api.php
+   */
+  const loadDirectory = async (baseUrl, token, path) => {
+    if (!baseUrl || !token) return;
     setIsLoadingList(true);
     try {
-      const fullUrl = getDirectUrl(targetPath);
-      const response = await fetch(fullUrl, {
-        method: 'PROPFIND',
-        headers: { ...authHeaders(), 'Depth': '1', 'Content-Type': 'application/xml' },
-      });
-      const xmlText = await response.text();
-      // parseTagValue:false —— 防止纯数字/布尔名称(如 "2024"、"true")被解析成 number/boolean，
-      // 导致后续 name.localeCompare 崩溃(Hermes: undefined is not a function)
-      const parser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true, parseTagValue: false });
-      const result = parser.parse(xmlText);
-      let responses = result?.multistatus?.response;
-      if (!responses) { setFileList([]); setCurrentPath(targetPath); return; }
-      if (!Array.isArray(responses)) responses = [responses];
+      const url = `${baseUrl}/api.php?token=${token}&action=file_list&path=${encodeURIComponent(path)}`;
+      const res = await fetch(url);
+      const data = await res.json();
 
-      const parsedFiles = [];
-      responses.forEach((res) => {
-        let href = typeof res.href === 'string' ? res.href : (res.href && res.href['#text']) || '';
-        if (href.startsWith('http')) {
-          const hMatch = href.match(/^https?:\/\/[^\/]+(.*)$/);
-          href = hMatch ? hMatch[1] : href;
+      if (data.status === 'success') {
+        const items = (data.items || []).map(it => ({
+          ...it,
+          href: it.path, // compatibility with previewUtils
+        }));
+        setFileList(items);
+        setCurrentPath(data.current_path || path);
+      } else {
+        // Fallback to /mnt if /mnt/user was not present
+        if (path === DEFAULT_ROOT && path !== '/mnt') {
+          loadDirectory(baseUrl, token, '/mnt');
+          return;
         }
-        if (href === targetPath || href === targetPath + '/') return;
-        const props = res.propstat?.prop || (Array.isArray(res.propstat) ? res.propstat[0].prop : {});
-        const rt = props.resourcetype;
-        // 兼容不同服务器对 <collection/> 的解析形式（'' 或 true 或空对象）
-        const isFolder = !!rt && (rt.collection === '' || rt.collection === true || (typeof rt === 'object' && rt.collection !== undefined));
-        // displayname 可能缺失或解析为对象({#text})，统一收敛为字符串
-        let displayName = typeof props.displayname === 'string' ? props.displayname
-          : (props.displayname && props.displayname['#text']) || '';
-        if (!displayName) {
-          const parts = href.split('/').filter(p => p !== '');
-          displayName = parts[parts.length - 1] || '未命名';
-          try { displayName = decodeURIComponent(displayName); } catch (e) {}
-        }
-        const name = typeof displayName === 'string' ? displayName : String(displayName);
-        // 记录最后修改时间（getlastmodified）用于详情展示
-        parsedFiles.push({
-          name, href, isFolder,
-          size: props.getcontentlength || 0,
-          mtime: props.getlastmodified || '',
-        });
-      });
-      parsedFiles.sort((a, b) => {
-        if (a.isFolder === b.isFolder) return String(a.name).localeCompare(String(b.name));
-        return a.isFolder ? -1 : 1;
-      });
-      setFileList(parsedFiles);
-      setCurrentPath(targetPath);
-    } catch (error) {
-      // 区分错误类型，给出更具体的提示
-      console.error('[FilesScreen] 读取目录失败 =>', targetPath, '|', error && error.name, error && error.message);
-      if (error && error.stack) console.error('[FilesScreen] 错误堆栈:', error.stack);
-      Alert.alert('读取目录失败', `${error ? error.name + ': ' + error.message : '未知错误'}\n(以上为调试信息，请截图反馈)`);
-    } finally { setIsLoadingList(false); }
-  }, [davUrl, username, password]);
-
-  useEffect(() => {
-    if (isConnected && currentPath) fetchDirectory(currentPath);
-  }, [isConnected]);
+        Alert.alert('读取目录失败', data.message || '服务器拒绝访问');
+      }
+    } catch (e) {
+      console.log('[FilesScreen] loadDirectory error:', e);
+      Alert.alert('网络异常', '无法连接到 Unraid 服务器文件模块');
+    } finally {
+      setIsLoadingList(false);
+      setIsRefreshing(false);
+    }
+  };
 
   const onRefresh = useCallback(async () => {
     setIsRefreshing(true);
-    await fetchDirectory(currentPath);
-    setIsRefreshing(false);
-  }, [currentPath, fetchDirectory]);
+    await loadDirectory(serverUrl, apiToken, currentPath);
+  }, [serverUrl, apiToken, currentPath]);
 
-  const rootPathMatch = davUrl.match(/^(https?:\/\/[^\/]+)(.*)$/);
-  const rootPath = rootPathMatch && rootPathMatch[2] ? rootPathMatch[2] : '/';
-  const isAtRoot = currentPath === rootPath || currentPath === rootPath + '/';
+  // Path navigation helpers
+  const isAtRoot = currentPath === '/mnt' || currentPath === DEFAULT_ROOT;
 
   const goBack = useCallback(() => {
     if (isAtRoot) return;
-    let p = currentPath.endsWith('/') ? currentPath.slice(0, -1) : currentPath;
-    fetchDirectory(p.substring(0, p.lastIndexOf('/') + 1));
-  }, [currentPath, isAtRoot, fetchDirectory]);
+    const p = currentPath.endsWith('/') ? currentPath.slice(0, -1) : currentPath;
+    const parent = p.substring(0, p.lastIndexOf('/')) || '/mnt';
+    loadDirectory(serverUrl, apiToken, parent);
+  }, [currentPath, isAtRoot, serverUrl, apiToken]);
 
-  // 多选
+  // Click & Selection handlers
   const enterMultiSelect = (item) => {
     setMultiSelect(true);
-    setSelected(new Set([item.href]));
+    setSelected(new Set([item.path]));
   };
+
   const exitMultiSelect = () => {
     setMultiSelect(false);
     setSelected(new Set());
   };
+
   const toggleSelect = (item) => {
     setSelected(prev => {
       const next = new Set(prev);
-      if (next.has(item.href)) next.delete(item.href);
-      else next.add(item.href);
+      if (next.has(item.path)) next.delete(item.path);
+      else next.add(item.path);
       return next;
     });
   };
-  const isSelected = (href) => selected.has(href);
+
+  const isSelected = (path) => selected.has(path);
+
   const toggleSelectAll = () => {
-    if (selected.size === fileList.length) setSelected(new Set());
-    else setSelected(new Set(fileList.map(f => f.href)));
+    if (selected.size === filteredFiles.length) setSelected(new Set());
+    else setSelected(new Set(filteredFiles.map(f => f.path)));
   };
 
-  // 长按：进入多选模式（可继续点选多个）
+  const handleFileClick = (item) => {
+    if (multiSelect) {
+      toggleSelect(item);
+      return;
+    }
+    if (item.isFolder) {
+      loadDirectory(serverUrl, apiToken, item.path);
+      return;
+    }
+    setPreviewItem(item);
+  };
+
   const handleLongPress = (item) => {
     if (!multiSelect) enterMultiSelect(item);
     else toggleSelect(item);
   };
 
-  // 点击：文件夹进入；文件交给 FilePreviewer 按类型即时预览
-  const handleFileClick = (item) => {
-    if (multiSelect) { toggleSelect(item); return; }
-    if (item.isFolder) { fetchDirectory(item.href); return; }
-    setPreviewItem(item);
+  // Direct URL helper for previewers
+  const getDirectUrl = (filePath) => {
+    return `${serverUrl}/api.php?token=${apiToken}&action=file_stream&path=${encodeURIComponent(filePath)}`;
   };
 
-  const disconnect = async () => {
-    await AsyncStorage.removeItem('@dav_pass');
-    setIsMenuVisible(false);
-    setIsConnected(false);
-    exitMultiSelect();
-  };
-
-  // 上传：调用手机原生文件管理器，上传后清理临时缓存（释放访问）
+  // =========================================================================
+  // Advanced Upload Task Manager (Create, Pause/Cancel, Resume, Delete record)
+  // =========================================================================
   const handleUpload = async () => {
     setIsMenuVisible(false);
     try {
-      const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
+      const result = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const file = result.assets[0];
-        const newTransfer = { id: Date.now(), name: file.name, type: '上传', status: '正在传输...' };
-        setTransfers(prev => [newTransfer, ...prev]);
+        const taskId = 'up_' + Date.now();
+        const newTask = {
+          id: taskId,
+          name: file.name,
+          uri: file.uri,
+          size: file.size || 0,
+          targetPath: currentPath,
+          type: '上传',
+          status: 'running', // 'running' | 'paused' | 'success' | 'error'
+          progress: 0,
+          speed: '正在准备...',
+        };
+
+        setTransfers(prev => [newTask, ...prev]);
         setIsTransferVisible(true);
-        const targetDir = currentPath.endsWith('/') ? currentPath : currentPath + '/';
-        const uploadUrl = getDirectUrl(targetDir) + encodeURIComponent(file.name);
-        const uploadRes = await FileSystem.uploadAsync(uploadUrl, file.uri, {
-          httpMethod: 'PUT',
-          headers: authHeaders(),
-        });
-        if (uploadRes.status === 201 || uploadRes.status === 204 || uploadRes.status === 200) {
-          setTransfers(prev => prev.map(t => t.id === newTransfer.id ? { ...t, status: '✅ 成功' } : t));
-          fetchDirectory(currentPath);
-        } else {
-          setTransfers(prev => prev.map(t => t.id === newTransfer.id ? { ...t, status: `❌ 失败 (${uploadRes.status})` } : t));
-        }
-        // 上传完成：清理临时缓存副本，即时释放文件访问权限
-        if (file.uri) await FileSystem.deleteAsync(file.uri, { idempotent: true }).catch(() => {});
+        startUploadTask(newTask);
       }
-    } catch (error) { Alert.alert('上传失败', error.message); }
+    } catch (e) {
+      Alert.alert('选择文件异常', e.message);
+    }
   };
 
-  // 下载：写入设置中配置的下载目录
+  const startUploadTask = async (taskItem) => {
+    const uploadUrl = `${serverUrl}/api.php?token=${apiToken}&action=file_upload`;
+    try {
+      const uploadTask = FileSystem.createUploadTask(
+        uploadUrl,
+        taskItem.uri,
+        {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+          httpMethod: 'POST',
+          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+          fieldName: 'file',
+          parameters: {
+            filename: taskItem.name,
+            path: taskItem.targetPath,
+          },
+        },
+        (progressEvent) => {
+          const sent = progressEvent.totalBytesSent;
+          const total = progressEvent.totalBytesExpectedToSend;
+          const pct = total > 0 ? Math.round((sent / total) * 100) : 0;
+          setTransfers(prev => prev.map(t => {
+            if (t.id === taskItem.id) {
+              return { ...t, progress: pct, speed: `${formatBytes(sent)} / ${formatBytes(total)} (${pct}%)` };
+            }
+            return t;
+          }));
+        }
+      );
+
+      activeTasksRef.current[taskItem.id] = uploadTask;
+      const res = await uploadTask.uploadAsync();
+      delete activeTasksRef.current[taskItem.id];
+
+      if (res.status === 200) {
+        setTransfers(prev => prev.map(t => (t.id === taskItem.id ? { ...t, status: 'success', progress: 100, speed: '上传成功' } : t)));
+        // Refresh directory if still viewing destination
+        if (currentPath === taskItem.targetPath) {
+          loadDirectory(serverUrl, apiToken, currentPath);
+        }
+      } else {
+        setTransfers(prev => prev.map(t => (t.id === taskItem.id ? { ...t, status: 'error', speed: `上传失败 (HTTP ${res.status})` } : t)));
+      }
+    } catch (err) {
+      delete activeTasksRef.current[taskItem.id];
+      const isCancelled = err.message && err.message.includes('cancel');
+      setTransfers(prev => prev.map(t => {
+        if (t.id === taskItem.id) {
+          return isCancelled
+            ? { ...t, status: 'paused', speed: '已中断 / 暂停' }
+            : { ...t, status: 'error', speed: `错误: ${err.message}` };
+        }
+        return t;
+      }));
+    }
+  };
+
+  // Pause / Cancel active upload
+  const pauseUploadTask = async (taskId) => {
+    const task = activeTasksRef.current[taskId];
+    if (task) {
+      try {
+        await task.cancelAsync();
+      } catch (e) {}
+      delete activeTasksRef.current[taskId];
+    }
+    setTransfers(prev => prev.map(t => (t.id === taskId ? { ...t, status: 'paused', speed: '已暂停' } : t)));
+  };
+
+  // Resume / Retry upload
+  const resumeUploadTask = (taskItem) => {
+    setTransfers(prev => prev.map(t => (t.id === taskItem.id ? { ...t, status: 'running', speed: '继续传输中...' } : t)));
+    startUploadTask(taskItem);
+  };
+
+  // Delete a single transfer record
+  const deleteTransferRecord = (taskId) => {
+    pauseUploadTask(taskId);
+    setTransfers(prev => prev.filter(t => t.id !== taskId));
+  };
+
+  // Clear completed transfer records
+  const clearCompletedTransfers = () => {
+    setTransfers(prev => prev.filter(t => t.status !== 'success'));
+  };
+
+  // =========================================================================
+  // Download Manager
+  // =========================================================================
   const handleDownload = async (item) => {
     try {
       const dir = await getDownloadDir();
       setPreviewItem(null);
-      const newTransfer = { id: Date.now(), name: item.name, type: '下载', status: '正在传输...' };
-      setTransfers(prev => [newTransfer, ...prev]);
+      const taskId = 'dl_' + Date.now();
+      const newTask = {
+        id: taskId,
+        name: item.name,
+        type: '下载',
+        status: 'running',
+        progress: 0,
+        speed: '正在下载...',
+      };
+      setTransfers(prev => [newTask, ...prev]);
       setIsTransferVisible(true);
+
+      const downloadUrl = getDirectUrl(item.path);
       const localUri = FileSystem.cacheDirectory + 'dl_' + Date.now() + '_' + encodeURIComponent(item.name);
-      const downloadRes = await FileSystem.downloadAsync(getDirectUrl(item.href), localUri, { headers: authHeaders() });
+
+      const res = await FileSystem.downloadAsync(downloadUrl, localUri);
+
       if (dir.uri.startsWith('content://')) {
-        const base64Data = await FileSystem.readAsStringAsync(downloadRes.uri, { encoding: FileSystem.EncodingType.Base64 });
+        const base64Data = await FileSystem.readAsStringAsync(res.uri, { encoding: FileSystem.EncodingType.Base64 });
         const newFileUri = await FileSystem.StorageAccessFramework.createFileAsync(dir.uri, item.name, 'application/octet-stream');
         await FileSystem.writeAsStringAsync(newFileUri, base64Data, { encoding: FileSystem.EncodingType.Base64 });
       } else {
         const destUri = dir.uri + encodeURIComponent(item.name);
-        await FileSystem.copyAsync({ from: downloadRes.uri, to: destUri });
+        await FileSystem.copyAsync({ from: res.uri, to: destUri });
       }
+
       await FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => {});
-      setTransfers(prev => prev.map(t => t.id === newTransfer.id ? { ...t, status: '✅ 成功' } : t));
-    } catch (error) {
-      Alert.alert('下载失败', '网络连接中断或目录不可写');
-      setTransfers(prev => prev.map(t => t.name === item.name && t.status === '正在传输...' ? { ...t, status: '❌ 失败' } : t));
+      setTransfers(prev => prev.map(t => (t.id === taskId ? { ...t, status: 'success', progress: 100, speed: '下载完成' } : t)));
+    } catch (e) {
+      console.log('[FilesScreen] Download error:', e);
+      Alert.alert('下载失败', e.message);
+      setTransfers(prev => prev.map(t => (t.name === item.name && t.status === 'running' ? { ...t, status: 'error', speed: '下载中断' } : t)));
     }
   };
 
-  // 批量下载（仅文件）
   const handleBatchDownload = async () => {
-    const items = fileList.filter(f => selected.has(f.href) && !f.isFolder);
-    if (items.length === 0) { Alert.alert('提示', '请选择要下载的文件（文件夹不可下载）'); return; }
+    const items = fileList.filter(f => selected.has(f.path) && !f.isFolder);
+    if (items.length === 0) {
+      Alert.alert('提示', '请选择要下载的文件（文件夹暂不支持批量打包下载）');
+      return;
+    }
     setPreviewItem(null);
-    for (const item of items) await handleDownload(item);
+    for (const it of items) {
+      await handleDownload(it);
+    }
     exitMultiSelect();
+  };
+
+  // =========================================================================
+  // File & Folder Operations (Mkdir, Rename, Delete, Move, Copy)
+  // =========================================================================
+  const confirmCreateFolder = async () => {
+    const name = newFolderName.trim();
+    if (!name) return;
+    try {
+      const url = `${serverUrl}/api.php?token=${apiToken}&action=file_mkdir&path=${encodeURIComponent(currentPath)}&name=${encodeURIComponent(name)}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.status === 'success') {
+        setMkdirVisible(false);
+        setNewFolderName('');
+        loadDirectory(serverUrl, apiToken, currentPath);
+      } else {
+        Alert.alert('创建失败', data.message || '服务器拒绝创建');
+      }
+    } catch (e) {
+      Alert.alert('异常', e.message);
+    }
+  };
+
+  const confirmRename = async () => {
+    const newName = renameValue.trim();
+    if (!newName || !renameItem) return;
+    if (newName === renameItem.name) {
+      setRenameItem(null);
+      return;
+    }
+    try {
+      const url = `${serverUrl}/api.php?token=${apiToken}&action=file_rename&path=${encodeURIComponent(renameItem.path)}&new_name=${encodeURIComponent(newName)}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.status === 'success') {
+        setRenameItem(null);
+        loadDirectory(serverUrl, apiToken, currentPath);
+      } else {
+        Alert.alert('重命名失败', data.message || '服务器拒绝');
+      }
+    } catch (e) {
+      Alert.alert('异常', e.message);
+    }
   };
 
   const doDelete = async (item) => {
     try {
-      const res = await fetch(getDirectUrl(item.href), { method: 'DELETE', headers: authHeaders() });
-      if (res.status === 200 || res.status === 204) { fetchDirectory(currentPath); return true; }
-      Alert.alert('删除失败', `服务器拒绝执行 (HTTP ${res.status})`);
+      const url = `${serverUrl}/api.php?token=${apiToken}&action=file_delete&path=${encodeURIComponent(item.path)}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      return data.status === 'success';
+    } catch (e) {
       return false;
-    } catch (error) { Alert.alert('删除出错', error.message); return false; }
-  };
-
-  const handleDelete = (item) => {
-    Alert.alert('确认删除', `确定要彻底删除 ${item.isFolder ? '文件夹' : '文件'} \n"${item.name}" 吗？\n此操作不可恢复！`, [
-      { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: async () => {
-          const ok = await doDelete(item);
-          if (ok) setDetailItem(null);
-        }
-      }
-    ]);
-  };
-
-  const handleBatchDelete = () => {
-    const items = fileList.filter(f => selected.has(f.href));
-    if (items.length === 0) return;
-    Alert.alert('批量删除', `确定要删除选中的 ${items.length} 个${items.every(i => i.isFolder) ? '文件夹' : '项目'}吗？\n此操作不可恢复！`, [
-      { text: '取消', style: 'cancel' },
-      { text: '全部删除', style: 'destructive', onPress: async () => {
-          let ok = true;
-          for (const item of items) {
-            if (!(await doDelete(item))) { ok = false; break; }
-          }
-          if (ok) exitMultiSelect();
-        }
-      }
-    ]);
-  };
-
-  // 详情：底部操作栏「详情」，单选一个
-
-
-  // 统计文件夹内的条目数量（用于详情展示）
-  const countChildren = async (href) => {
-    try {
-      const response = await fetch(getDirectUrl(href), {
-        method: 'PROPFIND',
-        headers: { ...authHeaders(), 'Depth': '1', 'Content-Type': 'application/xml' },
-      });
-      const xmlText = await response.text();
-      const parser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true });
-      const result = parser.parse(xmlText);
-      let responses = result?.multistatus?.response;
-      if (!responses) return 0;
-      if (!Array.isArray(responses)) responses = [responses];
-      return responses.filter(r => (r.href !== href && r.href !== href + '/')).length;
-    } catch (e) { return 0; }
-  };
-
-  const openDetail = () => {
-    const items = fileList.filter(f => selected.has(f.href));
-    if (items.length !== 1) { Alert.alert('提示', '详情操作仅支持单选一个文件/文件夹'); return; }
-    exitMultiSelect();
-    const target = items[0];
-    setDetailItem(target);
-    // 计算文件夹的下级数量
-    if (target.isFolder) {
-      setDetailInfo({ childCount: null, isCounting: true });
-      countChildren(target.href).then(c => setDetailInfo({ childCount: c, isCounting: false }));
-    } else {
-      setDetailInfo({ childCount: null, isCounting: false });
     }
   };
 
-  // 重命名（WebDAV MOVE 到同目录新名）
-  const openRename = (item) => {
-    setDetailItem(null);
-    setRenameItem(item);
-    setRenameValue(item.name);
-  };
-  const confirmRename = async () => {
-    const newName = renameValue.trim();
-    if (!newName) return;
-    if (newName === renameItem.name) { setRenameItem(null); return; }
-    try {
-      const srcPath = renameItem.href.endsWith('/') ? renameItem.href.slice(0, -1) : renameItem.href;
-      const parentDir = srcPath.substring(0, srcPath.lastIndexOf('/') + 1);
-      const destUrl = getDirectUrl(parentDir) + encodeURIComponent(newName);
-      const res = await fetch(getDirectUrl(renameItem.href), {
-        method: 'MOVE',
-        headers: { ...authHeaders(), 'Destination': destUrl },
-      });
-      if (res.status === 201 || res.status === 204 || res.status === 200) {
-        setRenameItem(null);
-        fetchDirectory(currentPath);
-      } else { Alert.alert('重命名失败', `服务器拒绝执行 (HTTP ${res.status})`); }
-    } catch (error) { Alert.alert('重命名出错', error.message); }
+  const handleDelete = (item) => {
+    Alert.alert(
+      '确认删除',
+      `确定彻底删除 ${item.isFolder ? '文件夹' : '文件'} \n"${item.name}" 吗？\n此操作不可撤销！`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '彻底删除',
+          style: 'destructive',
+          onPress: async () => {
+            const ok = await doDelete(item);
+            if (ok) {
+              setDetailItem(null);
+              loadDirectory(serverUrl, apiToken, currentPath);
+            } else {
+              Alert.alert('删除失败', '服务器拒绝删除，请检查权限');
+            }
+          }
+        }
+      ]
+    );
   };
 
-  // 目标目录选择器（复制 / 移动）
+  const handleBatchDelete = () => {
+    const items = fileList.filter(f => selected.has(f.path));
+    if (items.length === 0) return;
+    Alert.alert(
+      '批量删除',
+      `确定要删除选中的 ${items.length} 个项目吗？\n此操作不可恢复！`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '全部删除',
+          style: 'destructive',
+          onPress: async () => {
+            for (const item of items) {
+              await doDelete(item);
+            }
+            exitMultiSelect();
+            loadDirectory(serverUrl, apiToken, currentPath);
+          }
+        }
+      ]
+    );
+  };
+
+  // Target directory picker for Move / Copy
   const openPicker = async (mode, items) => {
     setPickerMode(mode);
     setPickerItems(items);
     setDetailItem(null);
     exitMultiSelect();
     setPickerVisible(true);
-    setPickerPath(rootPath);
-    await loadPickerFolders(rootPath);
+    setPickerPath(DEFAULT_ROOT);
+    await loadPickerFolders(DEFAULT_ROOT);
   };
+
   const loadPickerFolders = async (path) => {
     setPickerLoading(true);
     try {
-      const response = await fetch(getDirectUrl(path), {
-        method: 'PROPFIND',
-        headers: { ...authHeaders(), 'Depth': '1', 'Content-Type': 'application/xml' },
-      });
-      const xmlText = await response.text();
-      // parseTagValue:false —— 防止纯数字/布尔名称被解析成 number/boolean 导致 localeCompare 崩溃
-      const parser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true, parseTagValue: false });
-      const result = parser.parse(xmlText);
-      let responses = result?.multistatus?.response;
-      if (!responses) { setPickerFolders([]); setPickerPath(path); return; }
-      if (!Array.isArray(responses)) responses = [responses];
-      const folders = [];
-      responses.forEach((res) => {
-        let href = typeof res.href === 'string' ? res.href : (res.href && res.href['#text']) || '';
-        if (href.startsWith('http')) {
-          const hMatch = href.match(/^https?:\/\/[^\/]+(.*)$/);
-          href = hMatch ? hMatch[1] : href;
-        }
-        if (href === path || href === path + '/') return;
-        const props = res.propstat?.prop || (Array.isArray(res.propstat) ? res.propstat[0].prop : {});
-        const rt = props.resourcetype;
-        const isFolder = !!rt && (rt.collection === '' || rt.collection === true || (typeof rt === 'object' && rt.collection !== undefined));
-        if (!isFolder) return;
-        // displayname 可能缺失或解析为对象({#text})，统一收敛为字符串
-        let displayName = typeof props.displayname === 'string' ? props.displayname
-          : (props.displayname && props.displayname['#text']) || '';
-        if (!displayName) {
-          const parts = href.split('/').filter(p => p !== '');
-          displayName = parts[parts.length - 1] || '未命名';
-          try { displayName = decodeURIComponent(displayName); } catch (e) {}
-        }
-        folders.push({ name: typeof displayName === 'string' ? displayName : String(displayName), href });
-      });
-      folders.sort((a, b) => String(a.name).localeCompare(String(b.name)));
-      setPickerFolders(folders);
-      setPickerPath(path);
-    } catch (error) {
-      console.error('[FilesScreen] 读取目标目录失败 =>', path, '|', error && error.name, error && error.message);
-      if (error && error.stack) console.error('[FilesScreen] 错误堆栈:', error.stack);
-      Alert.alert('读取目录失败', `${error ? error.name + ': ' + error.message : '未知错误'}\n(以上为调试信息，请截图反馈)`);
-    } finally { setPickerLoading(false); }
-  };
-  const pickerGoUp = () => {
-    if (pickerPath === rootPath || pickerPath === rootPath + '/') return;
-    let p = pickerPath.endsWith('/') ? pickerPath.slice(0, -1) : pickerPath;
-    loadPickerFolders(p.substring(0, p.lastIndexOf('/') + 1));
-  };
-  const pickerEnter = (folder) => loadPickerFolders(folder.href);
-  const isSameDir = (item) => {
-    const srcPath = item.href.endsWith('/') ? item.href.slice(0, -1) : item.href;
-    const parentDir = srcPath.substring(0, srcPath.lastIndexOf('/') + 1);
-    const target = pickerPath.endsWith('/') ? pickerPath : pickerPath + '/';
-    return parentDir === target;
-  };
-  const confirmPicker = async () => {
-    const targetPath = pickerPath.endsWith('/') ? pickerPath : pickerPath + '/';
-    const conflict = pickerItems.filter(it => isSameDir(it));
-    if (conflict.length > 0) {
-      Alert.alert('无法操作', '目标目录与部分文件的当前位置相同，请选择其他目录或重命名后再试。');
-      return;
-    }
-    setPickerVisible(false);
-    setPickerLoading(true);
-    try {
-      const method = pickerMode === 'move' ? 'MOVE' : 'COPY';
-      let successCount = 0;
-      for (const item of pickerItems) {
-        const destUrl = getDirectUrl(targetPath) + encodeURIComponent(item.name);
-        try {
-          const res = await fetch(getDirectUrl(item.href), {
-            method,
-            headers: { ...authHeaders(), 'Destination': destUrl },
-          });
-          if (res.status === 201 || res.status === 204 || res.status === 200) successCount++;
-        } catch (e) {}
+      const url = `${serverUrl}/api.php?token=${apiToken}&action=file_list&path=${encodeURIComponent(path)}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.status === 'success') {
+        const folders = (data.items || []).filter(it => it.isFolder);
+        setPickerFolders(folders);
+        setPickerPath(data.current_path || path);
       }
-      if (successCount > 0) {
-        Alert.alert('操作完成', `${pickerMode === 'move' ? '移动' : '复制'}完成 ${successCount} 个项`);
-        fetchDirectory(currentPath);
-      } else { Alert.alert('操作失败', '服务器拒绝了所有请求，请检查权限。'); }
-    } catch (error) { Alert.alert('操作失败', error.message); } finally { setPickerLoading(false); }
+    } catch (e) {
+      console.log('[FilesScreen] picker load error:', e);
+    } finally {
+      setPickerLoading(false);
+    }
   };
 
+  const pickerGoUp = () => {
+    if (pickerPath === '/mnt' || pickerPath === DEFAULT_ROOT) return;
+    const p = pickerPath.endsWith('/') ? pickerPath.slice(0, -1) : pickerPath;
+    const parent = p.substring(0, p.lastIndexOf('/')) || '/mnt';
+    loadPickerFolders(parent);
+  };
+
+  const confirmPicker = async () => {
+    setPickerVisible(false);
+    setIsLoadingList(true);
+    const action = pickerMode === 'move' ? 'file_move' : 'file_copy';
+    let count = 0;
+    for (const it of pickerItems) {
+      try {
+        const url = `${serverUrl}/api.php?token=${apiToken}&action=${action}&source=${encodeURIComponent(it.path)}&target=${encodeURIComponent(pickerPath)}`;
+        const res = await fetch(url);
+        const json = await res.json();
+        if (json.status === 'success') count++;
+      } catch (e) {}
+    }
+    Alert.alert('操作完成', `${pickerMode === 'move' ? '移动' : '复制'}成功 ${count} 个项目`);
+    loadDirectory(serverUrl, apiToken, currentPath);
+  };
+
+  // Hardware back button navigation
   useEffect(() => {
     const onBackPress = () => {
       if (previewItem) { setPreviewItem(null); return true; }
@@ -504,20 +549,23 @@ export default function FilesScreen({ navigation }) {
       if (pickerVisible) { setPickerVisible(false); return true; }
       if (renameItem) { setRenameItem(null); return true; }
       if (detailItem) { setDetailItem(null); return true; }
-      if (isConnected && !isAtRoot) { goBack(); return true; }
+      if (isConfigured && !isAtRoot) { goBack(); return true; }
       return false;
     };
     BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => BackHandler.removeEventListener('hardwareBackPress', onBackPress);
-  }, [isConnected, isAtRoot, goBack, previewItem, multiSelect, pickerVisible, renameItem, detailItem]);
+  }, [isConfigured, isAtRoot, goBack, previewItem, multiSelect, pickerVisible, renameItem, detailItem]);
 
+  // Header configuration
   useLayoutEffect(() => {
-    if (!isConnected) {
-      navigation.setOptions({ title: '连接文件库', headerLeft: null, headerRight: null });
+    if (!isConfigured) {
+      navigation.setOptions({ title: 'Unraid 文件库', headerLeft: null, headerRight: null });
       return;
     }
-    const pathParts = currentPath.split('/').filter(Boolean);
-    const titleName = isAtRoot ? '根目录' : decodeURIComponent(pathParts[pathParts.length - 1]);
+
+    const pathSegments = currentPath.split('/').filter(Boolean);
+    const titleName = isAtRoot ? '根共享库 (/mnt/user)' : decodeURIComponent(pathSegments[pathSegments.length - 1] || '文件');
+
     if (multiSelect) {
       navigation.setOptions({
         title: `已选 ${selected.size} 项`,
@@ -530,6 +578,7 @@ export default function FilesScreen({ navigation }) {
       });
       return;
     }
+
     navigation.setOptions({
       title: titleName,
       headerLeft: () => (
@@ -548,66 +597,157 @@ export default function FilesScreen({ navigation }) {
             <Plus color={colors.textStrong} size={28} />
           </TouchableOpacity>
         </View>
-      )
+      ),
     });
-  }, [navigation, isConnected, currentPath, isAtRoot, goBack, multiSelect, selected.size, colors, styles]);
+  }, [navigation, isConfigured, currentPath, isAtRoot, goBack, multiSelect, selected.size, colors, styles]);
 
-  if (isLoading) return <View style={styles.center}><ActivityIndicator size="large" color={colors.accent} /></View>;
+  // Filter & Sorting
+  const filteredFiles = useMemo(() => {
+    let list = [...fileList];
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter(f => f.name.toLowerCase().includes(q));
+    }
+    list.sort((a, b) => {
+      if (a.isFolder && !b.isFolder) return -1;
+      if (!a.isFolder && b.isFolder) return 1;
+      if (sortBy === 'name') return a.name.localeCompare(b.name);
+      if (sortBy === 'size') return (b.size || 0) - (a.size || 0);
+      if (sortBy === 'date') return (b.mtime || '').localeCompare(a.mtime || '');
+      return 0;
+    });
+    return list;
+  }, [fileList, searchQuery, sortBy]);
 
-  if (!isConnected) {
+  // If checking authentication
+  if (checkingAuth) {
     return (
-      <KeyboardAvoidingView style={styles.center} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={colors.accent} />
+      </View>
+    );
+  }
+
+  // If Unraid not configured in settings
+  if (!isConfigured) {
+    return (
+      <View style={styles.center}>
         <View style={styles.setupCard}>
-          <HardDrive color={colors.accent} size={48} style={{ alignSelf: 'center', marginBottom: 16 }} />
-          <Text style={styles.setupTitle}>连接 WebDAV</Text>
-          <Text style={styles.setupSub}>请输入 Unraid AList 的 WebDAV 服务详情</Text>
-          <View style={styles.inputContainer}><Server color={colors.sub} size={20} style={styles.inputIcon} /><TextInput style={styles.input} placeholder="https://alist.bbb.ccc:123" placeholderTextColor={colors.muted} value={davUrl} onChangeText={setDavUrl} autoCapitalize="none" keyboardType="url" /></View>
-          <View style={styles.inputContainer}><User color={colors.sub} size={20} style={styles.inputIcon} /><TextInput style={styles.input} placeholder="用户名" placeholderTextColor={colors.muted} value={username} onChangeText={setUsername} autoCapitalize="none" /></View>
-          <View style={styles.inputContainer}><Key color={colors.sub} size={20} style={styles.inputIcon} /><TextInput style={styles.input} placeholder="密码" placeholderTextColor={colors.muted} value={password} onChangeText={setPassword} secureTextEntry={true} /></View>
-          <TouchableOpacity style={styles.saveBtn} onPress={testConnection} disabled={isTesting}>{isTesting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.saveBtnText}>测试并连接</Text>}</TouchableOpacity>
+          <Server color={colors.accent} size={52} style={{ alignSelf: 'center', marginBottom: 16 }} />
+          <Text style={styles.setupTitle}>未连接 Unraid 服务器</Text>
+          <Text style={styles.setupSub}>
+            文件管理直接接入 Unraid 统一 API 核心，无需搭建繁琐的 WebDAV 服务。请先在「设置」页配置服务器地址与 API Token。
+          </Text>
+          <TouchableOpacity
+            style={styles.saveBtn}
+            onPress={() => navigation.navigate('设置')}
+          >
+            <Settings color="#ffffff" size={18} style={{ marginRight: 8 }} />
+            <Text style={styles.saveBtnText}>前往设置连接</Text>
+          </TouchableOpacity>
         </View>
-      </KeyboardAvoidingView>
+      </View>
     );
   }
 
   return (
     <View style={styles.fileContainer}>
+      {/* Path Breadcrumb & Search Bar */}
+      <View style={styles.topFilterBar}>
+        <View style={styles.searchBox}>
+          <Search color={colors.muted} size={18} style={{ marginRight: 8 }} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="搜索当前目录..."
+            placeholderTextColor={colors.muted}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <X color={colors.muted} size={18} />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <TouchableOpacity
+          style={styles.sortToggleBtn}
+          onPress={() => {
+            const modes = ['name', 'date', 'size'];
+            const next = modes[(modes.indexOf(sortBy) + 1) % modes.length];
+            setSortBy(next);
+          }}
+        >
+          <Text style={styles.sortToggleText}>
+            {sortBy === 'name' ? '名称' : sortBy === 'date' ? '时间' : '大小'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* File List */}
       {isLoadingList && !isRefreshing ? (
-        <View style={styles.listCenter}><ActivityIndicator size="large" color={colors.accent} /></View>
+        <View style={styles.listCenter}>
+          <ActivityIndicator size="large" color={colors.accent} />
+          <Text style={[styles.emptyText, { marginTop: 12 }]}>正在加载文件列表...</Text>
+        </View>
       ) : (
         <ScrollView
           style={styles.listScroll}
           contentContainerStyle={styles.listContent}
-          refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={colors.accent} colors={[colors.accent]} />}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.accent}
+              colors={[colors.accent]}
+            />
+          }
         >
-          {fileList.length === 0 ? (
-            <View style={styles.listCenter}><Text style={styles.emptyText}>空文件夹，下拉可刷新</Text></View>
+          {filteredFiles.length === 0 ? (
+            <View style={styles.listCenter}>
+              <FolderOpen color={colors.muted} size={48} style={{ marginBottom: 12 }} />
+              <Text style={styles.emptyText}>当前目录无内容，下拉可刷新</Text>
+            </View>
           ) : (
-            fileList.map((item, index) => {
-              const sel = isSelected(item.href);
+            filteredFiles.map((item, index) => {
+              const sel = isSelected(item.path);
               return (
                 <TouchableOpacity
                   key={index}
                   style={[styles.fileRow, sel && styles.fileRowSelected]}
                   onPress={() => handleFileClick(item)}
                   onLongPress={() => handleLongPress(item)}
-                  delayLongPress={450}
+                  delayLongPress={350}
                 >
                   <View style={styles.fileIconBox}>
-                    {item.isFolder ? <Folder color={colors.accent} size={24} fill="rgba(59, 130, 246, 0.2)" /> : <File color={colors.sub} size={24} />}
+                    {item.isFolder ? (
+                      <Folder color={colors.accent} size={24} fill="rgba(59, 130, 246, 0.2)" />
+                    ) : (
+                      <File color={colors.sub} size={24} />
+                    )}
                   </View>
+
                   <View style={styles.fileInfo}>
                     <Text style={styles.fileName} numberOfLines={1}>{item.name}</Text>
-                    {!item.isFolder && <Text style={styles.fileSize}>{formatBytes(item.size)}</Text>}
+                    <View style={styles.fileMetaRow}>
+                      <Text style={styles.fileSize}>
+                        {item.isFolder ? '文件夹' : formatBytes(item.size)}
+                      </Text>
+                      {item.mtime ? <Text style={styles.fileDate}>{item.mtime}</Text> : null}
+                    </View>
                   </View>
-                  {/* 💡 右侧多选框（仅多选模式显示） */}
+
                   {multiSelect && (
                     <TouchableOpacity
                       style={styles.checkbox}
                       onPress={() => toggleSelect(item)}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
                     >
-                      {sel ? <CheckCircle color={colors.accent} size={24} /> : <Circle color={colors.muted} size={24} />}
+                      {sel ? (
+                        <CheckCircle color={colors.accent} size={24} />
+                      ) : (
+                        <Circle color={colors.muted} size={24} />
+                      )}
                     </TouchableOpacity>
                   )}
                 </TouchableOpacity>
@@ -617,135 +757,134 @@ export default function FilesScreen({ navigation }) {
         </ScrollView>
       )}
 
-      {/* 💡 多选底部操作栏：下载/删除/移动/复制/详情 */}
+      {/* Multi-Select Bottom Action Bar */}
       {multiSelect && (
         <View style={styles.bottomBar}>
           <View style={styles.bottomBarTop}>
             <Text style={styles.bottomBarCount}>已选 {selected.size} 项</Text>
             <TouchableOpacity onPress={toggleSelectAll}>
-              <Text style={styles.bottomBarSelectAll}>{selected.size === fileList.length ? '取消全选' : '全选'}</Text>
+              <Text style={styles.bottomBarSelectAll}>
+                {selected.size === filteredFiles.length ? '取消全选' : '全选'}
+              </Text>
             </TouchableOpacity>
           </View>
+
           <View style={styles.bottomBarBtns}>
             <TouchableOpacity style={styles.bottomBarBtn} onPress={handleBatchDownload}>
               <Download color={colors.accent} size={22} />
               <Text style={styles.bottomBarBtnText}>下载</Text>
             </TouchableOpacity>
+
             <TouchableOpacity style={styles.bottomBarBtn} onPress={handleBatchDelete}>
               <Trash2 color={colors.red} size={22} />
               <Text style={[styles.bottomBarBtnText, { color: colors.red }]}>删除</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.bottomBarBtn} onPress={() => openPicker('move', fileList.filter(f => selected.has(f.href)))}>
+
+            <TouchableOpacity
+              style={styles.bottomBarBtn}
+              onPress={() => openPicker('move', fileList.filter(f => selected.has(f.path)))}
+            >
               <MoveRight color={colors.accent} size={22} />
               <Text style={styles.bottomBarBtnText}>移动</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.bottomBarBtn} onPress={() => openPicker('copy', fileList.filter(f => selected.has(f.href)))}>
+
+            <TouchableOpacity
+              style={styles.bottomBarBtn}
+              onPress={() => openPicker('copy', fileList.filter(f => selected.has(f.path)))}
+            >
               <Copy color={colors.accent} size={22} />
               <Text style={styles.bottomBarBtnText}>复制</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.bottomBarBtn} onPress={openDetail}>
-              <Info color={colors.amber} size={22} />
-              <Text style={styles.bottomBarBtnText}>详情</Text>
-            </TouchableOpacity>
+
+            {selected.size === 1 && (
+              <TouchableOpacity
+                style={styles.bottomBarBtn}
+                onPress={() => {
+                  const target = fileList.find(f => selected.has(f.path));
+                  exitMultiSelect();
+                  setDetailItem(target);
+                }}
+              >
+                <Info color={colors.amber} size={22} />
+                <Text style={styles.bottomBarBtnText}>详情</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       )}
 
-      {/* 全屏沉浸式文件预览器（渲染与加载逻辑已内聚到 FilePreviewer） */}
+      {/* Modernized File Previewer */}
       <FilePreviewer
         item={previewItem}
+        serverUrl={serverUrl}
+        apiToken={apiToken}
         getDirectUrl={getDirectUrl}
-        authHeaders={authHeaders}
         onClose={() => setPreviewItem(null)}
         onDownload={handleDownload}
       />
 
-      {/* 右上角下拉菜单 */}
-      <Modal visible={isMenuVisible} transparent={true} animationType="fade" onRequestClose={() => setIsMenuVisible(false)}>
+      {/* Dropdown Menu (Top-Right Plus) */}
+      <Modal visible={isMenuVisible} transparent animationType="fade" onRequestClose={() => setIsMenuVisible(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setIsMenuVisible(false)}>
           <View style={styles.dropdownMenu}>
             <TouchableOpacity style={styles.menuItem} onPress={handleUpload}>
-              <UploadCloud color={colors.text} size={20} /><Text style={styles.menuText}>上传文件</Text>
+              <UploadCloud color={colors.text} size={20} />
+              <Text style={styles.menuText}>上传文件</Text>
             </TouchableOpacity>
             <View style={styles.divider} />
-            <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); Alert.alert('提示', '新建功能开发中'); }}>
-              <FolderPlus color={colors.text} size={20} /><Text style={styles.menuText}>新建文件夹</Text>
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                setIsMenuVisible(false);
+                setNewFolderName('');
+                setMkdirVisible(true);
+              }}
+            >
+              <FolderPlus color={colors.text} size={20} />
+              <Text style={styles.menuText}>新建文件夹</Text>
             </TouchableOpacity>
             <View style={styles.divider} />
-            <TouchableOpacity style={styles.menuItem} onPress={disconnect}>
-              <LogOut color={colors.red} size={20} /><Text style={[styles.menuText, { color: colors.red }]}>断开 WebDAV</Text>
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                setIsMenuVisible(false);
+                onRefresh();
+              }}
+            >
+              <RefreshCw color={colors.text} size={20} />
+              <Text style={styles.menuText}>刷新目录</Text>
             </TouchableOpacity>
           </View>
         </Pressable>
       </Modal>
 
-      {/* 文件详情（底部操作栏「详情」触发） */}
-      <Modal visible={!!detailItem} transparent={true} animationType="fade" onRequestClose={() => setDetailItem(null)}>
-        <Pressable style={styles.modalOverlay} onPress={() => setDetailItem(null)}>
-          <View style={styles.actionSheet}>
-            <View style={styles.detailHeader}>
-              {detailItem?.isFolder
-                ? <Folder color={colors.accent} size={40} fill="rgba(59, 130, 246, 0.2)" />
-                : <File color={colors.sub} size={40} />}
-              <Text style={styles.detailName} numberOfLines={2}>{detailItem?.name}</Text>
-            </View>
-            <View style={styles.detailRows}>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>类型</Text>
-                <Text style={styles.detailValue}>{detailItem?.isFolder ? '文件夹' : '文件'}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>大小</Text>
-                <Text style={styles.detailValue}>{detailItem?.isFolder ? '-' : formatBytes(detailItem?.size)}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>下级数量</Text>
-                <Text style={styles.detailValue}>
-                  {detailItem?.isFolder
-                    ? (detailInfo?.isCounting ? '统计中…' : (detailInfo?.childCount ?? 0) + ' 项')
-                    : '-'}
-                </Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>修改时间</Text>
-                <Text style={styles.detailValue}>{detailItem?.mtime || '未知'}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>路径</Text>
-                <Text style={styles.detailValue} numberOfLines={1}>{detailItem?.href}</Text>
-              </View>
-            </View>
-            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
-              <TouchableOpacity
-                style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.input, borderRadius: 12, paddingVertical: 12 }}
-                onPress={() => openRename(detailItem)}
-              >
-                <Pencil color={colors.accent} size={18} style={{ marginRight: 6 }} />
-                <Text style={{ color: colors.textStrong, fontSize: 14, fontWeight: 'bold' }}>重命名</Text>
+      {/* Create Folder Modal */}
+      <Modal visible={mkdirVisible} transparent animationType="fade" onRequestClose={() => setMkdirVisible(false)}>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.renameBox}>
+            <Text style={styles.renameTitle}>新建文件夹</Text>
+            <TextInput
+              style={styles.renameInput}
+              value={newFolderName}
+              onChangeText={setNewFolderName}
+              autoFocus
+              placeholder="请输入文件夹名称"
+              placeholderTextColor={colors.muted}
+            />
+            <View style={styles.renameBtns}>
+              <TouchableOpacity style={[styles.renameBtn, { backgroundColor: colors.input }]} onPress={() => setMkdirVisible(false)}>
+                <Text style={styles.renameBtnText}>取消</Text>
               </TouchableOpacity>
-              {!detailItem?.isFolder && (
-                <TouchableOpacity
-                  style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.input, borderRadius: 12, paddingVertical: 12 }}
-                  onPress={() => {
-                    const item = detailItem;
-                    setDetailItem(null);
-                    handleDownload(item);
-                  }}
-                >
-                  <Download color={colors.accent} size={18} style={{ marginRight: 6 }} />
-                  <Text style={{ color: colors.textStrong, fontSize: 14, fontWeight: 'bold' }}>下载</Text>
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity style={[styles.renameBtn, { backgroundColor: colors.accent }]} onPress={confirmCreateFolder}>
+                <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>创建</Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity style={styles.actionSheetCancel} onPress={() => setDetailItem(null)}>
-              <Text style={styles.actionSheetCancelText}>关闭</Text>
-            </TouchableOpacity>
           </View>
-        </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
 
-      {/* 重命名对话框 */}
-      <Modal visible={!!renameItem} transparent={true} animationType="fade" onRequestClose={() => setRenameItem(null)}>
+      {/* Rename Modal */}
+      <Modal visible={!!renameItem} transparent animationType="fade" onRequestClose={() => setRenameItem(null)}>
         <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={styles.renameBox}>
             <Text style={styles.renameTitle}>重命名</Text>
@@ -763,14 +902,90 @@ export default function FilesScreen({ navigation }) {
                 <Text style={styles.renameBtnText}>取消</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.renameBtn, { backgroundColor: colors.accent }]} onPress={confirmRename}>
-                <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>确定</Text>
+                <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>保存</Text>
               </TouchableOpacity>
             </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* 目标目录选择器（复制 / 移动） */}
+      {/* Item Details Sheet */}
+      <Modal visible={!!detailItem} transparent animationType="fade" onRequestClose={() => setDetailItem(null)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setDetailItem(null)}>
+          <View style={styles.actionSheet}>
+            <View style={styles.detailHeader}>
+              {detailItem?.isFolder ? (
+                <Folder color={colors.accent} size={40} fill="rgba(59, 130, 246, 0.2)" />
+              ) : (
+                <File color={colors.sub} size={40} />
+              )}
+              <Text style={styles.detailName} numberOfLines={2}>{detailItem?.name}</Text>
+            </View>
+
+            <View style={styles.detailRows}>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>类型</Text>
+                <Text style={styles.detailValue}>{detailItem?.isFolder ? '文件夹' : '文件'}</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>大小</Text>
+                <Text style={styles.detailValue}>{detailItem?.isFolder ? '-' : formatBytes(detailItem?.size)}</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>修改时间</Text>
+                <Text style={styles.detailValue}>{detailItem?.mtime || '未知'}</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>完整路径</Text>
+                <Text style={styles.detailValue} numberOfLines={1}>{detailItem?.path}</Text>
+              </View>
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 12 }}>
+              <TouchableOpacity
+                style={styles.detailActionBtn}
+                onPress={() => {
+                  const it = detailItem;
+                  setDetailItem(null);
+                  setRenameItem(it);
+                  setRenameValue(it.name);
+                }}
+              >
+                <Pencil color={colors.accent} size={18} style={{ marginRight: 6 }} />
+                <Text style={styles.detailActionText}>重命名</Text>
+              </TouchableOpacity>
+
+              {!detailItem?.isFolder && (
+                <TouchableOpacity
+                  style={styles.detailActionBtn}
+                  onPress={() => {
+                    const it = detailItem;
+                    setDetailItem(null);
+                    handleDownload(it);
+                  }}
+                >
+                  <Download color={colors.accent} size={18} style={{ marginRight: 6 }} />
+                  <Text style={styles.detailActionText}>下载</Text>
+                </TouchableOpacity>
+              )}
+
+              <TouchableOpacity
+                style={[styles.detailActionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.12)' }]}
+                onPress={() => handleDelete(detailItem)}
+              >
+                <Trash2 color={colors.red} size={18} style={{ marginRight: 6 }} />
+                <Text style={[styles.detailActionText, { color: colors.red }]}>删除</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity style={styles.actionSheetCancel} onPress={() => setDetailItem(null)}>
+              <Text style={styles.actionSheetCancelText}>关闭</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* Target Directory Picker (Move / Copy) */}
       <Modal visible={pickerVisible} animationType="slide" onRequestClose={() => setPickerVisible(false)}>
         <View style={styles.pickerContainer}>
           <View style={styles.pickerHeader}>
@@ -790,14 +1005,14 @@ export default function FilesScreen({ navigation }) {
             <ScrollView contentContainerStyle={styles.pickerList}>
               <TouchableOpacity style={styles.pickerRow} onPress={pickerGoUp}>
                 <FolderOpen color={colors.accent} size={20} />
-                <Text style={styles.pickerFolderName}>返回上级</Text>
+                <Text style={styles.pickerFolderName}>返回上一级</Text>
               </TouchableOpacity>
               {pickerFolders.length === 0 ? (
-                <View style={styles.listCenter}><Text style={styles.emptyText}>此目录下没有子文件夹</Text></View>
+                <View style={styles.listCenter}><Text style={styles.emptyText}>无子文件夹</Text></View>
               ) : (
                 pickerFolders.map((folder, index) => (
-                  <TouchableOpacity key={index} style={styles.pickerRow} onPress={() => pickerEnter(folder)}>
-                    <FolderOpen color={colors.accent} size={20} />
+                  <TouchableOpacity key={index} style={styles.pickerRow} onPress={() => loadPickerFolders(folder.path)}>
+                    <Folder color={colors.accent} size={20} />
                     <Text style={styles.pickerFolderName} numberOfLines={1}>{folder.name}</Text>
                   </TouchableOpacity>
                 ))
@@ -812,26 +1027,84 @@ export default function FilesScreen({ navigation }) {
         </View>
       </Modal>
 
-      {/* 传输任务中心 */}
+      {/* Advanced Transfer Task Center */}
       <Modal visible={isTransferVisible} animationType="slide" onRequestClose={() => setIsTransferVisible(false)}>
         <View style={styles.transferModal}>
           <View style={styles.transferHeader}>
-            <Text style={styles.transferTitle}>传输任务</Text>
-            <TouchableOpacity onPress={() => setIsTransferVisible(false)}><Text style={styles.closeText}>关闭</Text></TouchableOpacity>
+            <Text style={styles.transferTitle}>传输任务中心</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              {transfers.some(t => t.status === 'success') && (
+                <TouchableOpacity onPress={clearCompletedTransfers}>
+                  <Text style={[styles.closeText, { color: colors.sub, fontSize: 13 }]}>清空已完成</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity onPress={() => setIsTransferVisible(false)}>
+                <Text style={styles.closeText}>关闭</Text>
+              </TouchableOpacity>
+            </View>
           </View>
+
           <ScrollView contentContainerStyle={styles.transferContent}>
             {transfers.length === 0 ? (
-              <View style={[styles.listCenter, { marginTop: 100 }]}><ArrowDownUp color={colors.divider} size={48} style={{ marginBottom: 16 }} /><Text style={styles.emptyText}>没有传输任务</Text></View>
+              <View style={[styles.listCenter, { marginTop: 100 }]}>
+                <ArrowDownUp color={colors.divider} size={54} style={{ marginBottom: 16 }} />
+                <Text style={styles.emptyText}>暂无传输任务记录</Text>
+              </View>
             ) : (
-              transfers.map((item) => (
-                <View key={item.id} style={styles.transferRow}>
-                  <View style={styles.transferIconBox}>{item.type === '上传' ? <UploadCloud color={colors.amber} size={20} /> : <DownloadCloud color={colors.green} size={20} />}</View>
-                  <View style={styles.transferInfo}>
-                    <Text style={styles.transferName} numberOfLines={1}>{item.name}</Text>
-                    <Text style={[styles.transferStatus, { color: item.status.includes('成功') ? colors.green : item.status.includes('失败') ? colors.red : colors.accent }]}>{item.type} - {item.status}</Text>
+              transfers.map((item) => {
+                const isRunning = item.status === 'running';
+                const isPaused = item.status === 'paused';
+                const isSuccess = item.status === 'success';
+                const isError = item.status === 'error';
+
+                return (
+                  <View key={item.id} style={styles.transferRow}>
+                    <View style={styles.transferIconBox}>
+                      {item.type === '上传' ? (
+                        <UploadCloud color={colors.amber} size={22} />
+                      ) : (
+                        <DownloadCloud color={colors.green} size={22} />
+                      )}
+                    </View>
+
+                    <View style={styles.transferInfo}>
+                      <Text style={styles.transferName} numberOfLines={1}>{item.name}</Text>
+                      <Text style={[
+                        styles.transferStatus,
+                        { color: isSuccess ? colors.green : isError ? colors.red : isPaused ? colors.amber : colors.accent }
+                      ]}>
+                        {item.type} · {item.speed}
+                      </Text>
+
+                      {/* Progress Bar */}
+                      {item.type === '上传' && (
+                        <View style={styles.transferProgressBar}>
+                          <View style={[styles.transferProgressFill, { width: `${item.progress || 0}%`, backgroundColor: isSuccess ? colors.green : isError ? colors.red : isPaused ? colors.amber : colors.accent }]} />
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Action buttons (Pause / Resume / Delete record) */}
+                    <View style={styles.transferActions}>
+                      {item.type === '上传' && isRunning && (
+                        <TouchableOpacity style={styles.transferActionBtn} onPress={() => pauseUploadTask(item.id)}>
+                          <Pause color={colors.sub} size={18} />
+                        </TouchableOpacity>
+                      )}
+
+                      {item.type === '上传' && (isPaused || isError) && (
+                        <TouchableOpacity style={styles.transferActionBtn} onPress={() => resumeUploadTask(item)}>
+                          <Play color={colors.accent} size={18} />
+                        </TouchableOpacity>
+                      )}
+
+                      <TouchableOpacity style={styles.transferActionBtn} onPress={() => deleteTransferRecord(item.id)}>
+                        <Trash2 color={colors.sub} size={18} />
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                </View>
-              ))
+                );
+              })
             )}
           </ScrollView>
         </View>
@@ -842,22 +1115,56 @@ export default function FilesScreen({ navigation }) {
 
 const createStyles = (colors) => StyleSheet.create({
   center: { flex: 1, backgroundColor: colors.bg, justifyContent: 'center', padding: 20 },
-  setupCard: { backgroundColor: colors.card, borderRadius: 16, padding: 24, elevation: 5 },
-  setupTitle: { color: colors.textStrong, fontSize: 22, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 },
-  setupSub: { color: colors.sub, fontSize: 13, textAlign: 'center', marginBottom: 24 },
-  inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.input, borderRadius: 8, marginBottom: 16, paddingHorizontal: 12 },
-  inputIcon: { marginRight: 10 },
-  input: { flex: 1, color: colors.textStrong, height: 50, fontSize: 16 },
-  saveBtn: { backgroundColor: colors.accent, height: 50, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
-  saveBtnText: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
+  setupCard: { backgroundColor: colors.card, borderRadius: 20, padding: 28, elevation: 5 },
+  setupTitle: { color: colors.textStrong, fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 10 },
+  setupSub: { color: colors.sub, fontSize: 14, textAlign: 'center', lineHeight: 22, marginBottom: 24 },
+  saveBtn: { backgroundColor: colors.accent, height: 50, borderRadius: 12, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
+  saveBtnText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
 
   headerBtnLeft: { marginLeft: 8, padding: 4 },
   headerBtnGroupRight: { flexDirection: 'row', alignItems: 'center', marginRight: 16 },
   transferIconBtn: { backgroundColor: 'rgba(59, 130, 246, 0.15)', padding: 6, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(59, 130, 246, 0.3)' },
 
   fileContainer: { flex: 1, backgroundColor: colors.bg },
-  listCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', minHeight: 300 },
-  emptyText: { color: colors.muted, fontSize: 16 },
+  topFilterBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: colors.card,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.divider,
+    gap: 8,
+  },
+  searchBox: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.input,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    height: 38,
+  },
+  searchInput: {
+    flex: 1,
+    color: colors.textStrong,
+    fontSize: 14,
+    padding: 0,
+  },
+  sortToggleBtn: {
+    backgroundColor: colors.input,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  sortToggleText: {
+    color: colors.accent,
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+
+  listCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', minHeight: 320 },
+  emptyText: { color: colors.muted, fontSize: 15 },
   listScroll: { flex: 1 },
   listContent: { padding: 12, paddingBottom: 110 },
   fileRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, padding: 12, borderRadius: 12, marginBottom: 8 },
@@ -866,9 +1173,11 @@ const createStyles = (colors) => StyleSheet.create({
   fileIconBox: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.input, borderRadius: 8, marginRight: 12 },
   fileInfo: { flex: 1, justifyContent: 'center' },
   fileName: { color: colors.text, fontSize: 15, fontWeight: '500' },
-  fileSize: { color: colors.sub, fontSize: 12, marginTop: 4 },
+  fileMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 },
+  fileSize: { color: colors.sub, fontSize: 12 },
+  fileDate: { color: colors.muted, fontSize: 11 },
 
-  // 多选底部操作栏
+  // Bottom action bar
   bottomBar: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.divider, paddingTop: 8, paddingBottom: Platform.OS === 'ios' ? 24 : 12, paddingHorizontal: 12, elevation: 8 },
   bottomBarTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4, marginBottom: 8 },
   bottomBarCount: { color: colors.text, fontSize: 13, fontWeight: 'bold' },
@@ -877,29 +1186,27 @@ const createStyles = (colors) => StyleSheet.create({
   bottomBarBtn: { alignItems: 'center', paddingVertical: 6, paddingHorizontal: 12 },
   bottomBarBtnText: { color: colors.text, fontSize: 12, marginTop: 4, fontWeight: 'bold' },
 
-  // 预览相关样式已迁至 components/FilePreviewer.js
+  // Overlays
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  dropdownMenu: { position: 'absolute', top: Platform.OS === 'ios' ? 100 : 60, right: 16, backgroundColor: colors.card, borderRadius: 12, padding: 8, width: 200, elevation: 5 },
+  dropdownMenu: { position: 'absolute', top: Platform.OS === 'ios' ? 100 : 60, right: 16, backgroundColor: colors.card, borderRadius: 12, padding: 8, width: 190, elevation: 5 },
   menuItem: { flexDirection: 'row', alignItems: 'center', padding: 12 },
-  menuText: { color: colors.text, fontSize: 16, marginLeft: 12 },
+  menuText: { color: colors.text, fontSize: 15, marginLeft: 12, fontWeight: '500' },
   divider: { height: 1, backgroundColor: colors.divider, marginVertical: 4 },
 
-  // 详情弹窗
+  // Action sheet details
   actionSheet: { backgroundColor: colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: Platform.OS === 'ios' ? 34 : 20 },
   detailHeader: { alignItems: 'center', marginBottom: 16 },
   detailName: { color: colors.textStrong, fontSize: 16, fontWeight: 'bold', textAlign: 'center', marginTop: 10 },
   detailRows: { backgroundColor: colors.input, borderRadius: 12, padding: 12, marginBottom: 16 },
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6 },
-  detailLabel: { color: colors.sub, fontSize: 13, width: 56 },
+  detailLabel: { color: colors.sub, fontSize: 13, width: 64 },
   detailValue: { color: colors.text, fontSize: 13, flex: 1, textAlign: 'right' },
-  actionGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-  actionBtn: { width: '30%', alignItems: 'center', backgroundColor: colors.input, borderRadius: 12, paddingVertical: 14, marginBottom: 10 },
-  actionBtnDanger: { backgroundColor: 'rgba(239, 68, 68, 0.12)' },
-  actionBtnText: { color: colors.text, fontSize: 12, marginTop: 6, fontWeight: 'bold' },
-  actionSheetCancel: { alignItems: 'center', backgroundColor: colors.input, borderRadius: 12, paddingVertical: 14, marginTop: 6 },
-  actionSheetCancelText: { color: colors.textStrong, fontSize: 16, fontWeight: 'bold' },
+  detailActionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.input, borderRadius: 12, paddingVertical: 12 },
+  detailActionText: { color: colors.textStrong, fontSize: 14, fontWeight: 'bold' },
+  actionSheetCancel: { alignItems: 'center', backgroundColor: colors.input, borderRadius: 12, paddingVertical: 14 },
+  actionSheetCancelText: { color: colors.textStrong, fontSize: 15, fontWeight: 'bold' },
 
-  // 重命名
+  // Rename & Mkdir
   renameBox: { backgroundColor: colors.card, borderRadius: 16, padding: 20, margin: 24 },
   renameTitle: { color: colors.textStrong, fontSize: 17, fontWeight: 'bold', textAlign: 'center', marginBottom: 16 },
   renameInput: { backgroundColor: colors.input, borderRadius: 8, paddingHorizontal: 12, height: 48, color: colors.textStrong, fontSize: 16, marginBottom: 16 },
@@ -907,7 +1214,7 @@ const createStyles = (colors) => StyleSheet.create({
   renameBtn: { flex: 1, borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginHorizontal: 6 },
   renameBtnText: { color: colors.text, fontSize: 15, fontWeight: 'bold' },
 
-  // 目标目录选择器
+  // Target Picker
   pickerContainer: { flex: 1, backgroundColor: colors.bg },
   pickerHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingTop: Platform.OS === 'ios' ? 60 : 16, backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.divider },
   pickerUpBtn: { flexDirection: 'row', alignItems: 'center' },
@@ -921,14 +1228,19 @@ const createStyles = (colors) => StyleSheet.create({
   pickerConfirmBtn: { backgroundColor: colors.accent, borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
   pickerConfirmText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
 
+  // Transfer Modal
   transferModal: { flex: 1, backgroundColor: colors.bg },
   transferHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: Platform.OS === 'ios' ? 60 : 20, backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.divider },
   transferTitle: { color: colors.textStrong, fontSize: 18, fontWeight: 'bold' },
-  closeText: { color: colors.accent, fontSize: 16 },
+  closeText: { color: colors.accent, fontSize: 15, fontWeight: 'bold' },
   transferContent: { padding: 16 },
-  transferRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, padding: 16, borderRadius: 12, marginBottom: 12 },
-  transferIconBox: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.input, justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+  transferRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, padding: 14, borderRadius: 14, marginBottom: 12 },
+  transferIconBox: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.input, justifyContent: 'center', alignItems: 'center', marginRight: 14 },
   transferInfo: { flex: 1 },
-  transferName: { color: colors.text, fontSize: 16, fontWeight: '500', marginBottom: 4 },
-  transferStatus: { fontSize: 13, fontWeight: 'bold' },
+  transferName: { color: colors.text, fontSize: 15, fontWeight: '500', marginBottom: 4 },
+  transferStatus: { fontSize: 12, fontWeight: 'bold' },
+  transferProgressBar: { height: 4, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 2, marginTop: 6, overflow: 'hidden' },
+  transferProgressFill: { height: '100%', borderRadius: 2 },
+  transferActions: { flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 10 },
+  transferActionBtn: { padding: 8, borderRadius: 8, backgroundColor: colors.input },
 });
