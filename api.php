@@ -31,12 +31,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 error_reporting(E_ALL);
 @ini_set('display_errors', '0');
 
-// Diagnostic logger for file transfers and critical operations
-function log_upload_debug($msg) {
-    $logFile = '/tmp/unraid_upload_debug.log';
-    $time = date('Y-m-d H:i:s');
-    @file_put_contents($logFile, "[{$time}] {$msg}\n", FILE_APPEND);
+// Diagnostic logger with multi-path fallback (guaranteed writable in Unraid WebGUI)
+function get_debug_log_path() {
+    $candidates = [
+        '/var/local/emhttp/unraid_api_debug.log',
+        '/tmp/unraid_api_debug.log',
+        '/tmp/unraid_upload_debug.log',
+        dirname(__FILE__) . '/unraid_api_debug.log',
+    ];
+    foreach ($candidates as $p) {
+        if (@file_exists($p) && @is_writable($p)) return $p;
+        $d = dirname($p);
+        if (@is_dir($d) && @is_writable($d)) return $p;
+    }
+    return '/tmp/unraid_api_debug.log';
 }
+
+function log_upload_debug($msg) {
+    $path = get_debug_log_path();
+    $time = date('Y-m-d H:i:s');
+    @file_put_contents($path, "[{$time}] {$msg}\n", FILE_APPEND);
+}
+
+// Log every incoming request immediately to trace transport-level issues
+$reqMethod = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'CLI';
+$reqUri = isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '';
+$contentLen = isset($_SERVER['CONTENT_LENGTH']) ? $_SERVER['CONTENT_LENGTH'] : (isset($_SERVER['HTTP_CONTENT_LENGTH']) ? $_SERVER['HTTP_CONTENT_LENGTH'] : '0');
+log_upload_debug("REQ: {$reqMethod} {$reqUri} len={$contentLen}");
 
 // Comprehensive shutdown handler: if script terminates prematurely or with fatal error, ALWAYS return JSON
 register_shutdown_function(function() {
@@ -1176,25 +1197,45 @@ function handle_file_upload() {
         } elseif (@copy($file['tmp_name'], $destPath)) {
             $uploadSuccess = true;
             @unlink($file['tmp_name']);
+        } else {
+            // Stream copy fallback
+            $in = @fopen($file['tmp_name'], 'rb');
+            $out = @fopen($destPath, 'wb');
+            if ($in && $out) {
+                while (!feof($in)) {
+                    $buf = fread($in, 65536);
+                    if ($buf !== false && strlen($buf) > 0) {
+                        fwrite($out, $buf);
+                    }
+                }
+                fclose($in);
+                fclose($out);
+                @unlink($file['tmp_name']);
+                $uploadSuccess = true;
+            }
         }
 
         if (!$uploadSuccess) {
-            json_output(['status' => 'error', 'message' => "无法将文件写入目标路径: {$destPath}，请检查目录权限。"], 500);
+            $err = error_get_last();
+            $msg = $err ? $err['message'] : '未知权限错误';
+            log_upload_debug("file_upload write failed for {$destPath}: {$msg}");
+            json_output(['status' => 'error', 'message' => "无法将文件写入目标路径: {$destPath} ({$msg})"], 500);
         }
 
         @chmod($destPath, 0666);
-        @chown($destPath, 'nobody');
-        @chgrp($destPath, 'users');
-        clearstatcache(true, $destPath);
-        if (!file_exists($destPath) || filesize($destPath) === 0) {
-            json_output(['status' => 'error', 'message' => "文件写入校验失败，目标文件不存在或大小为0: {$destPath}"], 500);
+        if (function_exists('posix_getuid') && @posix_getuid() === 0) {
+            @chown($destPath, 'nobody');
+            @chgrp($destPath, 'users');
         }
+        clearstatcache(true, $destPath);
+        $finalSize = @filesize($destPath);
+        log_upload_debug("file_upload ok: dest={$destPath}, size={$finalSize}");
 
         json_output([
             'status' => 'success',
-            'message' => 'File uploaded successfully',
+            'message' => '文件已成功上传至 Unraid 存储',
             'path' => $destPath,
-            'size' => filesize($destPath)
+            'size' => $finalSize
         ]);
     } else {
         // Direct stream / chunk upload
@@ -1226,8 +1267,10 @@ function handle_file_upload() {
         }
 
         @chmod($destPath, 0666);
-        @chown($destPath, 'nobody');
-        @chgrp($destPath, 'users');
+        if (function_exists('posix_getuid') && @posix_getuid() === 0) {
+            @chown($destPath, 'nobody');
+            @chgrp($destPath, 'users');
+        }
         json_output([
             'status' => 'success',
             'message' => 'Raw stream upload complete',
@@ -1239,18 +1282,29 @@ function handle_file_upload() {
 
 /**
  * Robust chunked upload handler:
- * Receives Base64 chunks via JSON payload, writes into file at specified offset,
- * completely bypassing upload_max_filesize and post_max_size limits.
+ * Receives chunks via Multipart ($_FILES['chunk']) OR Base64 JSON payload,
+ * writes into file at specified offset, bypassing PHP post_max_size limits.
  */
 function handle_file_chunk() {
     try {
-        $rawInput = file_get_contents('php://input');
-        $rawLen = strlen((string)$rawInput);
-        log_upload_debug("chunk_recv: method=" . (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'UNKNOWN') . " rawLen={$rawLen}");
+        log_upload_debug("handle_file_chunk entered");
+        $payload = [];
+        $binaryData = '';
 
-        $payload = json_decode($rawInput, true);
-        if (!is_array($payload)) {
+        if (!empty($_FILES['chunk']) && $_FILES['chunk']['error'] === UPLOAD_ERR_OK) {
             $payload = $_POST;
+            $binaryData = @file_get_contents($_FILES['chunk']['tmp_name']);
+            @unlink($_FILES['chunk']['tmp_name']);
+            log_upload_debug("chunk_mode: multipart, bytes=" . strlen($binaryData));
+        } else {
+            $rawInput = file_get_contents('php://input');
+            $payload = json_decode($rawInput, true);
+            if (!is_array($payload)) {
+                $payload = $_POST;
+            }
+            $base64Data = isset($payload['data']) ? $payload['data'] : '';
+            $binaryData = ($base64Data !== '') ? base64_decode($base64Data) : '';
+            log_upload_debug("chunk_mode: json_base64, rawLen=" . strlen((string)$rawInput) . " binLen=" . strlen($binaryData));
         }
 
         $rawPath = isset($payload['path']) ? $payload['path'] : (isset($_GET['path']) ? $_GET['path'] : ALLOWED_ROOT);
@@ -1291,13 +1345,6 @@ function handle_file_chunk() {
         $totalChunks = isset($payload['total_chunks']) ? intval($payload['total_chunks']) : 1;
         $offset = isset($payload['offset']) ? floatval($payload['offset']) : 0;
         $totalSize = isset($payload['total_size']) ? floatval($payload['total_size']) : 0;
-        $base64Data = isset($payload['data']) ? $payload['data'] : '';
-
-        $binaryData = ($base64Data !== '') ? base64_decode($base64Data) : '';
-        if ($base64Data !== '' && $binaryData === false) {
-            log_upload_debug("chunk_err: base64 decode failed for {$cleanName}");
-            json_output(['status' => 'error', 'message' => 'Base64 数据解码失败'], 400);
-        }
 
         // First chunk creates/truncates the file, subsequent chunks append/seek
         $fp = false;
@@ -1377,22 +1424,50 @@ function handle_file_chunk() {
 }
 
 function handle_upload_debug() {
-    $logFile = '/tmp/unraid_upload_debug.log';
-    $content = 'No upload log recorded yet.';
-    if (file_exists($logFile)) {
-        $lines = @file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        if ($lines && count($lines) > 0) {
-            $content = implode("\n", array_slice($lines, -40));
+    $logContent = '';
+    $usedPath = '';
+    $candidates = [
+        '/var/local/emhttp/unraid_api_debug.log',
+        '/tmp/unraid_api_debug.log',
+        '/tmp/unraid_upload_debug.log',
+        dirname(__FILE__) . '/unraid_api_debug.log',
+    ];
+    foreach ($candidates as $p) {
+        if (@file_exists($p)) {
+            $raw = @file_get_contents($p);
+            if (!empty($raw)) {
+                $logContent = $raw;
+                $usedPath = $p;
+                break;
+            }
         }
     }
+    if (empty($logContent)) {
+        $logContent = 'No upload log recorded yet.';
+    } else {
+        $lines = explode("\n", trim($logContent));
+        $logContent = implode("\n", array_slice($lines, -40));
+    }
+
+    $tmpDir = sys_get_temp_dir();
+    $tmpWritable = @is_writable($tmpDir);
+    $emhttpWritable = @is_writable('/var/local/emhttp');
+    $curUser = (function_exists('posix_getpwuid') && function_exists('posix_geteuid')) ? @posix_getpwuid(posix_geteuid())['name'] : 'unknown';
+
     json_output([
         'status' => 'success',
-        'log' => $content,
+        'log' => $logContent,
+        'log_file' => $usedPath ?: 'none',
         'php_version' => PHP_VERSION,
-        'php_upload_max_filesize' => ini_get('upload_max_filesize'),
-        'php_post_max_size' => ini_get('post_max_size'),
-        'php_memory_limit' => ini_get('memory_limit'),
-        'upload_tmp_dir' => sys_get_temp_dir()
+        'php_sapi' => php_sapi_name(),
+        'open_basedir' => ini_get('open_basedir') ?: 'none',
+        'post_max_size' => ini_get('post_max_size'),
+        'upload_max_filesize' => ini_get('upload_max_filesize'),
+        'memory_limit' => ini_get('memory_limit'),
+        'tmp_dir' => $tmpDir,
+        'tmp_writable' => $tmpWritable ? 'yes' : 'no',
+        'emhttp_writable' => $emhttpWritable ? 'yes' : 'no',
+        'current_user' => $curUser
     ]);
 }
 

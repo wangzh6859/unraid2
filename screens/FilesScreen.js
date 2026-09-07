@@ -274,7 +274,82 @@ export default function FilesScreen({ navigation }) {
       }
 
       const totalSize = (fileInfo.size !== undefined && fileInfo.size !== null) ? fileInfo.size : (taskItem.size || 0);
-      const CHUNK_SIZE = 128 * 1024; // 128 KB per chunk (optimal stability & lightweight payload)
+
+      // -----------------------------------------------------------------------
+      // Strategy 1: Native Streaming Multipart Upload via FileSystem.uploadAsync
+      // Standard HTTP RFC 1867 multipart form - fully supported by Unraid Nginx/emhttp!
+      // -----------------------------------------------------------------------
+      let nativeSucceeded = false;
+      let nativeError = '';
+
+      setTransfers(prev => prev.map(t => (t.id === taskId ? {
+        ...t,
+        status: 'running',
+        progress: 10,
+        speed: `正在原生高速直传 (${formatBytes(totalSize)})...`,
+      } : t)));
+
+      try {
+        const nativeUploadUrl = `${serverUrl}/api.php?token=${apiToken}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}`;
+        const nativeRes = await FileSystem.uploadAsync(nativeUploadUrl, fileUri, {
+          fieldName: 'file',
+          httpMethod: 'POST',
+          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+          headers: {
+            'Accept': 'application/json',
+            'X-API-Token': apiToken,
+          },
+        });
+
+        if (nativeRes.status === 200 && nativeRes.body) {
+          try {
+            const data = JSON.parse(nativeRes.body);
+            if (data.status === 'success') {
+              nativeSucceeded = true;
+            } else if (data.message) {
+              nativeError = data.message;
+            }
+          } catch (_) {
+            if (nativeRes.body.includes('success')) {
+              nativeSucceeded = true;
+            }
+          }
+        } else {
+          nativeError = `HTTP ${nativeRes.status}: ${nativeRes.body ? nativeRes.body.slice(0, 100) : '无响应内容'}`;
+        }
+      } catch (nativeErr) {
+        console.log('[FilesScreen] Native uploadAsync error, falling back to chunking:', nativeErr);
+        nativeError = nativeErr.message || '原生直传失败';
+      }
+
+      if (nativeSucceeded) {
+        delete activeTasksRef.current[taskId];
+        if (tempLocalUri) {
+          FileSystem.deleteAsync(tempLocalUri, { idempotent: true }).catch(() => {});
+        }
+        const savedPath = `${taskItem.targetPath}/${taskItem.name}`;
+        setTransfers(prev => prev.map(t => (t.id === taskId ? {
+          ...t,
+          status: 'success',
+          progress: 100,
+          speed: `已保存: ${savedPath}`,
+        } : t)));
+        loadDirectory(serverUrl, apiToken, currentPath);
+        Alert.alert('上传成功', `文件已成功写入 Unraid 存储：\n${savedPath}`);
+        return;
+      }
+
+      // -----------------------------------------------------------------------
+      // Strategy 2: Micro-Chunk Fallback Engine (for very large files or proxy bypass)
+      // -----------------------------------------------------------------------
+      setTransfers(prev => prev.map(t => (t.id === taskId ? {
+        ...t,
+        status: 'running',
+        progress: 15,
+        speed: `原生直传未命中，切换分片传输引擎...`,
+      } : t)));
+
+      const CHUNK_SIZE = 128 * 1024; // 128 KB per chunk
       const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
 
       let startChunk = taskItem.chunkIndex || 0;
@@ -349,8 +424,15 @@ export default function FilesScreen({ navigation }) {
               headers: { 'X-API-Token': apiToken }
             });
             const diagJson = await diagRes.json();
-            if (diagJson && diagJson.log) {
-              serverDiag = `\n\n【服务端诊断日志】:\n${diagJson.log}`;
+            if (diagJson) {
+              serverDiag = `\n\n【服务端运行环境诊断】:\n` +
+                `· PHP: ${diagJson.php_version || '未知'} (${diagJson.php_sapi || ''})\n` +
+                `· post_max_size: ${diagJson.post_max_size || '未知'}\n` +
+                `· upload_max_filesize: ${diagJson.upload_max_filesize || '未知'}\n` +
+                `· open_basedir: ${diagJson.open_basedir || '无'}\n` +
+                `· 运行用户: ${diagJson.current_user || '未知'}\n` +
+                `· 临时目录可写: ${diagJson.tmp_writable || '未知'}\n` +
+                `· 日志记录:\n${diagJson.log || '无日志'}`;
             }
           } catch (_) {}
 
