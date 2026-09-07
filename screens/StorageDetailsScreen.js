@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo } from 'react';
 import { StyleSheet, Text, View, ScrollView, ActivityIndicator, TouchableOpacity } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
-import { HardDrive, Server, ThumbsUp, ThumbsDown, Thermometer, ChevronRight } from 'lucide-react-native';
+import { HardDrive, Server, ShieldCheck, ThumbsUp, ThumbsDown, Thermometer, ChevronRight } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 
 export default function StorageDetailsScreen({ navigation }) {
@@ -53,6 +53,7 @@ export default function StorageDetailsScreen({ navigation }) {
         <View style={styles.center}><Text style={styles.emptyText}>未找到物理磁盘</Text></View>
       ) : (
         disks.map((disk, index) => {
+          const isParity = disk.is_parity || (disk.name || '').toLowerCase().includes('parity');
           const isCache = (disk.name || '').toLowerCase().includes('cache');
           const isSmartError = disk.smart_status && disk.smart_status !== 'Normal'; // 判断 SMART 是否报错
           const isStandby = disk.status === 'standby';
@@ -73,8 +74,19 @@ export default function StorageDetailsScreen({ navigation }) {
               {/* 第一行：设备名称 和 容量总览 */}
               <View style={styles.cardHeader}>
                 <View style={styles.titleRow}>
-                  {isCache ? <Server size={20} color={colors.accent} /> : <HardDrive size={20} color={isSmartError ? colors.red : colors.green} />}
+                  {isParity ? (
+                    <ShieldCheck size={20} color={colors.accent} />
+                  ) : isCache ? (
+                    <Server size={20} color={colors.accent} />
+                  ) : (
+                    <HardDrive size={20} color={isSmartError ? colors.red : colors.green} />
+                  )}
                   <Text style={styles.diskName}>{disk.name || '磁盘'}</Text>
+                  {isParity && (
+                    <View style={[styles.parityBadge, { backgroundColor: colors.accent + '22' }]}>
+                      <Text style={[styles.parityBadgeText, { color: colors.accent }]}>校验保护</Text>
+                    </View>
+                  )}
                   <Text style={styles.deviceLabel}>({disk.device || '未知'})</Text>
                 </View>
                 <ChevronRight size={18} color={colors.muted} />
@@ -114,13 +126,22 @@ export default function StorageDetailsScreen({ navigation }) {
 
               {/* 第三行：利用率 */}
               <View style={styles.usageContainer}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={styles.usageText}>利用率: {safePct}%</Text>
-                  <Text style={styles.usageText}>{formatBytes(usedSize)} / {formatBytes(totalSize)}</Text>
-                </View>
-                <View style={styles.track}>
-                  <View style={[styles.bar, { width: `${safePct}%`, backgroundColor: safePct > 85 ? colors.red : (isCache ? colors.accent : colors.green) }]} />
-                </View>
+                {isParity ? (
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={styles.usageText}>保护阵列数据一致性</Text>
+                    <Text style={styles.usageText}>总容量: {formatBytes(totalSize)}</Text>
+                  </View>
+                ) : (
+                  <>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <Text style={styles.usageText}>利用率: {safePct}%</Text>
+                      <Text style={styles.usageText}>{formatBytes(usedSize)} / {formatBytes(totalSize)}</Text>
+                    </View>
+                    <View style={styles.track}>
+                      <View style={[styles.bar, { width: `${safePct}%`, backgroundColor: safePct > 85 ? colors.red : (isCache ? colors.accent : colors.green) }]} />
+                    </View>
+                  </>
+                )}
               </View>
             </TouchableOpacity>
           );
@@ -140,6 +161,8 @@ const createStyles = (colors) => StyleSheet.create({
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   diskName: { color: colors.textStrong, fontSize: 18, fontWeight: 'bold' },
+  parityBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  parityBadgeText: { fontSize: 11, fontWeight: '600' },
   deviceLabel: { color: colors.muted, fontSize: 14 },
   gridRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 },
   gridItem: { flex: 1 },

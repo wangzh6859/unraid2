@@ -27,6 +27,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
+// Suppress error display and buffer output to ensure clean JSON responses
+error_reporting(0);
+@ini_set('display_errors', '0');
+ob_start();
+
+// Runtime performance and upload settings
+@ini_set('upload_max_filesize', '10240M');
+@ini_set('post_max_size', '10240M');
+@ini_set('memory_limit', '1024M');
+@ini_set('max_execution_time', '7200');
+@ini_set('max_input_time', '7200');
+
 // -------------------------------------------------------------
 // Authentication Configuration
 // -------------------------------------------------------------
@@ -230,6 +242,9 @@ switch ($action) {
 // Helper Output Function
 // -------------------------------------------------------------
 function json_output($data, $code = 200) {
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
     http_response_code($code);
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
@@ -305,35 +320,102 @@ function handle_status() {
 
     // 4. Storage & Disks
     $disks = [];
+    $seen = [];
     $totalArraySize = 0;
     $totalArrayUsed = 0;
 
-    $dfOutput = @shell_exec('df -B1 /mnt/disk* /mnt/cache* /mnt/user 2>/dev/null');
+    // Load native Unraid disks.ini for accurate physical devices & temps
+    $unraidDisks = [];
+    $iniFile = '/var/local/emhttp/disks.ini';
+    if (file_exists($iniFile)) {
+        $ini = @parse_ini_file($iniFile, true);
+        if ($ini) {
+            foreach ($ini as $sec => $d) {
+                if (!empty($d['name'])) {
+                    $unraidDisks[$d['name']] = $d;
+                }
+                $unraidDisks[$sec] = $d;
+                if (!empty($d['device'])) {
+                    $unraidDisks[$d['device']] = $d;
+                }
+            }
+        }
+    }
+
+    // 1. Add Parity drives from disks.ini (Unraid displays parity at top)
+    if (!empty($unraidDisks)) {
+        foreach ($unraidDisks as $sec => $d) {
+            $dType = isset($d['type']) ? $d['type'] : '';
+            $dName = isset($d['name']) ? $d['name'] : $sec;
+            if (stripos($dType, 'Parity') !== false || stripos($dName, 'parity') === 0) {
+                if (!isset($seen[$dName]) && !empty($d['device'])) {
+                    $seen[$dName] = true;
+                    $size = isset($d['size']) ? ((float)$d['size'] * 1024) : 0;
+                    $temp = (isset($d['temp']) && is_numeric($d['temp'])) ? (int)$d['temp'] : null;
+                    $isSpunDown = (isset($d['spundown']) && $d['spundown'] == 1);
+                    $smartStatus = (!empty($d['status']) && stripos($d['status'], 'OK') !== false) ? 'Normal' : 'Error';
+                    $disks[] = [
+                        'name' => $dName,
+                        'device' => $d['device'],
+                        'size' => $size,
+                        'total' => $size,
+                        'used' => $size,
+                        'percentage' => 100,
+                        'temp' => $temp,
+                        'status' => $isSpunDown ? 'standby' : 'active',
+                        'smart_status' => $smartStatus,
+                        'is_parity' => true
+                    ];
+                }
+            }
+        }
+    }
+
+    // 2. Add Data & Cache drives from df
+    $dfOutput = @shell_exec('df -B1 /mnt/disk* /mnt/cache* /mnt/pool* /mnt/fast* /mnt/user 2>/dev/null');
     if ($dfOutput) {
         $lines = explode("\n", trim($dfOutput));
         array_shift($lines); // header
-        $seen = [];
         foreach ($lines as $line) {
             $parts = preg_split('/\s+/', trim($line));
             if (count($parts) >= 6) {
                 $mount = $parts[5];
-                $dev = basename($parts[0]);
-                $size = (float)$parts[1];
-                $used = (float)$parts[2];
-                $name = basename($mount);
+                $name = safe_basename($mount);
 
                 if ($mount === '/mnt/user') {
-                    $totalArraySize = $size;
-                    $totalArrayUsed = $used;
+                    $totalArraySize = (float)$parts[1];
+                    $totalArrayUsed = (float)$parts[2];
                     continue;
                 }
                 if (!isset($seen[$name])) {
                     $seen[$name] = true;
-                    $standbyCheck = @shell_exec("hdparm -C /dev/{$dev} 2>/dev/null");
-                    $status = (strpos($standbyCheck, 'standby') !== false) ? 'standby' : 'active';
-                    
-                    $temp = 32;
+                    $size = (float)$parts[1];
+                    $used = (float)$parts[2];
                     $pct = ($size > 0) ? round(($used / $size) * 100, 1) : 0;
+
+                    // Prefer true physical device from disks.ini (e.g. sdb, nvme0n1 instead of md1)
+                    $uInfo = isset($unraidDisks[$name]) ? $unraidDisks[$name] : null;
+                    $dev = ($uInfo && !empty($uInfo['device'])) ? $uInfo['device'] : safe_basename($parts[0]);
+
+                    // Temperature from disks.ini if present
+                    $temp = ($uInfo && isset($uInfo['temp']) && is_numeric($uInfo['temp'])) ? (int)$uInfo['temp'] : null;
+
+                    // Standby / Spundown status
+                    $isSpunDown = ($uInfo && isset($uInfo['spundown']) && $uInfo['spundown'] == 1);
+                    if ($isSpunDown) {
+                        $status = 'standby';
+                    } else {
+                        $standbyCheck = @shell_exec("hdparm -C /dev/{$dev} 2>/dev/null");
+                        $status = (strpos($standbyCheck, 'standby') !== false) ? 'standby' : 'active';
+                    }
+
+                    $smartStatus = ($uInfo && !empty($uInfo['status'])) ? $uInfo['status'] : 'Normal';
+                    if (stripos($smartStatus, 'ERROR') !== false || stripos($smartStatus, 'FAIL') !== false) {
+                        $smartStatus = 'Error';
+                    } else {
+                        $smartStatus = 'Normal';
+                    }
+
                     $disks[] = [
                         'name' => $name,
                         'device' => $dev,
@@ -343,7 +425,7 @@ function handle_status() {
                         'percentage' => $pct,
                         'temp' => $temp,
                         'status' => $status,
-                        'smart_status' => 'Normal'
+                        'smart_status' => $smartStatus
                     ];
                 }
             }
@@ -534,12 +616,183 @@ function handle_vm_action($action) {
 }
 
 function handle_smart_info() {
-    $device = isset($_GET['target']) ? escapeshellarg($_GET['target']) : '';
-    if (empty($device)) {
+    $rawTarget = isset($_GET['target']) ? trim($_GET['target']) : '';
+    $rawName = isset($_GET['name']) ? trim($_GET['name']) : '';
+    if (empty($rawTarget) && empty($rawName)) {
         json_output(['status' => 'error', 'message' => 'Missing disk device name'], 400);
     }
-    $out = shell_exec("smartctl -a /dev/{$device} 2>&1");
-    json_output(['status' => 'success', 'data' => $out ?: 'No S.M.A.R.T. data available']);
+
+    $targetStr = !empty($rawTarget) ? $rawTarget : $rawName;
+    $dev = preg_replace('/[^a-zA-Z0-9_\-]/', '', $targetStr);
+    $diskName = preg_replace('/[^a-zA-Z0-9_\-]/', '', $rawName);
+
+    // If target is mdX (Unraid array MD driver), it maps to diskX
+    $mdMappedName = '';
+    if (preg_match('/^md(\d+)$/', $dev, $m)) {
+        $mdMappedName = 'disk' . $m[1];
+    }
+
+    // Lookup real physical device from disks.ini
+    $uInfo = null;
+    $iniFile = '/var/local/emhttp/disks.ini';
+    if (file_exists($iniFile)) {
+        $ini = @parse_ini_file($iniFile, true);
+        if ($ini) {
+            foreach ($ini as $sec => $d) {
+                $matches = (
+                    $sec === $dev ||
+                    $sec === $diskName ||
+                    $sec === $mdMappedName ||
+                    (!empty($d['name']) && ($d['name'] === $dev || $d['name'] === $diskName || $d['name'] === $mdMappedName)) ||
+                    (!empty($d['device']) && $d['device'] === $dev)
+                );
+                if ($matches) {
+                    $uInfo = $d;
+                    if (!empty($d['device'])) {
+                        $dev = $d['device'];
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // If still an md device (e.g. md1), resolve physical backing device via Linux sysfs
+    if (strpos($dev, 'md') === 0) {
+        $slavesDir = "/sys/block/{$dev}/slaves";
+        if (is_dir($slavesDir)) {
+            $slaves = @scandir($slavesDir);
+            if ($slaves) {
+                foreach ($slaves as $s) {
+                    if ($s !== '.' && $s !== '..') {
+                        $dev = $s;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Strip partition numbers (e.g. sda1 -> sda, nvme0n1p1 -> nvme0n1)
+    if (preg_match('/^(nvme\d+n\d+)p\d+$/', $dev, $m)) {
+        $dev = $m[1];
+    } elseif (preg_match('/^(sd[a-z]+)\d+$/', $dev, $m)) {
+        $dev = $m[1];
+    } elseif (preg_match('/^(hd[a-z]+)\d+$/', $dev, $m)) {
+        $dev = $m[1];
+    } elseif (preg_match('/^(vd[a-z]+)\d+$/', $dev, $m)) {
+        $dev = $m[1];
+    }
+
+    $escapedDev = escapeshellarg("/dev/{$dev}");
+
+    // Run smartctl with intelligent fallback flags
+    $out = @shell_exec("smartctl -a {$escapedDev} 2>&1");
+
+    // 1. If NVMe device or detection error
+    if (strpos($dev, 'nvme') !== false || strpos($out, 'Unable to detect device type') !== false) {
+        $nvmeOut = @shell_exec("smartctl -a -d nvme {$escapedDev} 2>&1");
+        if ($nvmeOut && strlen($nvmeOut) > strlen($out)) {
+            $out = $nvmeOut;
+        }
+    }
+    // 2. If SAT / USB bridge
+    if (strpos($out, 'Device does not support SMART') !== false || strpos($out, 'Unknown USB bridge') !== false || strlen(trim($out)) < 200) {
+        $satOut = @shell_exec("smartctl -a -d sat {$escapedDev} 2>&1");
+        if ($satOut && strlen($satOut) > strlen($out)) {
+            $out = $satOut;
+        }
+    }
+    // 3. If standard output misses attributes, try -x
+    if (strpos($out, 'START OF READ SMART DATA SECTION') === false && strpos($out, 'SMART/Health Information') === false) {
+        $extOut = @shell_exec("smartctl -x {$escapedDev} 2>&1");
+        if ($extOut && strlen($extOut) > strlen($out)) {
+            $out = $extOut;
+        }
+    }
+
+    // Check if drive was in STANDBY mode
+    $isStandby = (strpos($out, 'STANDBY mode') !== false || strpos($out, 'Device is in SLEEP mode') !== false);
+    if ($isStandby) {
+        $notice = "【提示】磁盘当前处于待机休眠 (Standby) 状态。\n";
+        if ($uInfo) {
+            $cachedTemp = isset($uInfo['temp']) ? $uInfo['temp'] : '待机';
+            $cachedStatus = isset($uInfo['status']) ? $uInfo['status'] : '正常';
+            $notice .= "已从 Unraid 系统缓存载入基本指标（温度: {$cachedTemp} °C, 状态: {$cachedStatus}）。\n如需获取完整最新传感器数据，请唤醒磁盘。\n\n";
+        }
+        $out = $notice . $out;
+    }
+
+    // Parse structured data for UI cards
+    $isNvme = (strpos($dev, 'nvme') !== false || strpos($out, 'NVM Subsystem') !== false);
+    $parsed = [
+        'model' => '',
+        'serial' => '',
+        'capacity' => '',
+        'health' => 'Normal',
+        'power_on_hours' => '',
+        'temp' => '',
+        'reallocated' => '',
+        'pending' => '',
+        'crc_errors' => '',
+        'percentage_used' => '',
+        'device_type' => $isNvme ? 'NVMe' : 'SATA/SAS'
+    ];
+
+    if (preg_match('/(?:Device Model|Model Number|Product):\s+(.+)/i', $out, $m)) {
+        $parsed['model'] = trim($m[1]);
+    } elseif ($uInfo && !empty($uInfo['id'])) {
+        $parsed['model'] = $uInfo['id'];
+    }
+
+    if (preg_match('/Serial Number:\s+(.+)/i', $out, $m)) {
+        $parsed['serial'] = trim($m[1]);
+    }
+
+    if (preg_match('/(?:User Capacity|Total NVM Capacity):\s+(.+)/i', $out, $m)) {
+        $parsed['capacity'] = trim($m[1]);
+    }
+
+    if (preg_match('/(?:SMART overall-health self-assessment test result|SMART Health Status):\s+(.+)/i', $out, $m)) {
+        $parsed['health'] = trim($m[1]);
+    } elseif ($uInfo && !empty($uInfo['status'])) {
+        $parsed['health'] = (stripos($uInfo['status'], 'OK') !== false) ? 'PASSED' : $uInfo['status'];
+    }
+
+    if (preg_match('/(?:Power_On_Hours[^\n]*?\s+(\d+)\s*$|Power On Hours:\s+([\d,]+)|Accumulated power on time[^\d]+(\d+))/im', $out, $m)) {
+        $parsed['power_on_hours'] = trim(!empty($m[1]) ? $m[1] : (!empty($m[2]) ? $m[2] : $m[3]));
+    }
+
+    if (preg_match('/(?:Temperature_Celsius[^\n]*?\s+(\d+)\s*$|Temperature:\s+(\d+)\s*Celsius|Current Drive Temperature:\s+(\d+))/im', $out, $m)) {
+        $parsed['temp'] = trim(!empty($m[1]) ? $m[1] : (!empty($m[2]) ? $m[2] : $m[3]));
+    } elseif ($uInfo && isset($uInfo['temp']) && is_numeric($uInfo['temp'])) {
+        $parsed['temp'] = (string)$uInfo['temp'];
+    }
+
+    if (preg_match('/Reallocated_Sector_Ct[^\n]*?\s+(\d+)\s*$/m', $out, $m)) {
+        $parsed['reallocated'] = trim($m[1]);
+    } elseif (preg_match('/Available Spare:\s+(\d+%)/i', $out, $m)) {
+        $parsed['reallocated'] = '可用备用: ' . $m[1];
+    }
+
+    if (preg_match('/Current_Pending_Sector[^\n]*?\s+(\d+)\s*$/m', $out, $m)) {
+        $parsed['pending'] = trim($m[1]);
+    }
+
+    if (preg_match('/UDMA_CRC_Error_Count[^\n]*?\s+(\d+)\s*$/m', $out, $m)) {
+        $parsed['crc_errors'] = trim($m[1]);
+    }
+
+    if (preg_match('/Percentage Used:\s+(\d+%)/i', $out, $m)) {
+        $parsed['percentage_used'] = trim($m[1]);
+    }
+
+    json_output([
+        'status' => 'success',
+        'device' => $dev,
+        'data' => $out ?: "未能获取到 /dev/{$dev} 的 S.M.A.R.T. 数据",
+        'parsed' => $parsed
+    ]);
 }
 
 // -------------------------------------------------------------
@@ -763,19 +1016,44 @@ function handle_file_write() {
 }
 
 function handle_file_upload() {
-    $targetDir = sanitize_path(isset($_GET['path']) ? $_GET['path'] : (isset($_POST['path']) ? $_POST['path'] : ALLOWED_ROOT));
+    $rawPath = isset($_GET['path']) ? $_GET['path'] : (isset($_POST['path']) ? $_POST['path'] : ALLOWED_ROOT);
+    $targetDir = sanitize_path($rawPath);
     
+    // Prevent uploading directly to Unraid user shares root
+    if ($targetDir === '/mnt' || $targetDir === '/mnt/user') {
+        json_output([
+            'status' => 'error',
+            'message' => '无法直接上传到共享根目录 /mnt/user，请先点击进入具体的共享文件夹（例如 downloads、appdata 等）后再上传。'
+        ], 400);
+    }
+
     if (!is_dir($targetDir)) {
-        @mkdir($targetDir, 0777, true);
+        if (!@mkdir($targetDir, 0777, true)) {
+            json_output(['status' => 'error', 'message' => "目标目录不存在且无法创建: {$targetDir}"], 500);
+        }
     }
 
     $filename = isset($_GET['filename']) ? trim($_GET['filename']) : (isset($_POST['filename']) ? trim($_POST['filename']) : '');
+    if (stripos($filename, '%') !== false) {
+        $filename = rawurldecode($filename);
+    }
 
     if (!empty($_FILES['file'])) {
         $file = $_FILES['file'];
         if ($file['error'] !== UPLOAD_ERR_OK) {
-            json_output(['status' => 'error', 'message' => "Upload error code: {$file['error']}"], 400);
+            $errCodes = [
+                UPLOAD_ERR_INI_SIZE => '上传文件大小超出了 php.ini 允许的上限 (upload_max_filesize)',
+                UPLOAD_ERR_FORM_SIZE => '上传文件大小超出了表单允许的上限 (MAX_FILE_SIZE)',
+                UPLOAD_ERR_PARTIAL => '文件仅部分被上传',
+                UPLOAD_ERR_NO_FILE => '未找到上传的文件',
+                UPLOAD_ERR_NO_TMP_DIR => '缺少临时文件夹',
+                UPLOAD_ERR_CANT_WRITE => '写入磁盘失败',
+                UPLOAD_ERR_EXTENSION => 'PHP 扩展停止了文件上传'
+            ];
+            $detail = isset($errCodes[$file['error']]) ? $errCodes[$file['error']] : "错误码: {$file['error']}";
+            json_output(['status' => 'error', 'message' => "上传失败: {$detail}"], 400);
         }
+
         $destName = !empty($filename) ? $filename : $file['name'];
         $cleanDestName = safe_basename($destName);
         if (empty($cleanDestName)) {
@@ -783,43 +1061,66 @@ function handle_file_upload() {
         }
         $destPath = rtrim($targetDir, '/') . '/' . $cleanDestName;
 
-        if (!move_uploaded_file($file['tmp_name'], $destPath)) {
-            // Fallback for cross-partition temporary files
-            if (!@copy($file['tmp_name'], $destPath)) {
-                json_output(['status' => 'error', 'message' => 'Failed to save uploaded file to: ' . $destPath], 500);
-            }
+        $uploadSuccess = false;
+        if (@move_uploaded_file($file['tmp_name'], $destPath)) {
+            $uploadSuccess = true;
+        } elseif (@copy($file['tmp_name'], $destPath)) {
+            $uploadSuccess = true;
             @unlink($file['tmp_name']);
         }
+
+        if (!$uploadSuccess) {
+            json_output(['status' => 'error', 'message' => "无法将文件写入目标路径: {$destPath}，请检查目录权限。"], 500);
+        }
+
+        @chmod($destPath, 0666);
         clearstatcache(true, $destPath);
         if (!file_exists($destPath) || filesize($destPath) === 0) {
-            json_output(['status' => 'error', 'message' => 'Uploaded file is empty or was not created'], 500);
+            json_output(['status' => 'error', 'message' => "文件写入校验失败，目标文件不存在或大小为0: {$destPath}"], 500);
         }
-        json_output(['status' => 'success', 'message' => 'File uploaded', 'path' => $destPath, 'size' => filesize($destPath)]);
+
+        json_output([
+            'status' => 'success',
+            'message' => 'File uploaded successfully',
+            'path' => $destPath,
+            'size' => filesize($destPath)
+        ]);
     } else {
         // Direct stream / chunk upload
         $destName = !empty($filename) ? $filename : 'upload_' . time();
         $cleanDestName = safe_basename($destName);
         $destPath = rtrim($targetDir, '/') . '/' . $cleanDestName;
         
-        $in = fopen('php://input', 'rb');
-        $out = fopen($destPath, 'wb');
-        if (!$in || !$out) {
-            json_output(['status' => 'error', 'message' => 'Failed to open stream buffers for: ' . $destPath], 500);
+        $in = @fopen('php://input', 'rb');
+        if (!$in) {
+            json_output(['status' => 'error', 'message' => 'Failed to open php://input stream'], 500);
         }
+        $out = @fopen($destPath, 'wb');
+        if (!$out) {
+            @fclose($in);
+            json_output(['status' => 'error', 'message' => 'Failed to open destination file for writing: ' . $destPath], 500);
+        }
+
         $bytesWritten = 0;
         while ($buff = fread($in, 65536)) {
             $bytesWritten += fwrite($out, $buff);
         }
-        fclose($in);
-        fclose($out);
+        @fclose($in);
+        @fclose($out);
 
         clearstatcache(true, $destPath);
-        if ($bytesWritten === 0) {
+        if ($bytesWritten === 0 || !file_exists($destPath) || filesize($destPath) === 0) {
             @unlink($destPath);
-            json_output(['status' => 'error', 'message' => 'Received 0 bytes of upload data'], 400);
+            json_output(['status' => 'error', 'message' => '未接收到上传数据（0 字节）。若文件较大，可能超出了 Unraid Nginx/PHP 的 post_max_size 限制。'], 400);
         }
 
-        json_output(['status' => 'success', 'message' => 'Raw stream upload complete', 'path' => $destPath, 'size' => $bytesWritten]);
+        @chmod($destPath, 0666);
+        json_output([
+            'status' => 'success',
+            'message' => 'Raw stream upload complete',
+            'path' => $destPath,
+            'size' => filesize($destPath)
+        ]);
     }
 }
 

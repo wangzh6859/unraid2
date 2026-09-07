@@ -215,6 +215,10 @@ export default function FilesScreen({ navigation }) {
   // =========================================================================
   const handleUpload = async () => {
     setIsMenuVisible(false);
+    if (!currentPath || currentPath === '/mnt' || currentPath === '/mnt/user') {
+      Alert.alert('无法直接上传到共享根目录', 'Unraid 根目录不允许直接存放散装文件。请先在列表中点击进入具体的共享文件夹（例如 downloads、appdata 等）后再点击上传。');
+      return;
+    }
     try {
       const result = await DocumentPicker.getDocumentAsync({
         copyToCacheDirectory: true,
@@ -282,15 +286,17 @@ export default function FilesScreen({ navigation }) {
       let savedPath = '';
       try {
         const bodyJson = JSON.parse(res.body);
-        if (bodyJson.status === 'success') {
+        if (bodyJson && bodyJson.status === 'success') {
           isSuccess = true;
           savedPath = bodyJson.path || `${taskItem.targetPath}/${taskItem.name}`;
         } else {
-          respMsg = bodyJson.message || '服务器保存失败';
+          respMsg = (bodyJson && bodyJson.message) ? bodyJson.message : '服务器保存失败';
         }
       } catch (e) {
-        isSuccess = res.status >= 200 && res.status < 300;
-        savedPath = `${taskItem.targetPath}/${taskItem.name}`;
+        isSuccess = false;
+        let cleanBody = (res.body || '').replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim();
+        if (cleanBody.length > 120) cleanBody = cleanBody.substring(0, 120) + '...';
+        respMsg = cleanBody ? `服务端异常: ${cleanBody}` : `服务端未确认写入成功 (HTTP ${res.status})`;
       }
 
       if (isSuccess) {
@@ -302,7 +308,7 @@ export default function FilesScreen({ navigation }) {
         } : t)));
         // Refresh directory
         loadDirectory(serverUrl, apiToken, currentPath);
-        Alert.alert('上传成功', `文件已保存至：\n${savedPath}`);
+        Alert.alert('上传成功', `文件已成功写入 Unraid 存储：\n${savedPath}`);
       } else {
         setTransfers(prev => prev.map(t => (t.id === taskItem.id ? { ...t, status: 'error', speed: respMsg || `上传失败 (HTTP ${res.status})` } : t)));
         Alert.alert('上传失败', respMsg || `服务器响应异常 (HTTP ${res.status})`);
