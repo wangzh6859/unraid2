@@ -279,25 +279,33 @@ export default function FilesScreen({ navigation }) {
 
       let isSuccess = false;
       let respMsg = '';
+      let savedPath = '';
       try {
         const bodyJson = JSON.parse(res.body);
         if (bodyJson.status === 'success') {
           isSuccess = true;
+          savedPath = bodyJson.path || `${taskItem.targetPath}/${taskItem.name}`;
         } else {
           respMsg = bodyJson.message || '服务器保存失败';
         }
       } catch (e) {
         isSuccess = res.status >= 200 && res.status < 300;
+        savedPath = `${taskItem.targetPath}/${taskItem.name}`;
       }
 
       if (isSuccess) {
-        setTransfers(prev => prev.map(t => (t.id === taskItem.id ? { ...t, status: 'success', progress: 100, speed: '上传成功' } : t)));
-        // Refresh directory if still viewing destination
-        if (currentPath === taskItem.targetPath) {
-          loadDirectory(serverUrl, apiToken, currentPath);
-        }
+        setTransfers(prev => prev.map(t => (t.id === taskItem.id ? {
+          ...t,
+          status: 'success',
+          progress: 100,
+          speed: `已保存: ${savedPath}`,
+        } : t)));
+        // Refresh directory
+        loadDirectory(serverUrl, apiToken, currentPath);
+        Alert.alert('上传成功', `文件已保存至：\n${savedPath}`);
       } else {
         setTransfers(prev => prev.map(t => (t.id === taskItem.id ? { ...t, status: 'error', speed: respMsg || `上传失败 (HTTP ${res.status})` } : t)));
+        Alert.alert('上传失败', respMsg || `服务器响应异常 (HTTP ${res.status})`);
       }
     } catch (err) {
       delete activeTasksRef.current[taskItem.id];

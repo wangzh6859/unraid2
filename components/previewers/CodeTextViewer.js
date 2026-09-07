@@ -10,7 +10,7 @@ import {
 import { useTheme } from '../../ThemeContext';
 import { formatBytes } from '../../utils/cacheManager';
 
-export default function CodeTextViewer({ item, serverUrl, apiToken }) {
+export default function CodeTextViewer({ item, serverUrl, apiToken, streamUrl }) {
   const { colors } = useTheme();
 
   const [mode, setMode] = useState('reader'); // 'reader' | 'editor'
@@ -21,28 +21,55 @@ export default function CodeTextViewer({ item, serverUrl, apiToken }) {
   const [fontSize, setFontSize] = useState(13);
   const [wordWrap, setWordWrap] = useState(true);
 
-  // Fetch text content
+  // Fetch text content with dual-strategy: file_read (transcoded) -> file_stream (direct raw stream)
   const loadContent = async () => {
     setLoading(true);
+    const targetPath = item?.path || item?.href || '';
+    let loadedText = null;
+    let lastError = '';
+
+    // Strategy 1: action=file_read (supports GBK/UTF-8 conversion)
     try {
-      const targetPath = item?.path || item?.href || '';
       const url = `${serverUrl}/api.php?token=${apiToken}&action=file_read&path=${encodeURIComponent(targetPath)}`;
       const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const json = await res.json();
-      if (json.status === 'success') {
-        setContent(json.content || '');
-        setInitialContent(json.content || '');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.status === 'success' && typeof json.content === 'string') {
+          loadedText = json.content;
+        } else if (json.message) {
+          lastError = json.message;
+        }
       } else {
-        setContent(`// 无法读取文件：${json.message || '未知错误'}`);
+        const errTxt = await res.text();
+        lastError = `HTTP ${res.status}: ${errTxt.slice(0, 120)}`;
       }
     } catch (e) {
-      setContent(`// 加载异常：${e.message}`);
-    } finally {
-      setLoading(false);
+      lastError = e.message;
     }
+
+    // Strategy 2: action=file_stream (fallback to raw direct file stream)
+    if (loadedText === null) {
+      try {
+        const directUrl = streamUrl || `${serverUrl}/api.php?token=${apiToken}&action=file_stream&path=${encodeURIComponent(targetPath)}`;
+        const streamRes = await fetch(directUrl);
+        if (streamRes.ok) {
+          loadedText = await streamRes.text();
+        } else {
+          const errTxt = await streamRes.text();
+          lastError = `HTTP ${streamRes.status}: ${errTxt.slice(0, 120) || '文件不存在'}`;
+        }
+      } catch (e) {
+        lastError = lastError || e.message;
+      }
+    }
+
+    if (loadedText !== null) {
+      setContent(loadedText);
+      setInitialContent(loadedText);
+    } else {
+      setContent(`// 无法加载文本文件：\n// 原因：${lastError || '未知错误'}\n// 路径：${targetPath}`);
+    }
+    setLoading(false);
   };
 
   useEffect(() => {

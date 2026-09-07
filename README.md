@@ -24,17 +24,104 @@
 
 ---
 
-## 🛠️ 服务端部署（部署 `api.php`）
+## 🛠️ 服务端部署指南（部署 `api.php`）
 
-本项目已附带极简无外部依赖的后端脚本 `api.php`。
+本项目附带的 `api.php` 是极简、单文件、无外部依赖的高性能 PHP 脚本，直接运行在 Unraid 的 WebGUI 环境中。
 
-### 部署步骤：
+> [!IMPORTANT]
+> **关于 Unraid 系统重启数据持久化说明**：
+> Unraid 操作系统主体运行在内存虚拟盘（RAM Disk，`rootfs`）中。如果仅把 `api.php` 复制到 `/usr/local/emhttp/`，在 Unraid 重启后会被系统重置清空。因此推荐将文件存放在引导 U 盘 `/boot/` 并在开机启动脚本 `/boot/config/go` 中执行复制。
 
-1. 将仓库根目录下的 `api.php` 复制到您的 Unraid 服务器 Web 根目录（例如 `/usr/local/emhttp/` 或放在自建 Nginx/Apache 容器/网站目录下）。
-2. 配置您的 API Token：
-   - 方式一：直接在 `api.php` 顶部修改 `FALLBACK_TOKEN` 常量（默认 `unraid2026`）。
-   - 方式二：在 Unraid 终端中执行 `echo "your_secure_token" > /boot/config/plugins/unraid_api_token.txt`，重启不丢失。
-3. 打开手机 App，进入「设置」页输入服务器地址（如 `http://192.168.1.100`）与 API Token，即可畅享所有监控、文件管理与电源控制功能！
+### 详细部署步骤：
+
+#### 步骤 1：将 `api.php` 复制到 Unraid 引导 U 盘
+使用 SSH 登录 Unraid 终端（或在 Unraid Web 界面右上角点击终端图标 Terminal），执行以下命令：
+
+```bash
+# 1. 在 U 盘配置目录创建存放文件夹
+mkdir -p /boot/config/plugins/webgui
+
+# 2. 将项目中的 api.php 下载或复制到该目录下
+# 例如直接通过 curl 下载最新版本：
+curl -k -o /boot/config/plugins/webgui/api.php https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php
+```
+
+#### 步骤 2：配置开机自动加载（防重启丢失）
+编辑 Unraid 的开机启动文件 `/boot/config/go`：
+
+```bash
+nano /boot/config/go
+```
+
+在文件末尾追加以下两行并保存（Nano 中按 `Ctrl + O` 保存回车，`Ctrl + X` 退出）：
+
+```bash
+# 复制 API 脚本至 Web 根目录并赋予权限
+cp /boot/config/plugins/webgui/api.php /usr/local/emhttp/api.php
+chmod 755 /usr/local/emhttp/api.php
+```
+
+#### 步骤 3：立即手动生效（无需重启服务器）
+在终端中直接运行一次上述复制命令：
+
+```bash
+cp /boot/config/plugins/webgui/api.php /usr/local/emhttp/api.php
+chmod 755 /usr/local/emhttp/api.php
+```
+
+#### 步骤 4：配置 API 访问密钥（Token）
+- **默认 Token**：`unraid2026`（已内置在 `api.php` 中）。
+- **自定义 Token**（强烈推荐）：
+  执行以下命令，将您的专属复杂密钥写入持久化配置文件：
+  ```bash
+  echo "MySuperSecretKey123" > /boot/config/plugins/unraid_api_token.txt
+  ```
+  App 填写该 Token 时即可通过验证。
+
+#### 步骤 5：验证部署是否成功
+在同一局域网的电脑或手机浏览器中打开：
+```text
+http://<你的Unraid服务器IP>/api.php?token=unraid2026&action=status
+```
+（若修改了自定义 Token，将 `unraid2026` 替换为您设置的 Token）
+
+如果页面返回包含 `{"stats":...,"storage":...,"dockers":...}` 的 JSON 数据，即说明服务端已完全部署成功！
+
+---
+
+## 📱 移动端 App 使用说明
+
+### 1. 首次配置
+1. 安装最新版 APK（见下方 Release 下载）。
+2. 打开 App，在欢迎页面或切换至「**设置**」页面。
+3. 点击「**Unraid 服务器地址**」，输入服务器局域网 IP 或公网域名（例如 `http://192.168.1.100`，无需追加 `/api.php`）。
+4. 点击「**API Token**」，输入在服务端设置的密钥（默认 `unraid2026`）。
+5. 保存后立即全局生效，首页即可看到 CPU、内存与磁盘等实时监控数据。
+
+### 2. 文件浏览与上传
+1. 点击底部导航栏「**文件**」标签。
+2. 默认进入 `/mnt/user`，可浏览您在 Unraid 中创建的所有共享文件夹（如 `downloads`、`appdata`、`Media` 等）。
+3. **上传文件**：
+   - 先进入目标目录（例如点击进入 `/mnt/user/downloads`）。
+   - 点击右上角「**+**」号 -> 选择「**上传文件**」。
+   - 从手机系统文件选择器中选取任意格式文件。
+   - 上传任务将在悬浮传输面板中实时展示传输进度与瞬时速度。
+   - 上传完成后，系统将弹出对话框提示文件在服务器中的完整绝对存储路径（如 `/mnt/user/downloads/photo.jpg`），并自动刷新列表。
+
+### 3. 多媒体与文档即时预览
+- **音视频**：点击 `.mp4` / `.mkv` / `.mp3` / `.flac` 等文件，自动调用硬件加速播放器，支持 HTTP 206 毫秒级拖动缓冲与外放声音。
+- **文本/代码**：点击 `.txt` / `.md` / `.log` / `.json` 等文件，支持在线阅读（自动识别并转换 GBK/GB2312/UTF-8 编码），点击右上角「编辑」可直接修改内容并一键写回 Unraid 主机。
+- **办公文档**：
+  - `.docx`：免安装 Office 直接提取正文段落排版阅读。
+  - `.doc`（老版本 Word）：自动检测并弹出友好提示，支持一键下载到手机使用 WPS / 微软 Office 打开。
+  - `.xlsx` / `.xls`：多工作表标签切换与数据表格网格浏览。
+  - `.epub`：自动解析章节目录并支持分章沉浸式翻页阅读。
+  - `.zip` / `.tar`：直接查看压缩包内的文件目录，文本/图片可直接在压缩包内点击预览。
+
+### 4. 远程电源控制
+在「设置」页面的「服务器电源控制」卡片中：
+- **重启服务器**：向服务器发送安全重启指令，二次确认后执行。
+- **关闭服务器**：向服务器发送切断电源关机指令，关机后需物理按键或通过局域网唤醒（WOL）重新开机。
 
 ---
 

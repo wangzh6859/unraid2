@@ -22,13 +22,51 @@ export default function EpubViewer({ item, getDirectUrl, authHeaders, onDownload
         const uri = await downloadToCache({ file: item, getDirectUrl, authHeaders });
         const b64 = await readFileAsBase64(uri);
         const zip = await JSZip.loadAsync(base64ToUint8(b64));
-        const containerXml = await zip.file('META-INF/container.xml').async('string');
+
+        // Helper: case-insensitive & resilient path lookup inside zip
+        const findZipEntry = (target) => {
+          if (!target) return null;
+          if (zip.files[target]) return zip.files[target];
+          const clean = target.toLowerCase().replace(/\\/g, '/').replace(/^\/+/, '');
+          for (const key of Object.keys(zip.files)) {
+            const norm = key.toLowerCase().replace(/\\/g, '/').replace(/^\/+/, '');
+            if (norm === clean || norm.endsWith('/' + clean)) {
+              return zip.files[key];
+            }
+          }
+          return null;
+        };
+
         const parser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: false });
-        const container = parser.parse(containerXml);
-        const rootfile = container?.container?.rootfiles?.rootfile;
-        const rf = Array.isArray(rootfile) ? rootfile[0] : rootfile;
-        const opfPath = (rf && (rf['@_fullpath'] || rf.fullpath)) || 'content.opf';
-        const opfXml = await zip.file(opfPath).async('string');
+
+        // 1. Locate container.xml
+        let opfPath = '';
+        const containerFile = findZipEntry('META-INF/container.xml');
+        if (containerFile) {
+          const containerXml = await containerFile.async('string');
+          const container = parser.parse(containerXml);
+          const rootfile = container?.container?.rootfiles?.rootfile;
+          const rf = Array.isArray(rootfile) ? rootfile[0] : rootfile;
+          opfPath = (rf && (rf['@_fullpath'] || rf.fullpath)) || '';
+        }
+
+        // 2. Fallback if container.xml missing or failed to specify OPF
+        let opfFile = findZipEntry(opfPath);
+        if (!opfFile) {
+          for (const key of Object.keys(zip.files)) {
+            if (key.toLowerCase().endsWith('.opf')) {
+              opfFile = zip.files[key];
+              opfPath = key;
+              break;
+            }
+          }
+        }
+
+        if (!opfFile) {
+          throw new Error('未找到 EPUB 清单文件（.opf）');
+        }
+
+        const opfXml = await opfFile.async('string');
         const opf = parser.parse(opfXml);
         const packageEl = opf?.package;
         const manifestMap = new Map();
@@ -52,13 +90,13 @@ export default function EpubViewer({ item, getDirectUrl, authHeaders, onDownload
           if (!isDoc) continue;
           let path = entry.href;
           if (!/^\/|^[a-z]+:/i.test(path)) path = dir + path;
-          const file = zip.file(path);
+          const file = findZipEntry(path) || findZipEntry(decodeURIComponent(path)) || findZipEntry(entry.href);
           if (!file) continue;
           const raw = await file.async('string');
           const text = stripHtml(raw);
           if (text) chapters.push({ name: text.split('\n', 1)[0].slice(0, 40) || `章节 ${chapters.length + 1}`, text });
         }
-        if (!chapters.length) throw new Error('未找到可阅读的章节（可能是图片型电子书）');
+        if (!chapters.length) throw new Error('未找到可阅读的文本章节（可能是图片型电子书）');
         const names = [metaTitle].filter(Boolean);
         if (alive) setState({ loading: false, error: '', chapters, names, active: 0 });
       } catch (e) {

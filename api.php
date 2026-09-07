@@ -72,6 +72,8 @@ function verify_auth() {
 
 verify_auth();
 
+@setlocale(LC_ALL, 'C.UTF-8', 'en_US.UTF-8', 'zh_CN.UTF-8');
+
 $action = isset($_GET['action']) ? trim($_GET['action']) : (isset($_POST['action']) ? trim($_POST['action']) : 'status');
 
 // -------------------------------------------------------------
@@ -79,15 +81,25 @@ $action = isset($_GET['action']) ? trim($_GET['action']) : (isset($_POST['action
 // -------------------------------------------------------------
 define('ALLOWED_ROOT', '/mnt');
 
+/**
+ * Safe multibyte-aware basename replacement (does not depend on system LC_ALL locale)
+ */
+function safe_basename($path) {
+    $path = str_replace('\\', '/', trim((string)$path));
+    $path = rtrim($path, '/');
+    $pos = strrpos($path, '/');
+    return ($pos === false) ? $path : substr($path, $pos + 1);
+}
+
 function sanitize_path($inputPath) {
     if (empty($inputPath) || $inputPath === '/' || $inputPath === '.') {
         return ALLOWED_ROOT;
     }
-    // Only rawurldecode if there are % encoded sequences to avoid double-decoding plus signs
-    if (strpos($inputPath, '%') !== false) {
+    // Handle double-URL-encoded paths (e.g. %2Fmnt%2Fuser...)
+    if (stripos($inputPath, '%2f') !== false) {
         $inputPath = rawurldecode($inputPath);
     }
-    $path = str_replace('\\', '/', $inputPath);
+    $path = str_replace('\\', '/', trim((string)$inputPath));
     if (strpos($path, '/mnt') !== 0) {
         $path = rtrim(ALLOWED_ROOT, '/') . '/' . ltrim($path, '/');
     }
@@ -343,15 +355,45 @@ function handle_status() {
     // 5. Docker Containers (with live CPU and Memory from docker stats)
     $dockersList = [];
     $statsMap = [];
-    $dockerStats = @shell_exec('timeout 2 docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" 2>/dev/null');
+    
+    // Fast non-blocking cached docker stats
+    $cacheFile = '/tmp/unraid_docker_stats_cache.txt';
+    $cacheTmp = '/tmp/unraid_docker_stats_cache.tmp';
+    $now = time();
+    $cacheAge = file_exists($cacheFile) ? ($now - filemtime($cacheFile)) : 999;
+    
+    // If cache is older than 4s or missing, trigger a refresh
+    if ($cacheAge > 4) {
+        $refreshCmd = "nohup sh -c 'docker stats --no-stream --format \"{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.ID}}\" 2>/dev/null > {$cacheTmp} && mv {$cacheTmp} {$cacheFile}' >/dev/null 2>&1 &";
+        @exec($refreshCmd);
+        // If cache doesn't exist at all yet (first run), run sync with 5s timeout
+        if (!file_exists($cacheFile)) {
+            $syncStats = @shell_exec('timeout 5 docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.ID}}" 2>/dev/null');
+            if ($syncStats) {
+                @file_put_contents($cacheFile, $syncStats);
+            }
+        }
+    }
+
+    $dockerStats = file_exists($cacheFile) ? @file_get_contents($cacheFile) : '';
     if ($dockerStats) {
+        // Strip any ANSI terminal escape codes
+        $dockerStats = preg_replace('/\x1b\[[0-9;]*[a-zA-Z]/', '', $dockerStats);
         foreach (explode("\n", trim($dockerStats)) as $sLine) {
             $sCols = explode("\t", trim($sLine));
             if (count($sCols) >= 3 && !empty($sCols[0])) {
-                $statsMap[trim($sCols[0])] = [
-                    'cpu' => trim($sCols[1]),
-                    'memory' => trim($sCols[2])
+                $rawName = trim($sCols[0]);
+                $rawCpu = trim($sCols[1]);
+                $rawMem = trim($sCols[2]);
+                $sData = [
+                    'cpu' => $rawCpu,
+                    'memory' => $rawMem
                 ];
+                $statsMap[$rawName] = $sData;
+                $statsMap[ltrim($rawName, '/')] = $sData;
+                if (isset($sCols[3]) && !empty($sCols[3])) {
+                    $statsMap[trim($sCols[3])] = $sData;
+                }
             }
         }
     }
@@ -363,12 +405,23 @@ function handle_status() {
             $cols = explode("\t", $line);
             if (count($cols) >= 2 && !empty($cols[0])) {
                 $cName = trim($cols[0]);
+                $cleanName = ltrim($cName, '/');
+                $cId = isset($cols[2]) ? trim($cols[2]) : '';
                 $cStatus = (strpos($cols[1], 'Up') === 0) ? 'running' : 'stopped';
-                $cStats = isset($statsMap[$cName]) ? $statsMap[$cName] : null;
-                $cpuStr = $cStats ? $cStats['cpu'] : '0.0%';
-                $memStr = $cStats ? $cStats['memory'] : '0B';
+                
+                $cStats = null;
+                if (isset($statsMap[$cName])) {
+                    $cStats = $statsMap[$cName];
+                } elseif (isset($statsMap[$cleanName])) {
+                    $cStats = $statsMap[$cleanName];
+                } elseif (!empty($cId) && isset($statsMap[$cId])) {
+                    $cStats = $statsMap[$cId];
+                }
+
+                $cpuStr = ($cStatus === 'running' && $cStats) ? $cStats['cpu'] : '0.0%';
+                $memStr = ($cStatus === 'running' && $cStats) ? $cStats['memory'] : '0B';
                 $dockersList[] = [
-                    'name' => $cName,
+                    'name' => $cleanName,
                     'status' => $cStatus,
                     'cpu' => $cpuStr,
                     'memory' => $memStr,
@@ -568,6 +621,7 @@ function handle_file_stream() {
     $rawPath = isset($_GET['path']) ? $_GET['path'] : '';
     $filePath = sanitize_path($rawPath);
 
+    clearstatcache(true, $filePath);
     if (!file_exists($filePath) || is_dir($filePath)) {
         http_response_code(404);
         header('Content-Type: text/plain; charset=utf-8');
@@ -577,7 +631,7 @@ function handle_file_stream() {
 
     $filesize = sprintf("%u", filesize($filePath));
     $mimeType = get_mime_type($filePath);
-    $filename = basename($filePath);
+    $filename = safe_basename($filePath);
 
     // Clean any prior output buffering
     while (ob_get_level()) { ob_end_clean(); }
@@ -650,6 +704,7 @@ function handle_file_read() {
     $rawPath = isset($_GET['path']) ? $_GET['path'] : '';
     $filePath = sanitize_path($rawPath);
 
+    clearstatcache(true, $filePath);
     if (!file_exists($filePath) || is_dir($filePath)) {
         json_output(['status' => 'error', 'message' => 'File not found: ' . $filePath], 404);
     }
@@ -722,11 +777,20 @@ function handle_file_upload() {
             json_output(['status' => 'error', 'message' => "Upload error code: {$file['error']}"], 400);
         }
         $destName = !empty($filename) ? $filename : $file['name'];
-        $destPath = rtrim($targetDir, '/') . '/' . basename($destName);
+        $cleanDestName = safe_basename($destName);
+        if (empty($cleanDestName)) {
+            $cleanDestName = 'upload_' . time();
+        }
+        $destPath = rtrim($targetDir, '/') . '/' . $cleanDestName;
 
         if (!move_uploaded_file($file['tmp_name'], $destPath)) {
-            json_output(['status' => 'error', 'message' => 'Failed to save uploaded file to: ' . $destPath], 500);
+            // Fallback for cross-partition temporary files
+            if (!@copy($file['tmp_name'], $destPath)) {
+                json_output(['status' => 'error', 'message' => 'Failed to save uploaded file to: ' . $destPath], 500);
+            }
+            @unlink($file['tmp_name']);
         }
+        clearstatcache(true, $destPath);
         if (!file_exists($destPath) || filesize($destPath) === 0) {
             json_output(['status' => 'error', 'message' => 'Uploaded file is empty or was not created'], 500);
         }
@@ -734,7 +798,8 @@ function handle_file_upload() {
     } else {
         // Direct stream / chunk upload
         $destName = !empty($filename) ? $filename : 'upload_' . time();
-        $destPath = rtrim($targetDir, '/') . '/' . basename($destName);
+        $cleanDestName = safe_basename($destName);
+        $destPath = rtrim($targetDir, '/') . '/' . $cleanDestName;
         
         $in = fopen('php://input', 'rb');
         $out = fopen($destPath, 'wb');
@@ -748,6 +813,7 @@ function handle_file_upload() {
         fclose($in);
         fclose($out);
 
+        clearstatcache(true, $destPath);
         if ($bytesWritten === 0) {
             @unlink($destPath);
             json_output(['status' => 'error', 'message' => 'Received 0 bytes of upload data'], 400);
@@ -831,7 +897,7 @@ function handle_file_move() {
         json_output(['status' => 'error', 'message' => 'Source does not exist or target is not a directory'], 400);
     }
 
-    $destPath = rtrim($targetDir, '/') . '/' . basename($source);
+    $destPath = rtrim($targetDir, '/') . '/' . safe_basename($source);
     if (!@rename($source, $destPath)) {
         json_output(['status' => 'error', 'message' => 'Failed to move item'], 500);
     }

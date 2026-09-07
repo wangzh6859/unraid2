@@ -62,7 +62,7 @@ export default function FilePreviewer({
       case 'image':
         return <ImageViewer item={item} streamUrl={streamUrl} onDownload={onDownload} />;
       case 'text':
-        return <CodeTextViewer item={item} serverUrl={serverUrl} apiToken={apiToken} />;
+        return <CodeTextViewer item={item} serverUrl={serverUrl} apiToken={apiToken} streamUrl={streamUrl} />;
       case 'docx':
       case 'doc':
         return <DocxViewer item={item} getDirectUrl={getDirectUrl} authHeaders={authHeaders} onDownload={onDownload} />;
