@@ -61,7 +61,11 @@ export default function DockerDetailsScreen() {
       const action = currentStatus === 'running' ? 'stop_docker' : 'start_docker';
       const response = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=${action}&target=${name}`);
       const result = await response.json();
-      if (result.status === 'success') fetchDockerData();
+      if (result.status === 'success') {
+        fetchDockerData();
+      } else {
+        Alert.alert('操作失败', result.message || '服务器拒绝执行');
+      }
     } catch (error) { Alert.alert('失败', '网络异常'); }
   };
 
@@ -74,7 +78,11 @@ export default function DockerDetailsScreen() {
             const savedToken = await AsyncStorage.getItem('@api_token');
             const response = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=restart_docker&target=${name}`);
             const result = await response.json();
-            if (result.status === 'success') fetchDockerData();
+            if (result.status === 'success') {
+              fetchDockerData();
+            } else {
+              Alert.alert('操作失败', result.message || '服务器拒绝执行');
+            }
           } catch (error) { Alert.alert('失败', '网络异常'); }
         }
       }
@@ -84,11 +92,11 @@ export default function DockerDetailsScreen() {
   const sortedDockers = [...dockers].sort((a, b) => {
     if (sortRule === 'status') return (a.status === 'running' ? -1 : 1) - (b.status === 'running' ? -1 : 1);
     if (sortRule === 'cpu') {
-      const cpuA = parseFloat(a.cpu.replace('%', '')) || 0;
-      const cpuB = parseFloat(b.cpu.replace('%', '')) || 0;
+      const cpuA = parseFloat(String(a.cpu || '').replace('%', '')) || 0;
+      const cpuB = parseFloat(String(b.cpu || '').replace('%', '')) || 0;
       return cpuB - cpuA; 
     }
-    return a.name.localeCompare(b.name); 
+    return String(a.name || '').localeCompare(String(b.name || '')); 
   });
 
   if (loading && dockers.length === 0) return <View style={styles.center}><ActivityIndicator size="large" color={colors.accent} /></View>;
@@ -104,7 +112,8 @@ export default function DockerDetailsScreen() {
 
       <ScrollView contentContainerStyle={styles.content}>
         {sortedDockers.map((docker, index) => {
-          const shortMemory = docker.memory.includes(' / ') ? docker.memory.split(' / ')[0] : docker.memory;
+          const mem = String(docker.memory || '');
+          const shortMemory = mem.includes(' / ') ? mem.split(' / ')[0] : (mem || '-');
 
           return (
             <View key={index} style={styles.card}>

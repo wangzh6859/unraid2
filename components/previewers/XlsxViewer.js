@@ -9,7 +9,6 @@ import * as XLSX from 'xlsx';
 import { Download } from 'lucide-react-native';
 import { useTheme } from '../../ThemeContext';
 import { downloadToCache, readFileAsBase64 } from '../../utils/previewUtils';
-import { formatBytes } from '../../utils/cacheManager';
 
 const MAX_ROWS = 500;
 const MAX_COLS = 40;

@@ -1,5 +1,5 @@
 import React from 'react';
-import { StatusBar, StyleSheet, Text, View } from 'react-native';
+import { StatusBar } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -46,11 +46,11 @@ function MainTabs() {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
-tabBarIcon: ({ color, size }) => {
-           if (route.name === '首页') return <Home color={color} size={size} />;
-           if (route.name === '文件') return <Folder color={color} size={size} />;
-           if (route.name === '设置') return <Settings color={color} size={size} />;
-         },
+        tabBarIcon: ({ color, size }) => {
+          if (route.name === '首页') return <Home color={color} size={size} />;
+          if (route.name === '文件') return <Folder color={color} size={size} />;
+          if (route.name === '设置') return <Settings color={color} size={size} />;
+        },
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.sub,
         headerStyle: { backgroundColor: colors.bar },
@@ -59,9 +59,9 @@ tabBarIcon: ({ color, size }) => {
         sceneContainerStyle: { backgroundColor: colors.bg },
       })}
     >
-<Tab.Screen name="首页" component={HomeStack} options={{ headerShown: false }} />
-       <Tab.Screen name="文件" component={FilesScreen} />
-       <Tab.Screen name="设置" component={SettingsScreen} />
+      <Tab.Screen name="首页" component={HomeStack} options={{ headerShown: false }} />
+      <Tab.Screen name="文件" component={FilesScreen} />
+      <Tab.Screen name="设置" component={SettingsScreen} />
     </Tab.Navigator>
   );
 }
@@ -77,14 +77,12 @@ function ThemedRoot() {
       />
       <NavigationContainer>
         <Stack.Navigator>
-          {/* 第一层：底座（包含底部那 4 个按钮的页面） */}
+          {/* 主导航底座（包含底部 3 个 Tab 页面） */}
           <Stack.Screen
             name="MainTabs"
             component={MainTabs}
             options={{ headerShown: false }}
           />
-
-          {/* 第二层：全屏显示的详情页。它弹出时会完美覆盖掉底座的 Tab 栏！ */}
         </Stack.Navigator>
       </NavigationContainer>
     </>
@@ -99,8 +97,3 @@ export default function App() {
     </ThemeProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#111827' },
-  text: { color: '#e5e7eb', fontSize: 16 },
-});

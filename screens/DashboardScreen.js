@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useMemo } from 'react';
 import { StyleSheet, Text, View, ScrollView, RefreshControl, TouchableOpacity, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Alert } from 'react-native';
-import { Cpu, Database, HardDrive, Box, Activity, Monitor, AlertCircle, Wifi, Zap, Server, Key } from 'lucide-react-native';
+import { Cpu, Database, HardDrive, Box, Monitor, Wifi, Zap, Server, Key } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../ThemeContext';
@@ -90,6 +90,11 @@ export default function DashboardScreen({ navigation }) {
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const formatSpeed = (kb) => {
+    const n = parseFloat(kb) || 0;
+    return n > 1024 ? (n / 1024).toFixed(1) + ' MB/s' : n.toFixed(1) + ' KB/s';
   };
 
   // 💡 新增：处理登录并保存配置
@@ -207,8 +212,8 @@ export default function DashboardScreen({ navigation }) {
         </View>
         <View style={[styles.card, styles.gridCard, { marginLeft: 8 }]}>
           <View style={styles.cardHeader}><Wifi color={colors.accent} size={20} /><Text style={styles.cardTitle}>网络</Text></View>
-          <Text style={styles.subText}>↓ {netSpeed.down > 1024 ? (netSpeed.down/1024).toFixed(1) + ' MB/s' : netSpeed.down + ' KB/s'}</Text>
-          <Text style={styles.subText}>↑ {netSpeed.up > 1024 ? (netSpeed.up/1024).toFixed(1) + ' MB/s' : netSpeed.up + ' KB/s'}</Text>
+          <Text style={styles.subText}>↓ {formatSpeed(netSpeed.down)}</Text>
+          <Text style={styles.subText}>↑ {formatSpeed(netSpeed.up)}</Text>
         </View>
       </View>
 

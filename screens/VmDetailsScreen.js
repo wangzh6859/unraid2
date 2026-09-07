@@ -54,7 +54,11 @@ export default function VmDetailsScreen() {
       const action = currentStatus === 'running' ? 'stop_vm' : 'start_vm';
       const response = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=${action}&target=${name}`);
       const result = await response.json();
-      if (result.status === 'success') fetchVmData();
+      if (result.status === 'success') {
+        fetchVmData();
+      } else {
+        Alert.alert('操作失败', result.message || '服务器拒绝执行');
+      }
     } catch (error) { Alert.alert('失败', '网络异常'); }
   };
 
@@ -67,7 +71,11 @@ export default function VmDetailsScreen() {
             const savedToken = await AsyncStorage.getItem('@api_token');
             const response = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=restart_vm&target=${name}`);
             const result = await response.json();
-            if (result.status === 'success') fetchVmData();
+            if (result.status === 'success') {
+              fetchVmData();
+            } else {
+              Alert.alert('操作失败', result.message || '服务器拒绝执行');
+            }
           } catch (error) { Alert.alert('失败', '网络异常'); }
         }
       }
@@ -76,7 +84,7 @@ export default function VmDetailsScreen() {
 
   const sortedVms = [...vms].sort((a, b) => {
     if (sortRule === 'status') return (a.status === 'running' ? -1 : 1) - (b.status === 'running' ? -1 : 1);
-    return a.name.localeCompare(b.name);
+    return String(a.name || '').localeCompare(String(b.name || ''));
   });
 
   if (loading && vms.length === 0) return <View style={styles.center}><ActivityIndicator size="large" color={colors.pink} /></View>;

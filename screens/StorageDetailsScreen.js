@@ -73,7 +73,7 @@ export default function StorageDetailsScreen({ navigation }) {
                 <ChevronRight size={18} color={colors.muted} />
               </View>
 
-              {/* 第二行：四宫格状态数据 */}
+              {/* 第二行：状态/温度/SMART 状态数据 */}
               <View style={styles.gridRow}>
                 {/* 状态 */}
                 <View style={styles.gridItem}>

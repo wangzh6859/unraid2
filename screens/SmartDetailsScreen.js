@@ -1,8 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { StyleSheet, Text, View, ScrollView, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useTheme } from '../ThemeContext';
 
 export default function SmartDetailsScreen({ route }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const { device, name } = route.params; // 接收传过来的 sda, sdb 等设备号
   const [smartData, setSmartData] = useState('');
   const [loading, setLoading] = useState(true);
@@ -24,7 +27,7 @@ export default function SmartDetailsScreen({ route }) {
     fetchSmart();
   }, [device]);
 
-  if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#10b981" /></View>;
+  if (loading) return <View style={styles.center}><ActivityIndicator size="large" color={colors.green} /></View>;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -38,13 +41,13 @@ export default function SmartDetailsScreen({ route }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000000' }, // 纯黑背景
+const createStyles = (colors) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16, paddingBottom: 40 },
-  center: { flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' },
-  headerBox: { backgroundColor: '#1f2937', padding: 12, borderRadius: 8, marginBottom: 16 },
-  titleText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
-  terminalBox: { flex: 1 },
+  center: { flex: 1, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center' },
+  headerBox: { backgroundColor: colors.card, padding: 14, borderRadius: 12, marginBottom: 16, borderWidth: 1, borderColor: colors.divider },
+  titleText: { color: colors.textStrong, fontSize: 16, fontWeight: 'bold' },
+  terminalBox: { flex: 1, backgroundColor: '#0d1117', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: colors.divider },
   // 终端风格的绿字输出
   terminalText: { color: '#10b981', fontFamily: 'monospace', fontSize: 12, lineHeight: 18 }, 
 });

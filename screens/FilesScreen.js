@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo } fro
 import { StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, ScrollView, Modal, BackHandler, Pressable, RefreshControl, Image } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  Folder, Save, Server, Key, User, File, ChevronLeft, LogOut, HardDrive, Plus, ArrowDownUp,
+  Folder, Server, Key, User, File, ChevronLeft, LogOut, HardDrive, Plus, ArrowDownUp,
   FolderPlus, UploadCloud, DownloadCloud, X, Download, Pencil, Copy, MoveRight,
   Trash2, CheckCircle, Circle, ArrowUp, FolderOpen, Info,
 } from 'lucide-react-native';
@@ -694,22 +694,6 @@ export default function FilesScreen({ navigation }) {
                 <Text style={styles.detailLabel}>类型</Text>
                 <Text style={styles.detailValue}>{detailItem?.isFolder ? '文件夹' : '文件'}</Text>
               </View>
-              {!detailItem?.isFolder && (
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>大小</Text>
-                  <Text style={styles.detailValue}>{formatBytes(detailItem?.size)}</Text>
-                </View>
-              )}
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>路径</Text>
-                <Text style={styles.detailValue} numberOfLines={1}>{detailItem?.href}</Text>
-              </View>
-            </View>
-            <View style={styles.detailRows}>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>类型</Text>
-                <Text style={styles.detailValue}>{detailItem?.isFolder ? '文件夹' : '文件'}</Text>
-              </View>
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>大小</Text>
                 <Text style={styles.detailValue}>{detailItem?.isFolder ? '-' : formatBytes(detailItem?.size)}</Text>
@@ -730,6 +714,28 @@ export default function FilesScreen({ navigation }) {
                 <Text style={styles.detailLabel}>路径</Text>
                 <Text style={styles.detailValue} numberOfLines={1}>{detailItem?.href}</Text>
               </View>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
+              <TouchableOpacity
+                style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.input, borderRadius: 12, paddingVertical: 12 }}
+                onPress={() => openRename(detailItem)}
+              >
+                <Pencil color={colors.accent} size={18} style={{ marginRight: 6 }} />
+                <Text style={{ color: colors.textStrong, fontSize: 14, fontWeight: 'bold' }}>重命名</Text>
+              </TouchableOpacity>
+              {!detailItem?.isFolder && (
+                <TouchableOpacity
+                  style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.input, borderRadius: 12, paddingVertical: 12 }}
+                  onPress={() => {
+                    const item = detailItem;
+                    setDetailItem(null);
+                    handleDownload(item);
+                  }}
+                >
+                  <Download color={colors.accent} size={18} style={{ marginRight: 6 }} />
+                  <Text style={{ color: colors.textStrong, fontSize: 14, fontWeight: 'bold' }}>下载</Text>
+                </TouchableOpacity>
+              )}
             </View>
             <TouchableOpacity style={styles.actionSheetCancel} onPress={() => setDetailItem(null)}>
               <Text style={styles.actionSheetCancelText}>关闭</Text>

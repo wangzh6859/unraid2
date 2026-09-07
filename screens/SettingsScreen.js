@@ -4,12 +4,12 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants'; // 💡 引入动态变量库，用于获取真实版本号
-import { X, HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server, LogOut, Moon, Sun, FolderDown, RefreshCw, Trash2, Key, User } from 'lucide-react-native';
+import { HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server, LogOut, Moon, Sun, FolderDown, RefreshCw, Trash2, Key, User } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import {
   getDownloadDir, setDownloadDir, resetDownloadDir,
   getCacheSize as getPreviewCacheSize, getCacheLimitBytes, setCacheLimitMB,
-  clearCache as clearPreviewCache, getCacheDirPath, formatBytes as fmtBytes,
+  clearCache as clearPreviewCache, formatBytes as fmtBytes,
 } from '../utils/cacheManager';
 
 export default function SettingsScreen({ navigation }) {
@@ -41,27 +41,6 @@ export default function SettingsScreen({ navigation }) {
 
   // 💡 动态获取 app.json 中的真实版本号，获取不到则默认 1.0.0
   const appVersion = Constants.expoConfig?.version || '1.0.0';
-
-  const formatBytes = (bytes) => {
-    if (!bytes || bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  const getCacheSize = async () => {
-    try {
-      const cacheDir = FileSystem.cacheDirectory;
-      const files = await FileSystem.readDirectoryAsync(cacheDir);
-      let totalSize = 0;
-      for (const file of files) {
-        const fileInfo = await FileSystem.getInfoAsync(cacheDir + file);
-        if (!fileInfo.isDirectory && fileInfo.size) totalSize += fileInfo.size;
-      }
-      setCacheSize(formatBytes(totalSize));
-    } catch (error) { setCacheSize('0 B'); }
-  };
 
   // 💡 加载下载目录 + 缓存设置
   const loadSettings = async () => {
@@ -152,29 +131,6 @@ export default function SettingsScreen({ navigation }) {
     setLimitVisible(false);
     Alert.alert('已保存', `缓存上限已设为 ${saved} MB，超出时将自动清理最早文件。`);
   };
-
-  const clearCache = async () => {
-    Alert.alert('清理缓存', '确定要清除所有预览图片和临时垃圾文件吗？', [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '彻底清除', style: 'destructive',
-        onPress: async () => {
-          setIsClearing(true);
-          try {
-            const cacheDir = FileSystem.cacheDirectory;
-            const files = await FileSystem.readDirectoryAsync(cacheDir);
-            for (const file of files) await FileSystem.deleteAsync(cacheDir + file, { idempotent: true });
-            await getCacheSize();
-            Alert.alert('清理完成', '存储空间已释放！');
-          } catch (error) { Alert.alert('清理失败', error.message); }
-          finally { setIsClearing(false); }
-        }
-      }
-    ]);
-  };
-
-  // 💡 断开 Unraid 服务器连接
-
 
   // 💡 修改主服务器连接地址（弹输入框）
   const editServerUrl = () => {
