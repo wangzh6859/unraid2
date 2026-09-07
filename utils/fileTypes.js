@@ -47,7 +47,8 @@ const AUDIO_EXTS = new Set([
 
 // 新增可在线预览的富文档/容器格式（见 components/previewers/）
 const PDF_EXTS = new Set(['pdf']);
-const DOCX_EXTS = new Set(['docx', 'docm', 'dotx', 'doc']);
+const DOCX_EXTS = new Set(['docx', 'docm', 'dotx']);
+const DOC_EXTS = new Set(['doc', 'dot', 'wps']);
 const SHEET_EXTS = new Set(['xlsx', 'xls', 'xlsm', 'xlsb']);
 const EBOOK_EXTS = new Set(['epub']);
 const ARCHIVE_EXTS = new Set(['zip', 'tar']);
@@ -56,7 +57,7 @@ const EXT_RE = /\.([A-Za-z0-9]+)$/;
 
 /**
  * 根据文件名返回预览分类：
- * 'text' | 'image' | 'video' | 'audio' | 'pdf' | 'docx' | 'sheet' | 'ebook' | 'archive' | 'other'
+ * 'text' | 'image' | 'video' | 'audio' | 'pdf' | 'docx' | 'doc' | 'sheet' | 'ebook' | 'archive' | 'other'
  * （'folder' 由调用方通过 isFolder 判断，这里不处理）
  */
 export const getFileKind = (name) => {
@@ -70,6 +71,7 @@ export const getFileKind = (name) => {
   if (AUDIO_EXTS.has(ext)) return 'audio';
   if (PDF_EXTS.has(ext)) return 'pdf';
   if (DOCX_EXTS.has(ext)) return 'docx';
+  if (DOC_EXTS.has(ext)) return 'doc';
   if (SHEET_EXTS.has(ext)) return 'sheet';
   if (EBOOK_EXTS.has(ext)) return 'ebook';
   if (ARCHIVE_EXTS.has(ext)) return 'archive';

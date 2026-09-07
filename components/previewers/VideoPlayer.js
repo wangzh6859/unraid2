@@ -3,7 +3,7 @@ import {
   StyleSheet, Text, View, TouchableOpacity, ActivityIndicator,
   TouchableWithoutFeedback, Platform, Animated,
 } from 'react-native';
-import { Video, ResizeMode } from 'expo-av';
+import { Video, Audio, ResizeMode } from 'expo-av';
 import {
   Play, Pause, RotateCcw, RotateCw, Maximize, Minimize,
   Volume2, VolumeX, AlertCircle, Download,
@@ -38,6 +38,15 @@ export default function VideoPlayer({ item, streamUrl, onDownload }) {
 
   const hideTimerRef = useRef(null);
   const controlsOpacity = useRef(new Animated.Value(1)).current;
+
+  // Initialize Audio mode for audio playback through speakers
+  useEffect(() => {
+    Audio.setAudioModeAsync({
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: false,
+    }).catch(() => {});
+  }, []);
 
   // Auto-hide controls after 3.5s
   const resetHideTimer = useCallback(() => {
@@ -147,6 +156,7 @@ export default function VideoPlayer({ item, streamUrl, onDownload }) {
           resizeMode={resizeMode}
           shouldPlay
           isMuted={isMuted}
+          volume={1.0}
           onPlaybackStatusUpdate={(s) => {
             setStatus(s);
             setIsBuffering(s.isBuffering);

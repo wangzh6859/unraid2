@@ -60,7 +60,7 @@ export default function ArchiveViewer({ item, getDirectUrl, authHeaders, onDownl
         const isZip = /\.zip$/i.test(item.name);
         let entries = [];
         if (isZip) {
-          const zip = await JSZip.loadAsync(b64);
+          const zip = await JSZip.loadAsync(base64ToUint8(b64));
           entries = Object.keys(zip.files)
             .filter((p) => !zip.files[p].dir && !/^__MACOSX\//.test(p) && !/\.DS_Store$/i.test(p))
             .map((p) => ({ name: p, zip: zip.files[p] }))

@@ -25,8 +25,12 @@ export default function CodeTextViewer({ item, serverUrl, apiToken }) {
   const loadContent = async () => {
     setLoading(true);
     try {
-      const url = `${serverUrl}/api.php?token=${apiToken}&action=file_read&path=${encodeURIComponent(item.path)}`;
+      const targetPath = item?.path || item?.href || '';
+      const url = `${serverUrl}/api.php?token=${apiToken}&action=file_read&path=${encodeURIComponent(targetPath)}`;
       const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const json = await res.json();
       if (json.status === 'success') {
         setContent(json.content || '');
@@ -45,19 +49,23 @@ export default function CodeTextViewer({ item, serverUrl, apiToken }) {
     if (item && serverUrl) {
       loadContent();
     }
-  }, [item?.path, serverUrl]);
+  }, [item?.path || item?.href, serverUrl]);
 
   // Save changes to server
   const saveContent = async () => {
     if (saving) return;
     setSaving(true);
     try {
-      const url = `${serverUrl}/api.php?token=${apiToken}&action=file_write&path=${encodeURIComponent(item.path)}`;
+      const targetPath = item?.path || item?.href || '';
+      const url = `${serverUrl}/api.php?token=${apiToken}&action=file_write&path=${encodeURIComponent(targetPath)}`;
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         body: content,
       });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const json = await res.json();
       if (json.status === 'success') {
         setInitialContent(content);

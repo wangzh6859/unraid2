@@ -9,7 +9,7 @@ import JSZip from 'jszip';
 import { XMLParser } from 'fast-xml-parser';
 import { ChevronLeft, ChevronRight, Download } from 'lucide-react-native';
 import { useTheme } from '../../ThemeContext';
-import { downloadToCache, readFileAsBase64, stripHtml } from '../../utils/previewUtils';
+import { downloadToCache, readFileAsBase64, base64ToUint8, stripHtml } from '../../utils/previewUtils';
 
 export default function EpubViewer({ item, getDirectUrl, authHeaders, onDownload }) {
   const { colors } = useTheme();
@@ -21,7 +21,7 @@ export default function EpubViewer({ item, getDirectUrl, authHeaders, onDownload
       try {
         const uri = await downloadToCache({ file: item, getDirectUrl, authHeaders });
         const b64 = await readFileAsBase64(uri);
-        const zip = await JSZip.loadAsync(b64);
+        const zip = await JSZip.loadAsync(base64ToUint8(b64));
         const containerXml = await zip.file('META-INF/container.xml').async('string');
         const parser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: false });
         const container = parser.parse(containerXml);

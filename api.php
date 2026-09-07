@@ -11,8 +11,8 @@
  * 6. High-Performance File Management:
  *    - Directory Browsing (JSON output, native UTF-8)
  *    - HTTP Range Streaming (RFC 7233 206 Partial Content for instant video/audio seeking)
- *    - File Read & Live Save
- *    - Multipart / Direct File Upload
+ *    - File Read (with automatic UTF-8 transcoding for Chinese text) & Live Save
+ *    - Multipart & Raw Binary File Upload
  *    - Make Directory, Rename, Delete, Move, Copy
  */
 
@@ -30,9 +30,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 // -------------------------------------------------------------
 // Authentication Configuration
 // -------------------------------------------------------------
-// You can define a token directly here, or it will be read from:
-// 1. /boot/config/plugins/unraid_api_token.txt
-// 2. Or fallback to constant UNRAID_API_TOKEN
 define('CONFIG_TOKEN_FILE', '/boot/config/plugins/unraid_api_token.txt');
 define('FALLBACK_TOKEN', 'unraid2026');
 
@@ -63,7 +60,6 @@ function verify_auth() {
 
     $validTokens = get_valid_tokens();
     if (empty($reqToken) || !in_array($reqToken, $validTokens, true)) {
-        // If neither token configured nor passed, or mismatch
         header('Content-Type: application/json; charset=utf-8');
         http_response_code(401);
         echo json_encode([
@@ -81,24 +77,21 @@ $action = isset($_GET['action']) ? trim($_GET['action']) : (isset($_POST['action
 // -------------------------------------------------------------
 // Safe Path Normalization & Security Jail
 // -------------------------------------------------------------
-// Unraid stores all user data in /mnt (e.g. /mnt/user, /mnt/disk1, /mnt/cache).
-// Allow /mnt as root, or root directory with blocked sensitive paths.
 define('ALLOWED_ROOT', '/mnt');
 
 function sanitize_path($inputPath) {
     if (empty($inputPath) || $inputPath === '/' || $inputPath === '.') {
         return ALLOWED_ROOT;
     }
-    $path = urldecode($inputPath);
-    // Standardize slashes
-    $path = str_replace('\\', '/', $path);
-    // If not starting with /mnt, prefix with /mnt
+    // Only rawurldecode if there are % encoded sequences to avoid double-decoding plus signs
+    if (strpos($inputPath, '%') !== false) {
+        $inputPath = rawurldecode($inputPath);
+    }
+    $path = str_replace('\\', '/', $inputPath);
     if (strpos($path, '/mnt') !== 0) {
         $path = rtrim(ALLOWED_ROOT, '/') . '/' . ltrim($path, '/');
     }
-    // Remove duplicate slashes
     $path = preg_replace('#/+#', '/', $path);
-    // Resolve traversal
     $parts = explode('/', $path);
     $resolved = [];
     foreach ($parts as $p) {
@@ -112,7 +105,6 @@ function sanitize_path($inputPath) {
         }
     }
     $finalPath = '/' . implode('/', $resolved);
-    // Ensure finalPath stays within /mnt
     if (strpos($finalPath, ALLOWED_ROOT) !== 0) {
         $finalPath = ALLOWED_ROOT;
     }
@@ -134,8 +126,11 @@ function get_mime_type($filename) {
         'xml' => 'application/xml', 'html' => 'text/html; charset=utf-8',
         'css' => 'text/css', 'js' => 'application/javascript',
         'zip' => 'application/zip', 'tar' => 'application/x-tar',
-        'epub' => 'application/epub+zip', 'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        'epub' => 'application/epub+zip',
+        'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'doc' => 'application/msword',
+        'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'xls' => 'application/vnd.ms-excel'
     ];
     return isset($mimes[$ext]) ? $mimes[$ext] : 'application/octet-stream';
 }
@@ -233,7 +228,6 @@ function json_output($data, $code = 200) {
 // Power Controls
 // -------------------------------------------------------------
 function handle_reboot() {
-    // Schedule reboot with 1s delay so HTTP response is returned cleanly
     $cmd = "nohup sh -c 'sleep 1 && /sbin/reboot' > /dev/null 2>&1 &";
     exec($cmd);
     json_output([
@@ -302,7 +296,6 @@ function handle_status() {
     $totalArraySize = 0;
     $totalArrayUsed = 0;
 
-    // Scan /mnt/disk* and /mnt/user
     $dfOutput = @shell_exec('df -B1 /mnt/disk* /mnt/cache* /mnt/user 2>/dev/null');
     if ($dfOutput) {
         $lines = explode("\n", trim($dfOutput));
@@ -324,17 +317,18 @@ function handle_status() {
                 }
                 if (!isset($seen[$name])) {
                     $seen[$name] = true;
-                    // Check disk standby/active
                     $standbyCheck = @shell_exec("hdparm -C /dev/{$dev} 2>/dev/null");
                     $status = (strpos($standbyCheck, 'standby') !== false) ? 'standby' : 'active';
                     
-                    // Temp via smartctl or unraid disk.ini
                     $temp = 32;
+                    $pct = ($size > 0) ? round(($used / $size) * 100, 1) : 0;
                     $disks[] = [
                         'name' => $name,
                         'device' => $dev,
                         'size' => $size,
+                        'total' => $size,
                         'used' => $used,
+                        'percentage' => $pct,
                         'temp' => $temp,
                         'status' => $status,
                         'smart_status' => 'Normal'
@@ -346,8 +340,22 @@ function handle_status() {
 
     $storagePercentage = ($totalArraySize > 0) ? round(($totalArrayUsed / $totalArraySize) * 100, 1) : 0;
 
-    // 5. Docker Containers
+    // 5. Docker Containers (with live CPU and Memory from docker stats)
     $dockersList = [];
+    $statsMap = [];
+    $dockerStats = @shell_exec('timeout 2 docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" 2>/dev/null');
+    if ($dockerStats) {
+        foreach (explode("\n", trim($dockerStats)) as $sLine) {
+            $sCols = explode("\t", trim($sLine));
+            if (count($sCols) >= 3 && !empty($sCols[0])) {
+                $statsMap[trim($sCols[0])] = [
+                    'cpu' => trim($sCols[1]),
+                    'memory' => trim($sCols[2])
+                ];
+            }
+        }
+    }
+
     $dockerPs = @shell_exec('docker ps -a --format "{{.Names}}\t{{.Status}}\t{{.ID}}" 2>/dev/null');
     if ($dockerPs) {
         $lines = explode("\n", trim($dockerPs));
@@ -356,11 +364,15 @@ function handle_status() {
             if (count($cols) >= 2 && !empty($cols[0])) {
                 $cName = trim($cols[0]);
                 $cStatus = (strpos($cols[1], 'Up') === 0) ? 'running' : 'stopped';
+                $cStats = isset($statsMap[$cName]) ? $statsMap[$cName] : null;
+                $cpuStr = $cStats ? $cStats['cpu'] : '0.0%';
+                $memStr = $cStats ? $cStats['memory'] : '0B';
                 $dockersList[] = [
                     'name' => $cName,
                     'status' => $cStatus,
-                    'cpu' => 0.5,
-                    'mem' => 256 * 1024 * 1024
+                    'cpu' => $cpuStr,
+                    'memory' => $memStr,
+                    'mem' => $memStr
                 ];
             }
         }
@@ -372,7 +384,6 @@ function handle_status() {
     $virshOutput = @shell_exec('virsh list --all 2>/dev/null');
     if ($virshOutput) {
         $lines = explode("\n", trim($virshOutput));
-        // skip 2 header lines
         if (count($lines) >= 3) {
             array_shift($lines);
             array_shift($lines);
@@ -503,7 +514,6 @@ function handle_file_list() {
 
     foreach ($entries as $item) {
         if ($item === '.' || $item === '..') continue;
-        // Ignore hidden system files like .DS_Store
         if ($item === '.DS_Store' || $item === 'Thumbs.db') continue;
 
         $fullItemPath = rtrim($targetDir, '/') . '/' . $item;
@@ -536,7 +546,6 @@ function handle_file_list() {
         }
     }
 
-    // Sort alphabetically
     usort($folders, function($a, $b) { return strcasecmp($a['name'], $b['name']); });
     usort($files, function($a, $b) { return strcasecmp($a['name'], $b['name']); });
 
@@ -553,8 +562,7 @@ function handle_file_list() {
 }
 
 /**
- * High-performance HTTP 206 Partial Content Range streaming
- * Crucial for expo-av Video / Audio instant playback and scrubbing.
+ * High-performance HTTP 206 Partial Content Range streaming & Direct download
  */
 function handle_file_stream() {
     $rawPath = isset($_GET['path']) ? $_GET['path'] : '';
@@ -563,13 +571,7 @@ function handle_file_stream() {
     if (!file_exists($filePath) || is_dir($filePath)) {
         http_response_code(404);
         header('Content-Type: text/plain; charset=utf-8');
-        echo "File not found.";
-        exit;
-    }
-
-    $fp = @fopen($filePath, 'rb');
-    if (!$fp) {
-        http_response_code(403);
+        echo "File not found: " . $filePath;
         exit;
     }
 
@@ -580,14 +582,14 @@ function handle_file_stream() {
     // Clean any prior output buffering
     while (ob_get_level()) { ob_end_clean(); }
 
-    $start = 0;
-    $end = $filesize - 1;
-
     header("Content-Type: {$mimeType}");
     header("Accept-Ranges: bytes");
     header("Content-Disposition: inline; filename=\"" . rawurlencode($filename) . "\"");
 
+    // Check for HTTP Range Header
     if (isset($_SERVER['HTTP_RANGE'])) {
+        $start = 0;
+        $end = $filesize - 1;
         $c_start = $start;
         $c_end = $end;
 
@@ -620,22 +622,27 @@ function handle_file_stream() {
         http_response_code(206);
         header("Content-Range: bytes {$start}-{$end}/{$filesize}");
         header("Content-Length: {$length}");
-    } else {
-        header("Content-Length: {$filesize}");
+
+        $fp = @fopen($filePath, 'rb');
+        if ($fp) {
+            fseek($fp, $start);
+            $bufferSize = 1024 * 64;
+            $bytesRemaining = $length;
+            while (!feof($fp) && $bytesRemaining > 0 && !connection_aborted()) {
+                $readSize = ($bytesRemaining > $bufferSize) ? $bufferSize : $bytesRemaining;
+                $buffer = fread($fp, $readSize);
+                echo $buffer;
+                flush();
+                $bytesRemaining -= strlen($buffer);
+            }
+            fclose($fp);
+        }
+        exit;
     }
 
-    fseek($fp, $start);
-    $bufferSize = 1024 * 64; // 64KB chunks
-    $bytesRemaining = $end - $start + 1;
-
-    while (!feof($fp) && $bytesRemaining > 0 && !connection_aborted()) {
-        $readSize = ($bytesRemaining > $bufferSize) ? $bufferSize : $bytesRemaining;
-        $buffer = fread($fp, $readSize);
-        echo $buffer;
-        flush();
-        $bytesRemaining -= strlen($buffer);
-    }
-    fclose($fp);
+    // Standard Direct Stream (no Range requested)
+    header("Content-Length: {$filesize}");
+    readfile($filePath);
     exit;
 }
 
@@ -644,7 +651,7 @@ function handle_file_read() {
     $filePath = sanitize_path($rawPath);
 
     if (!file_exists($filePath) || is_dir($filePath)) {
-        json_output(['status' => 'error', 'message' => 'File not found'], 404);
+        json_output(['status' => 'error', 'message' => 'File not found: ' . $filePath], 404);
     }
 
     $size = filesize($filePath);
@@ -653,6 +660,14 @@ function handle_file_read() {
     }
 
     $content = file_get_contents($filePath);
+    // Convert to UTF-8 if encoded in GBK/GB2312/CP936/etc.
+    if (!mb_check_encoding($content, 'UTF-8')) {
+        $converted = @mb_convert_encoding($content, 'UTF-8', 'GB18030, GBK, BIG5, ISO-8859-1, ASCII');
+        if ($converted !== false) {
+            $content = $converted;
+        }
+    }
+
     json_output([
         'status' => 'success',
         'path' => $filePath,
@@ -669,7 +684,6 @@ function handle_file_write() {
         json_output(['status' => 'error', 'message' => 'Invalid file destination path'], 400);
     }
 
-    // Read body content
     $content = file_get_contents('php://input');
     if (isset($_POST['content'])) {
         $content = $_POST['content'];
@@ -700,35 +714,46 @@ function handle_file_upload() {
         @mkdir($targetDir, 0777, true);
     }
 
+    $filename = isset($_GET['filename']) ? trim($_GET['filename']) : (isset($_POST['filename']) ? trim($_POST['filename']) : '');
+
     if (!empty($_FILES['file'])) {
         $file = $_FILES['file'];
         if ($file['error'] !== UPLOAD_ERR_OK) {
             json_output(['status' => 'error', 'message' => "Upload error code: {$file['error']}"], 400);
         }
-        $destName = isset($_POST['filename']) && !empty($_POST['filename']) ? $_POST['filename'] : $file['name'];
+        $destName = !empty($filename) ? $filename : $file['name'];
         $destPath = rtrim($targetDir, '/') . '/' . basename($destName);
 
         if (!move_uploaded_file($file['tmp_name'], $destPath)) {
-            json_output(['status' => 'error', 'message' => 'Failed to save uploaded file'], 500);
+            json_output(['status' => 'error', 'message' => 'Failed to save uploaded file to: ' . $destPath], 500);
         }
-        json_output(['status' => 'success', 'message' => 'File uploaded', 'path' => $destPath]);
+        if (!file_exists($destPath) || filesize($destPath) === 0) {
+            json_output(['status' => 'error', 'message' => 'Uploaded file is empty or was not created'], 500);
+        }
+        json_output(['status' => 'success', 'message' => 'File uploaded', 'path' => $destPath, 'size' => filesize($destPath)]);
     } else {
         // Direct stream / chunk upload
-        $filename = isset($_GET['filename']) ? basename($_GET['filename']) : (isset($_POST['filename']) ? basename($_POST['filename']) : 'upload_' . time());
-        $destPath = rtrim($targetDir, '/') . '/' . $filename;
+        $destName = !empty($filename) ? $filename : 'upload_' . time();
+        $destPath = rtrim($targetDir, '/') . '/' . basename($destName);
         
         $in = fopen('php://input', 'rb');
         $out = fopen($destPath, 'wb');
         if (!$in || !$out) {
-            json_output(['status' => 'error', 'message' => 'Failed to open stream buffers'], 500);
+            json_output(['status' => 'error', 'message' => 'Failed to open stream buffers for: ' . $destPath], 500);
         }
+        $bytesWritten = 0;
         while ($buff = fread($in, 65536)) {
-            fwrite($out, $buff);
+            $bytesWritten += fwrite($out, $buff);
         }
         fclose($in);
         fclose($out);
 
-        json_output(['status' => 'success', 'message' => 'Raw stream upload complete', 'path' => $destPath]);
+        if ($bytesWritten === 0) {
+            @unlink($destPath);
+            json_output(['status' => 'error', 'message' => 'Received 0 bytes of upload data'], 400);
+        }
+
+        json_output(['status' => 'success', 'message' => 'Raw stream upload complete', 'path' => $destPath, 'size' => $bytesWritten]);
     }
 }
 
@@ -784,7 +809,6 @@ function handle_file_delete() {
 
     $deleteSuccess = false;
     if (is_dir($targetPath)) {
-        // Recursive directory deletion
         $cmd = "rm -rf " . escapeshellarg($targetPath);
         exec($cmd, $out, $ret);
         $deleteSuccess = ($ret === 0);

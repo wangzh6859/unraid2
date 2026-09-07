@@ -112,8 +112,10 @@ export default function DockerDetailsScreen() {
 
       <ScrollView contentContainerStyle={styles.content}>
         {sortedDockers.map((docker, index) => {
-          const mem = String(docker.memory || '');
-          const shortMemory = mem.includes(' / ') ? mem.split(' / ')[0] : (mem || '-');
+          const rawMem = String(docker.memory || docker.mem || '');
+          const shortMemory = rawMem.includes(' / ') ? rawMem.split(' / ')[0].trim() : (rawMem || '0B');
+          const cpuVal = docker.cpu !== undefined && docker.cpu !== null ? String(docker.cpu) : '0%';
+          const cpuText = cpuVal.includes('%') ? cpuVal : `${cpuVal}%`;
 
           return (
             <View key={index} style={styles.card}>
@@ -123,7 +125,7 @@ export default function DockerDetailsScreen() {
                 <Text style={styles.nameText} numberOfLines={1}>{docker.name}</Text>
                 {docker.status === 'running' && (
                   <View style={styles.statsRow}>
-                    <View style={styles.statBadge}><Cpu size={12} color={colors.amber} /><Text style={styles.statText}>{docker.cpu}</Text></View>
+                    <View style={styles.statBadge}><Cpu size={12} color={colors.amber} /><Text style={styles.statText}>{cpuText}</Text></View>
                     <View style={styles.statBadge}><Database size={12} color={colors.green} /><Text style={styles.statText}>{shortMemory}</Text></View>
                   </View>
                 )}

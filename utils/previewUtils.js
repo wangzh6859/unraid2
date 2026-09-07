@@ -17,6 +17,13 @@ export const downloadToCache = async ({ file, getDirectUrl, authHeaders }) => {
   const targetUrl = getDirectUrl ? getDirectUrl(file.path || file.href) : (file.url || file.href);
   const headers = (typeof authHeaders === 'function' ? authHeaders() : authHeaders) || {};
   const res = await FileSystem.downloadAsync(targetUrl, localUri, { headers });
+  if (res.status !== 200 && res.status !== 206) {
+    throw new Error(`下载失败 (HTTP ${res.status})`);
+  }
+  const info = await FileSystem.getInfoAsync(res.uri);
+  if (!info.exists || info.size === 0) {
+    throw new Error('下载文件为空或不存在');
+  }
   await enforceCacheLimit();
   return res.uri;
 };

@@ -53,9 +53,16 @@ export default function StorageDetailsScreen({ navigation }) {
         <View style={styles.center}><Text style={styles.emptyText}>未找到物理磁盘</Text></View>
       ) : (
         disks.map((disk, index) => {
-          const isCache = disk.name.toLowerCase().includes('cache');
-          const isSmartError = disk.smart_status !== 'Normal'; // 判断 SMART 是否报错
+          const isCache = (disk.name || '').toLowerCase().includes('cache');
+          const isSmartError = disk.smart_status && disk.smart_status !== 'Normal'; // 判断 SMART 是否报错
           const isStandby = disk.status === 'standby';
+
+          const totalSize = disk.total || disk.size || 0;
+          const usedSize = disk.used || 0;
+          const calcPct = typeof disk.percentage === 'number'
+            ? disk.percentage
+            : (totalSize > 0 ? Math.round((usedSize / totalSize) * 100) : 0);
+          const safePct = Math.min(100, Math.max(0, isNaN(calcPct) ? 0 : calcPct));
 
           return (
             <TouchableOpacity 
@@ -67,8 +74,8 @@ export default function StorageDetailsScreen({ navigation }) {
               <View style={styles.cardHeader}>
                 <View style={styles.titleRow}>
                   {isCache ? <Server size={20} color={colors.accent} /> : <HardDrive size={20} color={isSmartError ? colors.red : colors.green} />}
-                  <Text style={styles.diskName}>{disk.name}</Text>
-                  <Text style={styles.deviceLabel}>({disk.device})</Text>
+                  <Text style={styles.diskName}>{disk.name || '磁盘'}</Text>
+                  <Text style={styles.deviceLabel}>({disk.device || '未知'})</Text>
                 </View>
                 <ChevronRight size={18} color={colors.muted} />
               </View>
@@ -108,11 +115,11 @@ export default function StorageDetailsScreen({ navigation }) {
               {/* 第三行：利用率 */}
               <View style={styles.usageContainer}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={styles.usageText}>利用率: {disk.percentage}%</Text>
-                  <Text style={styles.usageText}>{formatBytes(disk.used)} / {formatBytes(disk.total)}</Text>
+                  <Text style={styles.usageText}>利用率: {safePct}%</Text>
+                  <Text style={styles.usageText}>{formatBytes(usedSize)} / {formatBytes(totalSize)}</Text>
                 </View>
                 <View style={styles.track}>
-                  <View style={[styles.bar, { width: `${disk.percentage}%`, backgroundColor: disk.percentage > 85 ? colors.red : (isCache ? colors.accent : colors.green) }]} />
+                  <View style={[styles.bar, { width: `${safePct}%`, backgroundColor: safePct > 85 ? colors.red : (isCache ? colors.accent : colors.green) }]} />
                 </View>
               </View>
             </TouchableOpacity>

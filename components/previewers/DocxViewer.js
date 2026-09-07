@@ -8,7 +8,7 @@ import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View
 import JSZip from 'jszip';
 import { Download } from 'lucide-react-native';
 import { useTheme } from '../../ThemeContext';
-import { downloadToCache, readFileAsBase64, decodeEntities } from '../../utils/previewUtils';
+import { downloadToCache, readFileAsBase64, base64ToUint8, decodeEntities } from '../../utils/previewUtils';
 import { formatBytes } from '../../utils/cacheManager';
 
 /** docx -> 段落纯文本 */
@@ -36,9 +36,19 @@ export default function DocxViewer({ item, getDirectUrl, authHeaders, onDownload
     let alive = true;
     (async () => {
       try {
+        if (/\.doc$/i.test(item?.name || '')) {
+          if (alive) {
+            setState({
+              loading: false,
+              text: '',
+              error: '这是老格式 Word (.doc) 复合二进制文件，移动端内嵌解析仅支持 .docx (OpenXML)。建议下载到手机使用 WPS 或 Office 打开。'
+            });
+          }
+          return;
+        }
         const uri = await downloadToCache({ file: item, getDirectUrl, authHeaders });
         const b64 = await readFileAsBase64(uri);
-        const zip = await JSZip.loadAsync(b64);
+        const zip = await JSZip.loadAsync(base64ToUint8(b64));
         const docFile = zip.file('word/document.xml');
         if (!docFile) throw new Error('不是有效的 docx（缺少 word/document.xml）');
         const xml = await docFile.async('string');

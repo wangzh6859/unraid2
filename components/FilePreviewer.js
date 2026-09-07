@@ -64,6 +64,7 @@ export default function FilePreviewer({
       case 'text':
         return <CodeTextViewer item={item} serverUrl={serverUrl} apiToken={apiToken} />;
       case 'docx':
+      case 'doc':
         return <DocxViewer item={item} getDirectUrl={getDirectUrl} authHeaders={authHeaders} onDownload={onDownload} />;
       case 'sheet':
         return <XlsxViewer item={item} getDirectUrl={getDirectUrl} authHeaders={authHeaders} onDownload={onDownload} />;

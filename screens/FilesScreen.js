@@ -246,15 +246,12 @@ export default function FilesScreen({ navigation }) {
   };
 
   const startUploadTask = async (taskItem) => {
-    const uploadUrl = `${serverUrl}/api.php?token=${apiToken}&action=file_upload`;
+    const uploadUrl = `${serverUrl}/api.php?token=${apiToken}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}`;
     try {
       const uploadTask = FileSystem.createUploadTask(
         uploadUrl,
         taskItem.uri,
         {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
           httpMethod: 'POST',
           uploadType: FileSystem.FileSystemUploadType.MULTIPART,
           fieldName: 'file',
@@ -280,14 +277,27 @@ export default function FilesScreen({ navigation }) {
       const res = await uploadTask.uploadAsync();
       delete activeTasksRef.current[taskItem.id];
 
-      if (res.status === 200) {
+      let isSuccess = false;
+      let respMsg = '';
+      try {
+        const bodyJson = JSON.parse(res.body);
+        if (bodyJson.status === 'success') {
+          isSuccess = true;
+        } else {
+          respMsg = bodyJson.message || '服务器保存失败';
+        }
+      } catch (e) {
+        isSuccess = res.status >= 200 && res.status < 300;
+      }
+
+      if (isSuccess) {
         setTransfers(prev => prev.map(t => (t.id === taskItem.id ? { ...t, status: 'success', progress: 100, speed: '上传成功' } : t)));
         // Refresh directory if still viewing destination
         if (currentPath === taskItem.targetPath) {
           loadDirectory(serverUrl, apiToken, currentPath);
         }
       } else {
-        setTransfers(prev => prev.map(t => (t.id === taskItem.id ? { ...t, status: 'error', speed: `上传失败 (HTTP ${res.status})` } : t)));
+        setTransfers(prev => prev.map(t => (t.id === taskItem.id ? { ...t, status: 'error', speed: respMsg || `上传失败 (HTTP ${res.status})` } : t)));
       }
     } catch (err) {
       delete activeTasksRef.current[taskItem.id];
@@ -541,20 +551,22 @@ export default function FilesScreen({ navigation }) {
     loadDirectory(serverUrl, apiToken, currentPath);
   };
 
-  // Hardware back button navigation
-  useEffect(() => {
-    const onBackPress = () => {
-      if (previewItem) { setPreviewItem(null); return true; }
-      if (multiSelect) { exitMultiSelect(); return true; }
-      if (pickerVisible) { setPickerVisible(false); return true; }
-      if (renameItem) { setRenameItem(null); return true; }
-      if (detailItem) { setDetailItem(null); return true; }
-      if (isConfigured && !isAtRoot) { goBack(); return true; }
-      return false;
-    };
-    BackHandler.addEventListener('hardwareBackPress', onBackPress);
-    return () => BackHandler.removeEventListener('hardwareBackPress', onBackPress);
-  }, [isConfigured, isAtRoot, goBack, previewItem, multiSelect, pickerVisible, renameItem, detailItem]);
+  // Hardware back button navigation (only active when Files tab is focused)
+  useFocusEffect(
+    useCallback(() => {
+      const onBackPress = () => {
+        if (previewItem) { setPreviewItem(null); return true; }
+        if (multiSelect) { exitMultiSelect(); return true; }
+        if (pickerVisible) { setPickerVisible(false); return true; }
+        if (renameItem) { setRenameItem(null); return true; }
+        if (detailItem) { setDetailItem(null); return true; }
+        if (isConfigured && !isAtRoot) { goBack(); return true; }
+        return false;
+      };
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => subscription.remove();
+    }, [isConfigured, isAtRoot, goBack, previewItem, multiSelect, pickerVisible, renameItem, detailItem])
+  );
 
   // Header configuration
   useLayoutEffect(() => {
