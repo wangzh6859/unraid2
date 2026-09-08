@@ -2,6 +2,7 @@ import React, { useState, useCallback, useMemo } from 'react';
 import {
   StyleSheet, Text, View, TouchableOpacity, Alert, ActivityIndicator,
   ScrollView, Switch, Modal, TextInput, KeyboardAvoidingView, Platform,
+  Pressable,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system';
@@ -457,8 +458,19 @@ export default function SettingsScreen({ navigation }) {
       {/* Server Config Input Modal */}
       <Modal visible={serverEditVisible} transparent animationType="fade" onRequestClose={() => setServerEditVisible(false)}>
         <KeyboardAvoidingView style={styles.overlayCenter} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setServerEditVisible(false)} />
           <View style={styles.limitBox}>
+            <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
+              {serverEditField === 'url' ? (
+                <Server color={colors.accent} size={28} />
+              ) : (
+                <Key color={colors.accent} size={28} />
+              )}
+            </View>
             <Text style={styles.limitTitle}>{serverEditField === 'url' ? 'Unraid 服务器地址' : 'API 访问 Token'}</Text>
+            <Text style={styles.dialogSub}>
+              {serverEditField === 'url' ? '输入 Unraid WebGUI 地址 (如 http://192.168.1.100)' : '输入由系统生成的 API 安全访问密钥'}
+            </Text>
             <TextInput
               style={styles.limitInput}
               value={serverInput}
@@ -484,15 +496,20 @@ export default function SettingsScreen({ navigation }) {
       {/* Cache Limit Input Modal */}
       <Modal visible={limitVisible} transparent animationType="fade" onRequestClose={() => setLimitVisible(false)}>
         <KeyboardAvoidingView style={styles.overlayCenter} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setLimitVisible(false)} />
           <View style={styles.limitBox}>
-            <Text style={styles.limitTitle}>设置预览缓存上限 (MB)</Text>
+            <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(16, 185, 129, 0.12)' }]}>
+              <HardDrive color={colors.green} size={28} />
+            </View>
+            <Text style={styles.limitTitle}>设置预览缓存上限</Text>
+            <Text style={styles.dialogSub}>超出上限时将自动触发最旧缓存智能淘汰清理</Text>
             <TextInput
               style={styles.limitInput}
               keyboardType="numeric"
               value={limitValue}
               onChangeText={setLimitValue}
               autoFocus
-              placeholder="例如 500"
+              placeholder="例如 500 (单位: MB)"
               placeholderTextColor={colors.muted}
             />
             <View style={styles.renameBtns}>
@@ -547,11 +564,80 @@ const createStyles = (colors) => StyleSheet.create({
   miniBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.input, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8 },
   miniBtnText: { color: colors.text, fontSize: 13, fontWeight: 'bold', marginLeft: 6 },
 
-  overlayCenter: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 },
-  limitBox: { backgroundColor: colors.card, borderRadius: 16, padding: 20 },
-  limitTitle: { color: colors.textStrong, fontSize: 16, fontWeight: 'bold', textAlign: 'center', marginBottom: 16 },
-  limitInput: { backgroundColor: colors.input, borderRadius: 8, paddingHorizontal: 12, height: 48, color: colors.textStrong, fontSize: 15, marginBottom: 16 },
-  renameBtns: { flexDirection: 'row', justifyContent: 'space-between' },
-  renameBtn: { flex: 1, borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginHorizontal: 6 },
-  renameBtnText: { color: colors.text, fontSize: 14, fontWeight: 'bold' },
+  overlayCenter: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  limitBox: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: colors.card,
+    borderRadius: 24,
+    paddingTop: 24,
+    paddingBottom: 20,
+    paddingHorizontal: 22,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.35,
+    shadowRadius: 20,
+  },
+  dialogIconBadge: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  limitTitle: {
+    color: colors.textStrong,
+    fontSize: 18,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+  dialogSub: {
+    color: colors.sub,
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 18,
+    paddingHorizontal: 8,
+  },
+  limitInput: {
+    width: '100%',
+    backgroundColor: colors.input,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    height: 50,
+    color: colors.textStrong,
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: colors.divider,
+    marginBottom: 20,
+  },
+  renameBtns: {
+    flexDirection: 'row',
+    width: '100%',
+    gap: 12,
+  },
+  renameBtn: {
+    flex: 1,
+    height: 46,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  renameBtnText: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '600',
+  },
 });

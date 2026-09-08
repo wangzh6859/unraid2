@@ -374,24 +374,32 @@ export default function FilesScreen({ navigation }) {
       }
 
       // -----------------------------------------------------------------------
-      // Strategy 2: 64KB Form-Data Chunk Engine (POST)
-      // Safely bypasses PHP post_max_size / upload_max_filesize limitations
+      // Strategy 2: Adaptive High-Speed Form-Data Chunk Engine (POST)
+      // 512KB (<=2MB) | 1MB (2MB-20MB) | 2MB (>20MB)
+      // Safely bypasses PHP upload_max_filesize (2M) via form parameter data
+      // 2MB binary = ~2.67MB Base64, well within PHP post_max_size (8M)
       // -----------------------------------------------------------------------
+      let CHUNK_SIZE = 512 * 1024; // 512 KB default for small files
+      if (totalSize > 20 * 1024 * 1024) {
+        CHUNK_SIZE = 2 * 1024 * 1024; // 2 MB per chunk for files > 20MB
+      } else if (totalSize > 2 * 1024 * 1024) {
+        CHUNK_SIZE = 1024 * 1024; // 1 MB per chunk for files 2MB - 20MB
+      }
+
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
         status: 'running',
         progress: 15,
-        speed: `切换分片传输引擎 (64KB/片)...`,
+        speed: `高速分片传输中 (${formatBytes(CHUNK_SIZE)}/片)...`,
       } : t)));
 
-      const CHUNK_SIZE = 64 * 1024; // 64 KB per chunk
       const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
-
       let startChunk = taskItem.chunkIndex || 0;
       if (startChunk >= totalChunks) startChunk = 0;
 
       let lastTime = Date.now();
       let lastBytes = startChunk * CHUNK_SIZE;
+      let currentSpeedStr = ''; // Persists speed display across chunks to avoid flicker
       let chunkEngineFailed = false;
       let chunkEngineError = '';
 
@@ -412,74 +420,93 @@ export default function FilesScreen({ navigation }) {
           });
         }
 
-        try {
-          const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_chunk`;
-          const formData = new FormData();
-          formData.append('token', apiToken);
-          formData.append('action', 'file_chunk');
-          formData.append('path', taskItem.targetPath);
-          formData.append('filename', taskItem.name);
-          formData.append('chunk_index', String(i));
-          formData.append('total_chunks', String(totalChunks));
-          formData.append('offset', String(offset));
-          formData.append('total_size', String(totalSize));
-          formData.append('data', base64Chunk);
-          if (activeCsrf) formData.append('csrf_token', activeCsrf);
+        const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_chunk`;
+        const formData = new FormData();
+        formData.append('token', apiToken);
+        formData.append('action', 'file_chunk');
+        formData.append('path', taskItem.targetPath);
+        formData.append('filename', taskItem.name);
+        formData.append('chunk_index', String(i));
+        formData.append('total_chunks', String(totalChunks));
+        formData.append('offset', String(offset));
+        formData.append('total_size', String(totalSize));
+        formData.append('data', base64Chunk);
+        if (activeCsrf) formData.append('csrf_token', activeCsrf);
 
-          const res = await fetch(chunkUrl, {
-            method: 'POST',
-            headers: {
-              'Accept': 'application/json',
-              'X-API-Token': apiToken,
-              ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
-            },
-            body: formData,
-            signal: abortController.signal,
-          });
+        let chunkSuccess = false;
+        let chunkAttempt = 0;
+        let lastErr = null;
 
-          const resText = await res.text();
-          if (!res.ok || !resText || !resText.trim()) {
-            throw new Error(`HTTP ${res.status}: ${resText ? resText.slice(0, 100) : '服务端返回 0 字节'}`);
-          }
+        while (!chunkSuccess && chunkAttempt < 3) {
+          if (activeTasksRef.current[taskId]?.cancelled) return;
+          chunkAttempt++;
+          try {
+            const res = await fetch(chunkUrl, {
+              method: 'POST',
+              headers: {
+                'Accept': 'application/json',
+                'X-API-Token': apiToken,
+                ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
+              },
+              body: formData,
+              signal: abortController.signal,
+            });
 
-          const resData = JSON.parse(resText);
-          if (resData.status !== 'success') {
-            throw new Error(resData.message || '分片写入失败');
-          }
-
-          // Calculate progress & speed
-          const currentBytes = offset + length;
-          const now = Date.now();
-          const timeDiff = (now - lastTime) / 1000;
-          let speedStr = '';
-          if (timeDiff >= 0.5) {
-            const bytesDiff = currentBytes - lastBytes;
-            const currentSpeed = bytesDiff / timeDiff;
-            speedStr = ` · ${formatBytes(currentSpeed)}/s`;
-            lastTime = now;
-            lastBytes = currentBytes;
-          }
-
-          const pct = totalSize > 0 ? Math.min(99, Math.round((currentBytes / totalSize) * 100)) : 100;
-
-          setTransfers(prev => prev.map(t => {
-            if (t.id === taskId) {
-              return {
-                ...t,
-                status: 'running',
-                chunkIndex: i + 1,
-                progress: pct,
-                speed: `${formatBytes(currentBytes)} / ${formatBytes(totalSize)} (${pct}%)${speedStr}`,
-              };
+            const resText = await res.text();
+            if (!res.ok || !resText || !resText.trim()) {
+              throw new Error(`HTTP ${res.status}: ${resText ? resText.slice(0, 100) : '服务端返回 0 字节'}`);
             }
-            return t;
-          }));
-        } catch (chunkErr) {
-          console.log(`[FilesScreen] POST chunk ${i} failed:`, chunkErr);
+
+            const resData = JSON.parse(resText);
+            if (resData.status !== 'success') {
+              throw new Error(resData.message || '分片写入失败');
+            }
+            chunkSuccess = true;
+          } catch (err) {
+            lastErr = err;
+            if (activeTasksRef.current[taskId]?.cancelled) return;
+            if (chunkAttempt < 3) {
+              await new Promise(resolve => setTimeout(resolve, 500));
+            }
+          }
+        }
+
+        if (!chunkSuccess) {
+          console.log(`[FilesScreen] POST chunk ${i} failed after 3 attempts:`, lastErr);
           chunkEngineFailed = true;
-          chunkEngineError = chunkErr.message;
+          chunkEngineError = lastErr ? lastErr.message : '分片写入失败';
           break;
         }
+
+        // Smooth speed calculation without jitter
+        const currentBytes = offset + length;
+        const now = Date.now();
+        const timeDiff = (now - lastTime) / 1000;
+
+        if (timeDiff >= 0.35 || !currentSpeedStr) {
+          const bytesDiff = currentBytes - lastBytes;
+          if (timeDiff > 0 && bytesDiff > 0) {
+            const currentSpeed = bytesDiff / timeDiff;
+            currentSpeedStr = ` · ${formatBytes(currentSpeed)}/s`;
+          }
+          lastTime = now;
+          lastBytes = currentBytes;
+        }
+
+        const pct = totalSize > 0 ? Math.min(99, Math.round((currentBytes / totalSize) * 100)) : 100;
+
+        setTransfers(prev => prev.map(t => {
+          if (t.id === taskId) {
+            return {
+              ...t,
+              status: 'running',
+              chunkIndex: i + 1,
+              progress: pct,
+              speed: `${formatBytes(currentBytes)} / ${formatBytes(totalSize)} (${pct}%)${currentSpeedStr}`,
+            };
+          }
+          return t;
+        }));
       }
 
       // -----------------------------------------------------------------------
@@ -499,6 +526,7 @@ export default function FilesScreen({ navigation }) {
         const microTotal = totalSize > 0 ? Math.ceil(totalSize / MICRO_CHUNK) : 1;
         let microLastTime = Date.now();
         let microLastBytes = 0;
+        let microSpeedStr = '';
 
         for (let m = 0; m < microTotal; m++) {
           if (activeTasksRef.current[taskId]?.cancelled) {
@@ -544,11 +572,12 @@ export default function FilesScreen({ navigation }) {
           const currentBytes = mOffset + mLength;
           const now = Date.now();
           const timeDiff = (now - microLastTime) / 1000;
-          let speedStr = '';
-          if (timeDiff >= 0.5) {
+          if (timeDiff >= 0.35 || !microSpeedStr) {
             const bytesDiff = currentBytes - microLastBytes;
-            const currentSpeed = bytesDiff / timeDiff;
-            speedStr = ` · ${formatBytes(currentSpeed)}/s`;
+            if (timeDiff > 0 && bytesDiff > 0) {
+              const currentSpeed = bytesDiff / timeDiff;
+              microSpeedStr = ` · ${formatBytes(currentSpeed)}/s`;
+            }
             microLastTime = now;
             microLastBytes = currentBytes;
           }
@@ -562,7 +591,7 @@ export default function FilesScreen({ navigation }) {
                 status: 'running',
                 chunkIndex: m + 1,
                 progress: pct,
-                speed: `${formatBytes(currentBytes)} / ${formatBytes(totalSize)} (${pct}%)${speedStr}`,
+                speed: `${formatBytes(currentBytes)} / ${formatBytes(totalSize)} (${pct}%)${microSpeedStr}`,
               };
             }
             return t;
@@ -1171,23 +1200,28 @@ export default function FilesScreen({ navigation }) {
 
       {/* Create Folder Modal */}
       <Modal visible={mkdirVisible} transparent animationType="fade" onRequestClose={() => setMkdirVisible(false)}>
-        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={styles.renameBox}>
-            <Text style={styles.renameTitle}>新建文件夹</Text>
+        <KeyboardAvoidingView style={styles.dialogOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setMkdirVisible(false)} />
+          <View style={styles.dialogCard}>
+            <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
+              <FolderPlus color={colors.accent} size={28} />
+            </View>
+            <Text style={styles.dialogTitle}>新建文件夹</Text>
+            <Text style={styles.dialogSub}>在当前路径下创建一个新的子目录</Text>
             <TextInput
-              style={styles.renameInput}
+              style={styles.dialogInput}
               value={newFolderName}
               onChangeText={setNewFolderName}
               autoFocus
               placeholder="请输入文件夹名称"
               placeholderTextColor={colors.muted}
             />
-            <View style={styles.renameBtns}>
-              <TouchableOpacity style={[styles.renameBtn, { backgroundColor: colors.input }]} onPress={() => setMkdirVisible(false)}>
-                <Text style={styles.renameBtnText}>取消</Text>
+            <View style={styles.dialogActions}>
+              <TouchableOpacity style={[styles.dialogBtn, styles.dialogCancelBtn]} onPress={() => setMkdirVisible(false)}>
+                <Text style={styles.dialogCancelText}>取消</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.renameBtn, { backgroundColor: colors.accent }]} onPress={confirmCreateFolder}>
-                <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>创建</Text>
+              <TouchableOpacity style={[styles.dialogBtn, styles.dialogConfirmBtn]} onPress={confirmCreateFolder}>
+                <Text style={styles.dialogConfirmText}>创建</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1196,11 +1230,16 @@ export default function FilesScreen({ navigation }) {
 
       {/* Rename Modal */}
       <Modal visible={!!renameItem} transparent animationType="fade" onRequestClose={() => setRenameItem(null)}>
-        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={styles.renameBox}>
-            <Text style={styles.renameTitle}>重命名</Text>
+        <KeyboardAvoidingView style={styles.dialogOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setRenameItem(null)} />
+          <View style={styles.dialogCard}>
+            <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(245, 158, 11, 0.12)' }]}>
+              <Pencil color={colors.amber} size={26} />
+            </View>
+            <Text style={styles.dialogTitle}>重命名</Text>
+            <Text style={styles.dialogSub}>修改文件或文件夹的名称</Text>
             <TextInput
-              style={styles.renameInput}
+              style={styles.dialogInput}
               value={renameValue}
               onChangeText={setRenameValue}
               autoFocus
@@ -1208,12 +1247,12 @@ export default function FilesScreen({ navigation }) {
               placeholder="输入新名称"
               placeholderTextColor={colors.muted}
             />
-            <View style={styles.renameBtns}>
-              <TouchableOpacity style={[styles.renameBtn, { backgroundColor: colors.input }]} onPress={() => setRenameItem(null)}>
-                <Text style={styles.renameBtnText}>取消</Text>
+            <View style={styles.dialogActions}>
+              <TouchableOpacity style={[styles.dialogBtn, styles.dialogCancelBtn]} onPress={() => setRenameItem(null)}>
+                <Text style={styles.dialogCancelText}>取消</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.renameBtn, { backgroundColor: colors.accent }]} onPress={confirmRename}>
-                <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>保存</Text>
+              <TouchableOpacity style={[styles.dialogBtn, styles.dialogConfirmBtn]} onPress={confirmRename}>
+                <Text style={styles.dialogConfirmText}>保存</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1224,12 +1263,15 @@ export default function FilesScreen({ navigation }) {
       <Modal visible={!!detailItem} transparent animationType="fade" onRequestClose={() => setDetailItem(null)}>
         <Pressable style={styles.modalOverlay} onPress={() => setDetailItem(null)}>
           <View style={styles.actionSheet}>
+            <View style={styles.sheetGrabPill} />
             <View style={styles.detailHeader}>
-              {detailItem?.isFolder ? (
-                <Folder color={colors.accent} size={40} fill="rgba(59, 130, 246, 0.2)" />
-              ) : (
-                <File color={colors.sub} size={40} />
-              )}
+              <View style={[styles.detailIconBadge, { backgroundColor: detailItem?.isFolder ? 'rgba(59, 130, 246, 0.12)' : 'rgba(156, 163, 175, 0.12)' }]}>
+                {detailItem?.isFolder ? (
+                  <Folder color={colors.accent} size={30} />
+                ) : (
+                  <File color={colors.sub} size={30} />
+                )}
+              </View>
               <Text style={styles.detailName} numberOfLines={2}>{detailItem?.name}</Text>
             </View>
 
@@ -1497,46 +1539,188 @@ const createStyles = (colors) => StyleSheet.create({
   bottomBarBtn: { alignItems: 'center', paddingVertical: 6, paddingHorizontal: 12 },
   bottomBarBtnText: { color: colors.text, fontSize: 12, marginTop: 4, fontWeight: 'bold' },
 
-  // Overlays
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  dropdownMenu: { position: 'absolute', top: Platform.OS === 'ios' ? 100 : 60, right: 16, backgroundColor: colors.card, borderRadius: 12, padding: 8, width: 190, elevation: 5 },
-  menuItem: { flexDirection: 'row', alignItems: 'center', padding: 12 },
-  menuText: { color: colors.text, fontSize: 15, marginLeft: 12, fontWeight: '500' },
+  // Overlays & Dialogs
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'flex-end' },
+  dialogOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  dialogCard: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: colors.card,
+    borderRadius: 24,
+    paddingTop: 24,
+    paddingBottom: 20,
+    paddingHorizontal: 22,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.35,
+    shadowRadius: 20,
+  },
+  dialogIconBadge: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  dialogTitle: {
+    color: colors.textStrong,
+    fontSize: 18,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+  dialogSub: {
+    color: colors.sub,
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 18,
+    paddingHorizontal: 8,
+  },
+  dialogInput: {
+    width: '100%',
+    backgroundColor: colors.input,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    height: 50,
+    color: colors.textStrong,
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: colors.divider,
+    marginBottom: 20,
+  },
+  dialogActions: {
+    flexDirection: 'row',
+    width: '100%',
+    gap: 12,
+  },
+  dialogBtn: {
+    flex: 1,
+    height: 46,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  dialogCancelBtn: {
+    backgroundColor: colors.input,
+  },
+  dialogCancelText: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  dialogConfirmBtn: {
+    backgroundColor: colors.accent,
+  },
+  dialogConfirmText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+
+  // Dropdown Menu
+  dropdownMenu: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 100 : 60,
+    right: 16,
+    backgroundColor: colors.card,
+    borderRadius: 20,
+    padding: 8,
+    width: 196,
+    elevation: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+  },
+  menuText: { color: colors.text, fontSize: 14, marginLeft: 12, fontWeight: '600' },
   divider: { height: 1, backgroundColor: colors.divider, marginVertical: 4 },
 
   // Action sheet details
-  actionSheet: { backgroundColor: colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: Platform.OS === 'ios' ? 34 : 20 },
+  actionSheet: {
+    backgroundColor: colors.card,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 22,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  sheetGrabPill: {
+    width: 38,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.divider,
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
   detailHeader: { alignItems: 'center', marginBottom: 16 },
-  detailName: { color: colors.textStrong, fontSize: 16, fontWeight: 'bold', textAlign: 'center', marginTop: 10 },
-  detailRows: { backgroundColor: colors.input, borderRadius: 12, padding: 12, marginBottom: 16 },
+  detailIconBadge: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  detailName: { color: colors.textStrong, fontSize: 16, fontWeight: '700', textAlign: 'center', paddingHorizontal: 12 },
+  detailRows: { backgroundColor: colors.input, borderRadius: 18, padding: 14, marginBottom: 16 },
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6 },
-  detailLabel: { color: colors.sub, fontSize: 13, width: 64 },
-  detailValue: { color: colors.text, fontSize: 13, flex: 1, textAlign: 'right' },
-  detailActionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.input, borderRadius: 12, paddingVertical: 12 },
-  detailActionText: { color: colors.textStrong, fontSize: 14, fontWeight: 'bold' },
-  actionSheetCancel: { alignItems: 'center', backgroundColor: colors.input, borderRadius: 12, paddingVertical: 14 },
-  actionSheetCancelText: { color: colors.textStrong, fontSize: 15, fontWeight: 'bold' },
+  detailLabel: { color: colors.sub, fontSize: 13, width: 68 },
+  detailValue: { color: colors.text, fontSize: 13, flex: 1, textAlign: 'right', fontWeight: '500' },
+  detailActionBtn: {
+    flex: 1,
+    height: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.input,
+    borderRadius: 14,
+  },
+  detailActionText: { color: colors.textStrong, fontSize: 14, fontWeight: '600' },
+  actionSheetCancel: { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.input, borderRadius: 14, height: 48 },
+  actionSheetCancelText: { color: colors.textStrong, fontSize: 15, fontWeight: '700' },
 
-  // Rename & Mkdir
-  renameBox: { backgroundColor: colors.card, borderRadius: 16, padding: 20, margin: 24 },
-  renameTitle: { color: colors.textStrong, fontSize: 17, fontWeight: 'bold', textAlign: 'center', marginBottom: 16 },
-  renameInput: { backgroundColor: colors.input, borderRadius: 8, paddingHorizontal: 12, height: 48, color: colors.textStrong, fontSize: 16, marginBottom: 16 },
-  renameBtns: { flexDirection: 'row', justifyContent: 'space-between' },
-  renameBtn: { flex: 1, borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginHorizontal: 6 },
-  renameBtnText: { color: colors.text, fontSize: 15, fontWeight: 'bold' },
+  // Rename & Mkdir backward compatibility aliases
+  renameBox: { backgroundColor: colors.card, borderRadius: 24, padding: 22, margin: 24 },
+  renameTitle: { color: colors.textStrong, fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 16 },
+  renameInput: { backgroundColor: colors.input, borderRadius: 14, paddingHorizontal: 14, height: 50, color: colors.textStrong, fontSize: 15, marginBottom: 16 },
+  renameBtns: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
+  renameBtn: { flex: 1, borderRadius: 14, height: 46, justifyContent: 'center', alignItems: 'center' },
+  renameBtnText: { color: colors.text, fontSize: 15, fontWeight: '600' },
 
   // Target Picker
   pickerContainer: { flex: 1, backgroundColor: colors.bg },
   pickerHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingTop: Platform.OS === 'ios' ? 60 : 16, backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.divider },
   pickerUpBtn: { flexDirection: 'row', alignItems: 'center' },
-  pickerUpText: { color: colors.textStrong, fontSize: 14, marginLeft: 4 },
+  pickerUpText: { color: colors.textStrong, fontSize: 14, marginLeft: 4, fontWeight: '600' },
   pickerTitle: { color: colors.textStrong, fontSize: 17, fontWeight: 'bold' },
   pickerPath: { color: colors.accent, fontSize: 13, paddingHorizontal: 16, paddingVertical: 8, backgroundColor: 'rgba(59,130,246,0.08)' },
   pickerList: { padding: 12 },
-  pickerRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, borderRadius: 12, padding: 14, marginBottom: 8 },
-  pickerFolderName: { color: colors.text, fontSize: 15, marginLeft: 10, flex: 1 },
+  pickerRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, borderRadius: 14, padding: 14, marginBottom: 8 },
+  pickerFolderName: { color: colors.text, fontSize: 15, marginLeft: 10, flex: 1, fontWeight: '500' },
   pickerFooter: { padding: 16, backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.divider, paddingBottom: Platform.OS === 'ios' ? 28 : 16 },
-  pickerConfirmBtn: { backgroundColor: colors.accent, borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+  pickerConfirmBtn: { backgroundColor: colors.accent, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
   pickerConfirmText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
 
   // Transfer Modal
@@ -1545,13 +1729,22 @@ const createStyles = (colors) => StyleSheet.create({
   transferTitle: { color: colors.textStrong, fontSize: 18, fontWeight: 'bold' },
   closeText: { color: colors.accent, fontSize: 15, fontWeight: 'bold' },
   transferContent: { padding: 16 },
-  transferRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, padding: 14, borderRadius: 14, marginBottom: 12 },
-  transferIconBox: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.input, justifyContent: 'center', alignItems: 'center', marginRight: 14 },
+  transferRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.card,
+    padding: 16,
+    borderRadius: 18,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.04)',
+  },
+  transferIconBox: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.input, justifyContent: 'center', alignItems: 'center', marginRight: 14 },
   transferInfo: { flex: 1 },
-  transferName: { color: colors.text, fontSize: 15, fontWeight: '500', marginBottom: 4 },
-  transferStatus: { fontSize: 12, fontWeight: 'bold' },
-  transferProgressBar: { height: 4, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 2, marginTop: 6, overflow: 'hidden' },
-  transferProgressFill: { height: '100%', borderRadius: 2 },
-  transferActions: { flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 10 },
-  transferActionBtn: { padding: 8, borderRadius: 8, backgroundColor: colors.input },
+  transferName: { color: colors.text, fontSize: 15, fontWeight: '600', marginBottom: 4 },
+  transferStatus: { fontSize: 12, fontWeight: '600' },
+  transferProgressBar: { height: 6, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 3, marginTop: 8, overflow: 'hidden' },
+  transferProgressFill: { height: '100%', borderRadius: 3 },
+  transferActions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginLeft: 10 },
+  transferActionBtn: { padding: 8, borderRadius: 10, backgroundColor: colors.input },
 });
