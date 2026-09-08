@@ -47,8 +47,6 @@ export default function DashboardScreen({ navigation }) {
     action: '空闲',
     is_checking: false,
   });
-  const [parityLoading, setParityLoading] = useState(false);
-
   // Syslog 系统日志模态窗状态
   const [syslogVisible, setSyslogVisible] = useState(false);
   const [syslogContent, setSyslogContent] = useState('');
@@ -163,59 +161,6 @@ export default function DashboardScreen({ navigation }) {
     return n > 1024 ? (n / 1024).toFixed(1) + ' MB/s' : n.toFixed(1) + ' KB/s';
   };
 
-  // 处理奇偶校验控制指令
-  const handleParityControl = (cmd, actionName) => {
-    showConfirm({
-      type: cmd === 'cancel' ? 'warning' : 'info',
-      title: `${actionName}确认`,
-      message: cmd === 'start'
-        ? '即将开始阵列奇偶校验。校验过程将顺序扫描所有磁盘阵列数据，并验证数据块完整性。'
-        : cmd === 'cancel'
-        ? '确定要提前终止当前的奇偶校验任务吗？'
-        : `确定要${actionName}当前的奇偶校验任务吗？`,
-      confirmText: `确认${actionName}`,
-      onConfirm: async () => {
-        setParityLoading(true);
-        try {
-          const savedUrl = await AsyncStorage.getItem('@server_url');
-          const savedToken = await AsyncStorage.getItem('@api_token');
-          if (!savedUrl || !savedToken) return;
-
-          const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=parity_control&cmd=${cmd}`);
-          const data = await res.json();
-          if (data.status === 'success') {
-            fetchServerData();
-            showConfirm({
-              type: 'success',
-              title: `${actionName}成功`,
-              message: data.message || '指令已成功下发至 Unraid 内核',
-              confirmText: '好的',
-              showCancel: false,
-            });
-          } else {
-            showConfirm({
-              type: 'warning',
-              title: '执行异常',
-              message: data.message || '服务器拒绝执行校验指令',
-              confirmText: '知道了',
-              showCancel: false,
-            });
-          }
-        } catch (e) {
-          showConfirm({
-            type: 'warning',
-            title: '网络通信失败',
-            message: e.message || '无法连接到服务器',
-            confirmText: '知道了',
-            showCancel: false,
-          });
-        } finally {
-          setParityLoading(false);
-        }
-      },
-    });
-  };
-
   // 拉取系统 Syslog
   const fetchSyslog = async () => {
     setSyslogLoading(true);
@@ -234,7 +179,10 @@ export default function DashboardScreen({ navigation }) {
           }
         }, 300);
       } else {
-        setSyslogContent(`获取日志失败: ${data.message || '未知异常'}`);
+        const isUnknownAction = data.message && /unknown action/i.test(data.message);
+        setSyslogContent(isUnknownAction
+          ? '获取系统日志失败：服务端尚未更新最新的 api.php。\n\n请将项目代码库中的 api.php 拷贝至 Unraid 服务器的 /usr/local/emhttp/api.php 并执行：\nchmod 755 /usr/local/emhttp/api.php'
+          : `获取日志失败: ${data.message || '未知异常'}`);
       }
     } catch (e) {
       setSyslogContent(`网络通信异常: ${e.message}`);
@@ -448,125 +396,21 @@ export default function DashboardScreen({ navigation }) {
         </View>
       </View>
 
-      {/* Array Parity Check Card */}
-      <View style={styles.card}>
-        <View style={styles.parityHeaderRow}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <ShieldCheck color={isParityChecking ? colors.amber : colors.green} size={22} />
-            <Text style={styles.cardTitle}>阵列奇偶校验</Text>
-          </View>
-
-          <View style={[
-            styles.parityTag,
-            {
-              backgroundColor: isParityChecking
-                ? 'rgba(245, 158, 11, 0.15)'
-                : isParityPaused
-                ? 'rgba(239, 68, 68, 0.15)'
-                : 'rgba(16, 185, 129, 0.15)'
-            }
-          ]}>
-            <Text style={[
-              styles.parityTagText,
-              {
-                color: isParityChecking
-                  ? colors.amber
-                  : isParityPaused
-                  ? colors.red
-                  : colors.green
-              }
-            ]}>
-              {isParityChecking ? '校验进行中' : isParityPaused ? '校验已暂停' : '空闲 / 状态正常'}
-            </Text>
-          </View>
-        </View>
-
-        {isParityChecking || isParityPaused ? (
-          <View style={{ marginTop: 10 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
-              <Text style={[styles.mainNumber, { fontSize: 24, marginBottom: 0 }]}>
-                {parity.progress.toFixed(1)}%
-              </Text>
-              {parity.speed ? (
-                <Text style={[styles.subText, { color: colors.accent, fontWeight: 'bold' }]}>
-                  {parity.speed}
-                </Text>
-              ) : null}
-            </View>
-
-            <View style={styles.track}>
-              <View style={[styles.bar, { width: `${Math.min(100, Math.max(0, parity.progress))}%`, backgroundColor: colors.amber }]} />
-            </View>
-
-            <View style={styles.parityMetaRow}>
-              <Text style={styles.subText}>
-                预计剩余: {parity.finish || '计算中...'}
-              </Text>
-              <Text style={[styles.subText, { color: parity.errors > 0 ? colors.red : colors.sub }]}>
-                同步错误: {parity.errors}
-              </Text>
-            </View>
-
-            {/* Parity In-Progress Controls */}
-            <View style={styles.parityBtnRow}>
-              {isParityChecking ? (
-                <TouchableOpacity
-                  style={[styles.parityMiniBtn, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}
-                  onPress={() => handleParityControl('pause', '暂停')}
-                  disabled={parityLoading}
-                >
-                  <Pause size={14} color={colors.amber} style={{ marginRight: 4 }} />
-                  <Text style={[styles.parityMiniBtnText, { color: colors.amber }]}>暂停</Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={[styles.parityMiniBtn, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}
-                  onPress={() => handleParityControl('resume', '恢复')}
-                  disabled={parityLoading}
-                >
-                  <Play size={14} color={colors.green} style={{ marginRight: 4 }} />
-                  <Text style={[styles.parityMiniBtnText, { color: colors.green }]}>恢复校验</Text>
-                </TouchableOpacity>
-              )}
-
-              <TouchableOpacity
-                style={[styles.parityMiniBtn, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}
-                onPress={() => handleParityControl('cancel', '终止')}
-                disabled={parityLoading}
-              >
-                <Square size={14} color={colors.red} style={{ marginRight: 4 }} />
-                <Text style={[styles.parityMiniBtnText, { color: colors.red }]}>终止校验</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : (
-          <View style={{ marginTop: 12 }}>
-            <Text style={[styles.subText, { marginBottom: 12 }]}>
-              当前未在执行奇偶校验。定期执行校验可确保双校验/单校验盘与数据盘的一致性，防范坏道风险。
-            </Text>
-            <TouchableOpacity
-              style={[styles.parityStartBtn, { backgroundColor: colors.accent }]}
-              onPress={() => handleParityControl('start', '启动奇偶校验')}
-              disabled={parityLoading}
-            >
-              {parityLoading ? (
-                <ActivityIndicator size="small" color="#ffffff" />
-              ) : (
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <Play size={15} color="#ffffff" style={{ marginRight: 6 }} />
-                  <Text style={styles.parityStartBtnText}>启动无修正奇偶校验 (Check)</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          </View>
-        )}
-      </View>
-
-      {/* Storage Array */}
-      <TouchableOpacity style={styles.card} onPress={() => navigation.navigate('存储详情')}>
+      {/* Storage Array (Click to enter Storage Details with full Parity controls) */}
+      <TouchableOpacity style={styles.card} onPress={() => navigation.navigate('存储详情')} activeOpacity={0.8}>
         <View style={styles.cardHeader}>
-          <HardDrive color={colors.green} size={24} />
-          <Text style={styles.cardTitle}>阵列存储</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <HardDrive color={colors.green} size={24} style={{ marginRight: 8 }} />
+            <Text style={styles.cardTitle}>阵列存储</Text>
+          </View>
+          {isParityChecking ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(245, 158, 11, 0.15)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10 }}>
+              <ShieldCheck size={12} color={colors.amber} style={{ marginRight: 4 }} />
+              <Text style={{ fontSize: 11, color: colors.amber, fontWeight: 'bold' }}>
+                校验中 {(parity.progress || 0).toFixed(1)}%
+              </Text>
+            </View>
+          ) : null}
         </View>
         <Text style={styles.mainNumber}>{storage.percentage}%</Text>
         <Text style={styles.subText}>已用 {formatBytes(storage.total_used)} / 总共 {formatBytes(storage.total_size)}</Text>

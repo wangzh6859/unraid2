@@ -205,7 +205,10 @@ export default function DockerDetailsScreen() {
           }
         }, 300);
       } else {
-        setLogsContent(`获取日志失败: ${data.message || '未知异常'}`);
+        const isUnknownAction = data.message && /unknown action/i.test(data.message);
+        setLogsContent(isUnknownAction
+          ? '获取容器日志失败：服务端尚未更新最新的 api.php。\n\n请将项目代码库中的 api.php 拷贝至 Unraid 服务器的 /usr/local/emhttp/api.php 并执行：\nchmod 755 /usr/local/emhttp/api.php'
+          : `获取日志失败: ${data.message || '未知异常'}`);
       }
     } catch (e) {
       setLogsContent(`拉取日志网络异常: ${e.message}`);
