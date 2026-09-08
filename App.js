@@ -1,9 +1,11 @@
-import React from 'react';
-import { StatusBar } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { StatusBar, AppState } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Home, Folder, Settings } from 'lucide-react-native';
+import AppLockModal from './components/AppLockModal';
 
 // 引入所有子页面
 import DashboardScreen from './screens/DashboardScreen';
@@ -66,9 +68,42 @@ function MainTabs() {
   );
 }
 
-// 💡 主题根组件：跟随主题渲染系统状态栏（解决浅色背景下状态栏仍是深色的割裂感）
+// 💡 主题根组件：跟随主题渲染系统状态栏，同时作为全局生物识别应用安全锁的守卫中枢
 function ThemedRoot() {
   const { colors } = useTheme();
+  const [isLocked, setIsLocked] = useState(false);
+  const appStateRef = useRef(AppState.currentState);
+
+  // 检查安全锁状态：启动时与从后台切回前台时验证
+  useEffect(() => {
+    const checkLockStatus = async () => {
+      try {
+        const enabled = await AsyncStorage.getItem('@security_app_lock');
+        if (enabled === 'true') {
+          setIsLocked(true);
+        }
+      } catch (e) {
+        console.log('[App] Check lock status err:', e);
+      }
+    };
+
+    checkLockStatus();
+
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (
+        appStateRef.current.match(/inactive|background/) &&
+        nextAppState === 'active'
+      ) {
+        checkLockStatus();
+      }
+      appStateRef.current = nextAppState;
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
   return (
     <>
       <StatusBar
@@ -85,6 +120,9 @@ function ThemedRoot() {
           />
         </Stack.Navigator>
       </NavigationContainer>
+
+      {/* 生物识别全屏安全锁遮罩 */}
+      <AppLockModal visible={isLocked} onUnlock={() => setIsLocked(false)} />
     </>
   );
 }

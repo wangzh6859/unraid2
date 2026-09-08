@@ -17,6 +17,7 @@
     "expo-av": "~13.10.6",
     "expo-document-picker": "~11.10.1",
     "expo-file-system": "~16.0.9",
+    "expo-local-authentication": "~13.8.0",
     "fast-xml-parser": "^5.5.9",
     "jszip": "^3.10.1",
     "lucide-react-native": "0.476.0",

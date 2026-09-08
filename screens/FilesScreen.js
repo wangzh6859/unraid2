@@ -116,6 +116,59 @@ export default function FilesScreen({ navigation }) {
   const csrfTokenRef = useRef('');
   const activeTasksRef = useRef({}); // taskId -> FileSystem.UploadTask
 
+  // Transfer Queue Persistence Key & Reference
+  const QUEUE_STORAGE_KEY = '@transfers_queue_v1';
+  const transfersRef = useRef([]);
+  useEffect(() => {
+    transfersRef.current = transfers;
+  }, [transfers]);
+
+  const saveTransfersQueue = async (list) => {
+    try {
+      const sanitized = (list || []).map(t => ({
+        id: t.id,
+        name: t.name,
+        uri: t.uri,
+        size: t.size,
+        targetPath: t.targetPath,
+        type: t.type,
+        status: t.status === 'running' ? 'paused' : t.status,
+        progress: t.progress || 0,
+        transferredBytes: t.transferredBytes || 0,
+        totalBytes: t.totalBytes || 0,
+        sizeText: t.sizeText || '',
+        speedDisplay: t.status === 'running' ? '已暂停' : (t.speedDisplay || ''),
+        chunkIndex: t.chunkIndex || 0,
+      }));
+      await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(sanitized));
+    } catch (err) {
+      console.log('[FilesScreen] Failed to save transfers queue:', err);
+    }
+  };
+
+  // Restore persistent transfer queue on cold boot
+  useEffect(() => {
+    const loadPersistedTransfers = async () => {
+      try {
+        const savedQueueJson = await AsyncStorage.getItem(QUEUE_STORAGE_KEY);
+        if (savedQueueJson) {
+          const parsed = JSON.parse(savedQueueJson);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const restored = parsed.map(t => ({
+              ...t,
+              status: t.status === 'running' ? 'paused' : t.status,
+              speedDisplay: t.status === 'running' ? '已暂停 (可继续)' : (t.speedDisplay || ''),
+            }));
+            setTransfers(restored);
+          }
+        }
+      } catch (err) {
+        console.log('[FilesScreen] Failed to load persisted transfers:', err);
+      }
+    };
+    loadPersistedTransfers();
+  }, []);
+
   const ensureCsrfToken = async (baseUrl, token) => {
     if (csrfTokenRef.current) return csrfTokenRef.current;
     const cleanUrl = (baseUrl || '').replace(/\/+$/, '');
@@ -302,11 +355,22 @@ export default function FilesScreen({ navigation }) {
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const file = result.assets[0];
+        let fileUri = file.uri;
+        if (fileUri.startsWith('content://')) {
+          try {
+            const persistentCacheUri = `${FileSystem.cacheDirectory}up_${Date.now()}_${encodeURIComponent(file.name)}`;
+            await FileSystem.copyAsync({ from: fileUri, to: persistentCacheUri });
+            fileUri = persistentCacheUri;
+          } catch (copyErr) {
+            console.log('[FilesScreen] Pre-cache content uri error:', copyErr);
+          }
+        }
+
         const taskId = 'up_' + Date.now();
         const newTask = {
           id: taskId,
           name: file.name,
-          uri: file.uri,
+          uri: fileUri,
           size: file.size || 0,
           targetPath: currentPath,
           type: '上传',
@@ -316,9 +380,14 @@ export default function FilesScreen({ navigation }) {
           totalBytes: file.size || 0,
           sizeText: `${formatBytesFixed(0)} / ${formatBytesFixed(file.size || 0)}`,
           speedDisplay: '准备中...',
+          chunkIndex: 0,
         };
 
-        setTransfers(prev => [newTask, ...prev]);
+        setTransfers(prev => {
+          const next = [newTask, ...prev];
+          saveTransfersQueue(next);
+          return next;
+        });
         setIsTransferVisible(true);
         startUploadTask(newTask);
       }
@@ -426,16 +495,23 @@ export default function FilesScreen({ navigation }) {
           if (tempLocalUri) {
             FileSystem.deleteAsync(tempLocalUri, { idempotent: true }).catch(() => {});
           }
+          if (taskItem.uri && taskItem.uri.startsWith(FileSystem.cacheDirectory + 'up_')) {
+            FileSystem.deleteAsync(taskItem.uri, { idempotent: true }).catch(() => {});
+          }
           const savedPath = `${taskItem.targetPath}/${taskItem.name}`;
-          setTransfers(prev => prev.map(t => (t.id === taskId ? {
-            ...t,
-            status: 'success',
-            progress: 100,
-            transferredBytes: totalSize,
-            totalBytes: totalSize,
-            sizeText: `${formatBytesFixed(totalSize)} / ${formatBytesFixed(totalSize)}`,
-            speedDisplay: '已完成',
-          } : t)));
+          setTransfers(prev => {
+            const next = prev.map(t => (t.id === taskId ? {
+              ...t,
+              status: 'success',
+              progress: 100,
+              transferredBytes: totalSize,
+              totalBytes: totalSize,
+              sizeText: `${formatBytesFixed(totalSize)} / ${formatBytesFixed(totalSize)}`,
+              speedDisplay: '已完成',
+            } : t));
+            saveTransfersQueue(next);
+            return next;
+          });
           loadDirectory(cleanBaseUrl, apiToken, currentPath);
           showConfirm({
             type: 'success',
@@ -607,21 +683,27 @@ export default function FilesScreen({ navigation }) {
 
         const pct = totalSize > 0 ? Math.min(99, Math.round((currentBytes / totalSize) * 100)) : 100;
 
-        setTransfers(prev => prev.map(t => {
-          if (t.id === taskId) {
-            return {
-              ...t,
-              status: 'running',
-              chunkIndex: i + 1,
-              progress: pct,
-              transferredBytes: currentBytes,
-              totalBytes: totalSize,
-              sizeText: `${formatBytesFixed(currentBytes)} / ${formatBytesFixed(totalSize)}`,
-              speedDisplay: currentSpeedStr || '计算中...',
-            };
+        setTransfers(prev => {
+          const next = prev.map(t => {
+            if (t.id === taskId) {
+              return {
+                ...t,
+                status: 'running',
+                chunkIndex: i + 1,
+                progress: pct,
+                transferredBytes: currentBytes,
+                totalBytes: totalSize,
+                sizeText: `${formatBytesFixed(currentBytes)} / ${formatBytesFixed(totalSize)}`,
+                speedDisplay: currentSpeedStr || '计算中...',
+              };
+            }
+            return t;
+          });
+          if (i % 5 === 0 || i === totalChunks - 1) {
+            saveTransfersQueue(next);
           }
-          return t;
-        }));
+          return next;
+        });
       }
 
       // -----------------------------------------------------------------------
@@ -722,15 +804,22 @@ export default function FilesScreen({ navigation }) {
       }
 
       const savedPath = `${taskItem.targetPath}/${taskItem.name}`;
-      setTransfers(prev => prev.map(t => (t.id === taskId ? {
-        ...t,
-        status: 'success',
-        progress: 100,
-        transferredBytes: totalSize,
-        totalBytes: totalSize,
-        sizeText: `${formatBytesFixed(totalSize)} / ${formatBytesFixed(totalSize)}`,
-        speedDisplay: '已完成',
-      } : t)));
+      if (taskItem.uri && taskItem.uri.startsWith(FileSystem.cacheDirectory + 'up_')) {
+        FileSystem.deleteAsync(taskItem.uri, { idempotent: true }).catch(() => {});
+      }
+      setTransfers(prev => {
+        const next = prev.map(t => (t.id === taskId ? {
+          ...t,
+          status: 'success',
+          progress: 100,
+          transferredBytes: totalSize,
+          totalBytes: totalSize,
+          sizeText: `${formatBytesFixed(totalSize)} / ${formatBytesFixed(totalSize)}`,
+          speedDisplay: '已完成',
+        } : t));
+        saveTransfersQueue(next);
+        return next;
+      });
 
       // Refresh directory list
       loadDirectory(cleanBaseUrl, apiToken, currentPath);
@@ -749,17 +838,25 @@ export default function FilesScreen({ navigation }) {
 
       const isCancelled = abortController.signal.aborted || err.name === 'AbortError' || (err.message && err.message.includes('abort'));
       if (isCancelled) {
-        setTransfers(prev => prev.map(t => (t.id === taskId ? {
-          ...t,
-          status: 'paused',
-          speedDisplay: '已暂停',
-        } : t)));
+        setTransfers(prev => {
+          const next = prev.map(t => (t.id === taskId ? {
+            ...t,
+            status: 'paused',
+            speedDisplay: '已暂停',
+          } : t));
+          saveTransfersQueue(next);
+          return next;
+        });
       } else {
-        setTransfers(prev => prev.map(t => (t.id === taskId ? {
-          ...t,
-          status: 'error',
-          speedDisplay: '失败',
-        } : t)));
+        setTransfers(prev => {
+          const next = prev.map(t => (t.id === taskId ? {
+            ...t,
+            status: 'error',
+            speedDisplay: '失败',
+          } : t));
+          saveTransfersQueue(next);
+          return next;
+        });
         showConfirm({
           type: 'warning',
           title: '上传失败',
@@ -780,37 +877,57 @@ export default function FilesScreen({ navigation }) {
         task.abortController.abort();
       } catch (_) {}
     }
-    setTransfers(prev => prev.map(t => {
-      if (t.id === taskId) {
-        return {
-          ...t,
-          status: 'paused',
-          speedDisplay: '已暂停',
-        };
-      }
-      return t;
-    }));
+    setTransfers(prev => {
+      const next = prev.map(t => {
+        if (t.id === taskId) {
+          return {
+            ...t,
+            status: 'paused',
+            speedDisplay: '已暂停',
+          };
+        }
+        return t;
+      });
+      saveTransfersQueue(next);
+      return next;
+    });
   };
 
   // Resume / Retry upload
   const resumeUploadTask = (taskItem) => {
-    setTransfers(prev => prev.map(t => (t.id === taskItem.id ? {
-      ...t,
-      status: 'running',
-      speedDisplay: '准备续传...',
-    } : t)));
+    setTransfers(prev => {
+      const next = prev.map(t => (t.id === taskItem.id ? {
+        ...t,
+        status: 'running',
+        speedDisplay: '准备续传...',
+      } : t));
+      saveTransfersQueue(next);
+      return next;
+    });
     startUploadTask(taskItem);
   };
 
   // Delete a single transfer record
   const deleteTransferRecord = (taskId) => {
     pauseUploadTask(taskId);
-    setTransfers(prev => prev.filter(t => t.id !== taskId));
+    setTransfers(prev => {
+      const itemToDelete = prev.find(t => t.id === taskId);
+      if (itemToDelete?.uri && itemToDelete.uri.startsWith(FileSystem.cacheDirectory + 'up_')) {
+        FileSystem.deleteAsync(itemToDelete.uri, { idempotent: true }).catch(() => {});
+      }
+      const next = prev.filter(t => t.id !== taskId);
+      saveTransfersQueue(next);
+      return next;
+    });
   };
 
   // Clear completed transfer records
   const clearCompletedTransfers = () => {
-    setTransfers(prev => prev.filter(t => t.status !== 'success'));
+    setTransfers(prev => {
+      const next = prev.filter(t => t.status !== 'success');
+      saveTransfersQueue(next);
+      return next;
+    });
   };
 
   // =========================================================================
@@ -832,7 +949,11 @@ export default function FilesScreen({ navigation }) {
         sizeText: `${formatBytesFixed(0)} / ${formatBytesFixed(item.size || 0)}`,
         speedDisplay: '正在下载...',
       };
-      setTransfers(prev => [newTask, ...prev]);
+      setTransfers(prev => {
+        const next = [newTask, ...prev];
+        saveTransfersQueue(next);
+        return next;
+      });
       setIsTransferVisible(true);
 
       const downloadUrl = getDirectUrl(item.path);
@@ -850,15 +971,19 @@ export default function FilesScreen({ navigation }) {
       }
 
       await FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => {});
-      setTransfers(prev => prev.map(t => (t.id === taskId ? {
-        ...t,
-        status: 'success',
-        progress: 100,
-        transferredBytes: item.size || 0,
-        totalBytes: item.size || 0,
-        sizeText: `${formatBytesFixed(item.size || 0)} / ${formatBytesFixed(item.size || 0)}`,
-        speedDisplay: '下载完成',
-      } : t)));
+      setTransfers(prev => {
+        const next = prev.map(t => (t.id === taskId ? {
+          ...t,
+          status: 'success',
+          progress: 100,
+          transferredBytes: item.size || 0,
+          totalBytes: item.size || 0,
+          sizeText: `${formatBytesFixed(item.size || 0)} / ${formatBytesFixed(item.size || 0)}`,
+          speedDisplay: '下载完成',
+        } : t));
+        saveTransfersQueue(next);
+        return next;
+      });
     } catch (e) {
       console.log('[FilesScreen] Download error:', e);
       showConfirm({
@@ -868,11 +993,15 @@ export default function FilesScreen({ navigation }) {
         confirmText: '知道了',
         showCancel: false,
       });
-      setTransfers(prev => prev.map(t => ((t.id === taskId || (t.name === item.name && t.status === 'running')) ? {
-        ...t,
-        status: 'error',
-        speedDisplay: '下载中断',
-      } : t)));
+      setTransfers(prev => {
+        const next = prev.map(t => ((t.id === taskId || (t.name === item.name && t.status === 'running')) ? {
+          ...t,
+          status: 'error',
+          speedDisplay: '下载中断',
+        } : t));
+        saveTransfersQueue(next);
+        return next;
+      });
     }
   };
 

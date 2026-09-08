@@ -1,17 +1,19 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   StyleSheet, Text, View, TouchableOpacity, Alert, ActivityIndicator,
   ScrollView, Switch, Modal, TextInput, KeyboardAvoidingView, Platform,
-  Pressable,
+  Pressable, Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system';
+import * as LocalAuthentication from 'expo-local-authentication';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import {
   HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server,
   LogOut, Moon, Sun, FolderDown, RefreshCw, Trash2, Key, Power,
-  RotateCw, AlertTriangle, CheckCircle,
+  RotateCw, AlertTriangle, CheckCircle, Fingerprint, ShieldAlert,
+  Sparkles, DownloadCloud, ExternalLink,
 } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import {
@@ -78,9 +80,134 @@ export default function SettingsScreen({ navigation }) {
   // Power action state
   const [powerLoading, setPowerLoading] = useState(false);
 
+  // Security & Biometrics
+  const [appLockEnabled, setAppLockEnabled] = useState(false);
+  const [highRiskAuthEnabled, setHighRiskAuthEnabled] = useState(false);
+  const [biometricSupported, setBiometricSupported] = useState(false);
+
+  // In-App Software Update
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [updateModalVisible, setUpdateModalVisible] = useState(false);
+
   const { isDark, colors, toggleTheme } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const appVersion = Constants.expoConfig?.version || '1.0.0';
+  const appVersion = Constants.expoConfig?.version || '1.2.0';
+
+  const isNewerVersion = (latestTag, currentVer) => {
+    const cleanLatest = (latestTag || '').replace(/^v/, '');
+    const cleanCurrent = (currentVer || '').replace(/^v/, '');
+    if (!cleanLatest || !cleanCurrent) return false;
+    if (cleanLatest === cleanCurrent) return false;
+    const p1 = cleanLatest.split('.').map(n => parseInt(n, 10) || 0);
+    const p2 = cleanCurrent.split('.').map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
+      const a = p1[i] || 0;
+      const b = p2[i] || 0;
+      if (a > b) return true;
+      if (a < b) return false;
+    }
+    return false;
+  };
+
+  const checkForUpdate = async (manual = false) => {
+    if (isCheckingUpdate) return;
+    setIsCheckingUpdate(true);
+    try {
+      const res = await fetch('https://api.github.com/repos/wangzh6859/unraid2/releases/latest', {
+        headers: { 'Accept': 'application/vnd.github.v3+json' },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const latestTag = data.tag_name || '';
+      const apkAsset = (data.assets || []).find(a => a.name && a.name.endsWith('.apk'));
+
+      const hasUpdate = isNewerVersion(latestTag, appVersion);
+      if (hasUpdate && apkAsset) {
+        setUpdateInfo({
+          hasUpdate: true,
+          latestTag,
+          releaseName: data.name || latestTag,
+          body: data.body || '',
+          apkUrl: apkAsset.browser_download_url,
+          apkSize: apkAsset.size || 0,
+        });
+        setUpdateModalVisible(true);
+      } else {
+        if (manual) {
+          showConfirm({
+            type: 'success',
+            title: '已是最新版本',
+            message: `当前应用版本为 v${appVersion}，已是最新发布版本，暂无可用更新。`,
+            confirmText: '好的',
+            showCancel: false,
+          });
+        }
+      }
+    } catch (err) {
+      if (manual) {
+        showConfirm({
+          type: 'warning',
+          title: '检查更新失败',
+          message: `无法连接 GitHub 检查更新：${err.message}`,
+          confirmText: '知道了',
+          showCancel: false,
+        });
+      }
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
+  const toggleAppLock = async (value) => {
+    try {
+      const auth = await LocalAuthentication.authenticateAsync({
+        promptMessage: value ? '请验证指纹以开启应用安全锁' : '请验证指纹以解除应用安全锁',
+        cancelLabel: '取消',
+        fallbackLabel: '使用设备锁屏密码',
+      });
+      if (auth.success) {
+        setAppLockEnabled(value);
+        await AsyncStorage.setItem('@security_app_lock', value ? 'true' : 'false');
+        showConfirm({
+          type: 'success',
+          title: value ? '应用安全锁已启用' : '安全锁已解除',
+          message: value
+            ? '从手机桌面切回或重新打开 App 时，将自动进行生物指纹安全校验。'
+            : '已关闭应用安全锁。',
+          confirmText: '好的',
+          showCancel: false,
+        });
+      }
+    } catch (e) {
+      console.log('Toggle app lock err:', e);
+    }
+  };
+
+  const toggleHighRiskAuth = async (value) => {
+    try {
+      const auth = await LocalAuthentication.authenticateAsync({
+        promptMessage: value ? '请验证指纹以开启高危操作防护' : '请验证指纹以解除高危防护',
+        cancelLabel: '取消',
+        fallbackLabel: '使用设备锁屏密码',
+      });
+      if (auth.success) {
+        setHighRiskAuthEnabled(value);
+        await AsyncStorage.setItem('@security_high_risk_auth', value ? 'true' : 'false');
+        showConfirm({
+          type: 'success',
+          title: value ? '高危保护已开启' : '高危保护已解除',
+          message: value
+            ? '执行服务器关机、重启等高危操作前，将必须先完成生物指纹验证。'
+            : '已关闭高危操作二次认证。',
+          confirmText: '好的',
+          showCancel: false,
+        });
+      }
+    } catch (e) {
+      console.log('Toggle high risk auth err:', e);
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -88,6 +215,18 @@ export default function SettingsScreen({ navigation }) {
       if (savedUrl) setUnraidUrl(savedUrl);
       const token = await AsyncStorage.getItem('@api_token');
       if (token) setApiToken(token);
+
+      const lockVal = await AsyncStorage.getItem('@security_app_lock');
+      if (lockVal !== null) setAppLockEnabled(lockVal === 'true');
+
+      const riskVal = await AsyncStorage.getItem('@security_high_risk_auth');
+      if (riskVal !== null) setHighRiskAuthEnabled(riskVal === 'true');
+
+      const hasHw = await LocalAuthentication.hasHardwareAsync();
+      if (hasHw) {
+        const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+        setBiometricSupported(hasHw && isEnrolled);
+      }
 
       const dir = await getDownloadDir();
       setDownloadDirState(dir);
@@ -275,6 +414,15 @@ export default function SettingsScreen({ navigation }) {
       message: '服务器将在数秒内开始安全重启流程。系统所有 Docker 容器与虚拟机服务将短暂离线，约需 1~3 分钟恢复。',
       confirmText: '确认重启',
       onConfirm: async () => {
+        if (highRiskAuthEnabled) {
+          const auth = await LocalAuthentication.authenticateAsync({
+            promptMessage: '请验证指纹以确认重启 Unraid 服务器',
+            cancelLabel: '取消',
+            fallbackLabel: '使用设备锁屏密码',
+          });
+          if (!auth.success) return;
+        }
+
         setPowerLoading(true);
         try {
           const res = await fetch(`${unraidUrl}/api.php?token=${apiToken}&action=reboot`);
@@ -319,6 +467,15 @@ export default function SettingsScreen({ navigation }) {
       message: '执行关机后，主机将彻底切断电源停止运行！\n\n注意：除非服务器主板已配置 WOL 网络唤醒或由管理员手动按下物理电源键，否则无法远程唤醒开机。',
       confirmText: '彻底关机',
       onConfirm: async () => {
+        if (highRiskAuthEnabled) {
+          const auth = await LocalAuthentication.authenticateAsync({
+            promptMessage: '危险操作：请验证指纹以确认关闭服务器电源',
+            cancelLabel: '取消',
+            fallbackLabel: '使用设备锁屏密码',
+          });
+          if (!auth.success) return;
+        }
+
         setPowerLoading(true);
         try {
           const res = await fetch(`${unraidUrl}/api.php?token=${apiToken}&action=poweroff`);
@@ -423,6 +580,48 @@ export default function SettingsScreen({ navigation }) {
             <Text style={[styles.powerActionTagText, { color: colors.red }]}>关机</Text>
           </View>
         </TouchableOpacity>
+      </View>
+
+      {/* Security & Biometrics */}
+      <Text style={styles.sectionTitle}>安全防护与生物识别</Text>
+      <View style={styles.card}>
+        <View style={styles.row}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+            <Fingerprint color={colors.accent} size={20} />
+          </View>
+          <View style={styles.infoBox}>
+            <Text style={styles.rowTitle}>生物识别应用锁</Text>
+            <Text style={styles.rowSub}>
+              {appLockEnabled ? '开启中：切回或重新打开 App 时锁屏' : '关闭：无需生物识别直接进入应用'}
+            </Text>
+          </View>
+          <Switch
+            value={appLockEnabled}
+            onValueChange={toggleAppLock}
+            trackColor={{ false: colors.input, true: colors.accent }}
+            thumbColor={'#ffffff'}
+          />
+        </View>
+
+        <View style={styles.divider} />
+
+        <View style={styles.row}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
+            <ShieldAlert color={colors.red} size={20} />
+          </View>
+          <View style={styles.infoBox}>
+            <Text style={styles.rowTitle}>高危操作指纹守卫</Text>
+            <Text style={styles.rowSub}>
+              {highRiskAuthEnabled ? '开启中：关机/重启前必须先验证指纹' : '关闭：点击确认后直接执行'}
+            </Text>
+          </View>
+          <Switch
+            value={highRiskAuthEnabled}
+            onValueChange={toggleHighRiskAuth}
+            trackColor={{ false: colors.input, true: colors.red }}
+            thumbColor={'#ffffff'}
+          />
+        </View>
       </View>
 
       {/* Appearance & Themes */}
@@ -536,6 +735,35 @@ export default function SettingsScreen({ navigation }) {
         </View>
       </View>
 
+      {/* Software Version & In-App Update */}
+      <Text style={styles.sectionTitle}>软件版本与在线更新</Text>
+      <View style={styles.card}>
+        <View style={styles.row}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+            <Sparkles color={colors.accent} size={20} />
+          </View>
+          <View style={styles.infoBox}>
+            <Text style={styles.rowTitle}>当前版本</Text>
+            <Text style={styles.rowSub}>Unraid Mobile Manager v{appVersion}</Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.updateCheckBtn, { backgroundColor: colors.accent }]}
+            onPress={() => checkForUpdate(true)}
+            disabled={isCheckingUpdate}
+            activeOpacity={0.8}
+          >
+            {isCheckingUpdate ? (
+              <ActivityIndicator size="small" color="#ffffff" />
+            ) : (
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <DownloadCloud color="#ffffff" size={14} style={{ marginRight: 4 }} />
+                <Text style={styles.updateCheckBtnText}>检查更新</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
+
       {/* Server Config Input Modal */}
       <Modal visible={serverEditVisible} transparent animationType="fade" onRequestClose={() => setServerEditVisible(false)}>
         <KeyboardAvoidingView style={styles.overlayCenter} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -603,6 +831,46 @@ export default function SettingsScreen({ navigation }) {
             </View>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* In-App Software Update Modal */}
+      <Modal visible={updateModalVisible} transparent animationType="fade" onRequestClose={() => setUpdateModalVisible(false)}>
+        <View style={styles.overlayCenter}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setUpdateModalVisible(false)} />
+          <View style={[styles.updateCard, { backgroundColor: colors.card }]}>
+            <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.14)' }]}>
+              <Sparkles color={colors.accent} size={28} />
+            </View>
+            <Text style={[styles.updateTitle, { color: colors.textStrong }]}>发现新版本可用</Text>
+            <Text style={[styles.updateVersionTag, { color: colors.accent }]}>
+              {updateInfo?.releaseName || updateInfo?.latestTag}
+            </Text>
+            <Text style={[styles.dialogSub, { marginBottom: 12 }]}>
+              大小: {fmtBytes(updateInfo?.apkSize || 0)} · 当前: v{appVersion}
+            </Text>
+            <ScrollView style={styles.updateNotesBox} showsVerticalScrollIndicator>
+              <Text style={[styles.updateNotesText, { color: colors.sub }]}>
+                {updateInfo?.body || '包含多项功能更新与体验优化。'}
+              </Text>
+            </ScrollView>
+            <View style={styles.renameBtns}>
+              <TouchableOpacity style={[styles.renameBtn, { backgroundColor: colors.input }]} onPress={() => setUpdateModalVisible(false)}>
+                <Text style={styles.renameBtnText}>稍后更新</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.renameBtn, { backgroundColor: colors.accent }]}
+                onPress={() => {
+                  setUpdateModalVisible(false);
+                  if (updateInfo?.apkUrl) {
+                    Linking.openURL(updateInfo.apkUrl);
+                  }
+                }}
+              >
+                <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>立即下载安装</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
 
       {/* Modern Squircle Confirm Dialog */}
@@ -733,5 +1001,57 @@ const createStyles = (colors) => StyleSheet.create({
     color: colors.text,
     fontSize: 15,
     fontWeight: '600',
+  },
+  updateCheckBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  updateCheckBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  updateCard: {
+    width: '100%',
+    maxWidth: 340,
+    borderRadius: 24,
+    paddingTop: 24,
+    paddingBottom: 20,
+    paddingHorizontal: 22,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.35,
+    shadowRadius: 20,
+  },
+  updateTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  updateVersionTag: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  updateNotesBox: {
+    maxHeight: 150,
+    width: '100%',
+    backgroundColor: colors.input,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 18,
+  },
+  updateNotesText: {
+    fontSize: 13,
+    lineHeight: 19,
   },
 });
