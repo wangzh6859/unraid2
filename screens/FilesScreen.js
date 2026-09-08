@@ -295,6 +295,8 @@ export default function FilesScreen({ navigation }) {
         throw new Error('本地文件无法读取或已丢失');
       }
 
+      const totalSize = (fileInfo.size !== undefined && fileInfo.size !== null) ? fileInfo.size : (taskItem.size || 0);
+
       const cleanBaseUrl = (serverUrl || '').replace(/\/+$/, '');
       const activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
       const csrfQuery = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
