@@ -16,21 +16,6 @@
  *    - Make Directory, Rename, Delete, Move, Copy
  */
 
-// Enable CORS for mobile app
-header("Access-Control-Allow-Origin: *");
-header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS");
-header("Access-Control-Allow-Headers: Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Token, Range");
-header("Access-Control-Expose-Headers: Content-Length, Content-Range, Accept-Ranges");
-
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(204);
-    exit;
-}
-
-// Set error reporting and buffer output to ensure clean JSON responses
-error_reporting(E_ALL);
-@ini_set('display_errors', '0');
-
 // Diagnostic logger with multi-path fallback (guaranteed writable in Unraid WebGUI)
 function get_debug_log_path() {
     $candidates = [
@@ -53,11 +38,62 @@ function log_upload_debug($msg) {
     @file_put_contents($path, "[{$time}] {$msg}\n", FILE_APPEND);
 }
 
-// Log every incoming request immediately to trace transport-level issues
+// Log every incoming request immediately before any exit or processing
 $reqMethod = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'CLI';
 $reqUri = isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '';
 $contentLen = isset($_SERVER['CONTENT_LENGTH']) ? $_SERVER['CONTENT_LENGTH'] : (isset($_SERVER['HTTP_CONTENT_LENGTH']) ? $_SERVER['HTTP_CONTENT_LENGTH'] : '0');
 log_upload_debug("REQ: {$reqMethod} {$reqUri} len={$contentLen}");
+
+// Retrieve Unraid system CSRF token if available
+function get_system_csrf_token() {
+    static $token = null;
+    if ($token !== null) return $token;
+
+    $iniPaths = [
+        '/var/local/emhttp/var.ini',
+        '/var/run/emhttp/var.ini',
+        '/var/run/emhttp.ini',
+    ];
+    foreach ($iniPaths as $p) {
+        if (@file_exists($p)) {
+            $content = @file_get_contents($p);
+            if (!empty($content) && preg_match('/csrf_token="?([^"\r\n]+)"?/', $content, $m)) {
+                $token = trim($m[1]);
+                return $token;
+            }
+        }
+    }
+
+    if (!empty($GLOBALS['csrf_token'])) {
+        $token = $GLOBALS['csrf_token'];
+        return $token;
+    }
+    if (!empty($GLOBALS['var']['csrf_token'])) {
+        $token = $GLOBALS['var']['csrf_token'];
+        return $token;
+    }
+
+    return '';
+}
+
+// Enable CORS for mobile app
+header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS");
+header("Access-Control-Allow-Headers: Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Token, X-CSRF-Token, Range");
+header("Access-Control-Expose-Headers: Content-Length, Content-Range, Accept-Ranges");
+header("Access-Control-Max-Age: 86400");
+
+// Gracefully handle CORS preflight without dropping connection
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['status' => 'success', 'action' => 'options']);
+    exit;
+}
+
+// Set error reporting and buffer output to ensure clean JSON responses
+error_reporting(E_ALL);
+@ini_set('display_errors', '0');
 
 // Comprehensive shutdown handler: if script terminates prematurely or with fatal error, ALWAYS return JSON
 register_shutdown_function(function() {
@@ -279,6 +315,13 @@ switch ($action) {
 
     case 'upload_debug':
         handle_upload_debug();
+        break;
+
+    case 'csrf_token':
+        json_output([
+            'status' => 'success',
+            'csrf_token' => get_system_csrf_token()
+        ]);
         break;
 
     case 'file_mkdir':
@@ -681,7 +724,8 @@ function handle_status() {
         'network' => [
             'rx_bytes' => $netRx,
             'tx_bytes' => $netTx
-        ]
+        ],
+        'csrf_token' => get_system_csrf_token()
     ]);
 }
 
@@ -990,6 +1034,7 @@ function handle_file_list() {
         'current_path' => $targetDir,
         'parent_path' => $parentPath,
         'is_root' => $isRoot,
+        'csrf_token' => get_system_csrf_token(),
         'items' => array_merge($folders, $files)
     ]);
 }
@@ -1296,18 +1341,26 @@ function handle_file_chunk() {
             $binaryData = @file_get_contents($_FILES['chunk']['tmp_name']);
             @unlink($_FILES['chunk']['tmp_name']);
             log_upload_debug("chunk_mode: multipart, bytes=" . strlen($binaryData));
+        } elseif (!empty($_POST['data'])) {
+            $payload = $_POST;
+            $binaryData = base64_decode($_POST['data']);
+            log_upload_debug("chunk_mode: post_form, binLen=" . strlen($binaryData));
+        } elseif (!empty($_GET['data'])) {
+            $payload = $_GET;
+            $binaryData = base64_decode($_GET['data']);
+            log_upload_debug("chunk_mode: get_query, binLen=" . strlen($binaryData));
         } else {
             $rawInput = file_get_contents('php://input');
             $payload = json_decode($rawInput, true);
             if (!is_array($payload)) {
-                $payload = $_POST;
+                $payload = array_merge($_GET, $_POST);
             }
             $base64Data = isset($payload['data']) ? $payload['data'] : '';
             $binaryData = ($base64Data !== '') ? base64_decode($base64Data) : '';
             log_upload_debug("chunk_mode: json_base64, rawLen=" . strlen((string)$rawInput) . " binLen=" . strlen($binaryData));
         }
 
-        $rawPath = isset($payload['path']) ? $payload['path'] : (isset($_GET['path']) ? $_GET['path'] : ALLOWED_ROOT);
+        $rawPath = isset($payload['path']) ? $payload['path'] : (isset($_POST['path']) ? $_POST['path'] : (isset($_GET['path']) ? $_GET['path'] : ALLOWED_ROOT));
         $targetDir = sanitize_path($rawPath);
 
         if ($targetDir === '/mnt' || $targetDir === '/mnt/user') {
@@ -1330,7 +1383,7 @@ function handle_file_chunk() {
             }
         }
 
-        $filename = isset($payload['filename']) ? trim($payload['filename']) : (isset($_GET['filename']) ? trim($_GET['filename']) : '');
+        $filename = isset($payload['filename']) ? trim($payload['filename']) : (isset($_POST['filename']) ? trim($_POST['filename']) : (isset($_GET['filename']) ? trim($_GET['filename']) : ''));
         if (stripos($filename, '%') !== false) {
             $filename = rawurldecode($filename);
         }
@@ -1341,10 +1394,10 @@ function handle_file_chunk() {
         }
 
         $destPath = rtrim($targetDir, '/') . '/' . $cleanName;
-        $chunkIndex = isset($payload['chunk_index']) ? intval($payload['chunk_index']) : 0;
-        $totalChunks = isset($payload['total_chunks']) ? intval($payload['total_chunks']) : 1;
-        $offset = isset($payload['offset']) ? floatval($payload['offset']) : 0;
-        $totalSize = isset($payload['total_size']) ? floatval($payload['total_size']) : 0;
+        $chunkIndex = isset($payload['chunk_index']) ? intval($payload['chunk_index']) : (isset($_POST['chunk_index']) ? intval($_POST['chunk_index']) : (isset($_GET['chunk_index']) ? intval($_GET['chunk_index']) : 0));
+        $totalChunks = isset($payload['total_chunks']) ? intval($payload['total_chunks']) : (isset($_POST['total_chunks']) ? intval($_POST['total_chunks']) : (isset($_GET['total_chunks']) ? intval($_GET['total_chunks']) : 1));
+        $offset = isset($payload['offset']) ? floatval($payload['offset']) : (isset($_POST['offset']) ? floatval($_POST['offset']) : (isset($_GET['offset']) ? floatval($_GET['offset']) : 0));
+        $totalSize = isset($payload['total_size']) ? floatval($payload['total_size']) : (isset($_POST['total_size']) ? floatval($_POST['total_size']) : (isset($_GET['total_size']) ? floatval($_GET['total_size']) : 0));
 
         // First chunk creates/truncates the file, subsequent chunks append/seek
         $fp = false;
@@ -1467,7 +1520,8 @@ function handle_upload_debug() {
         'tmp_dir' => $tmpDir,
         'tmp_writable' => $tmpWritable ? 'yes' : 'no',
         'emhttp_writable' => $emhttpWritable ? 'yes' : 'no',
-        'current_user' => $curUser
+        'current_user' => $curUser,
+        'csrf_token_found' => get_system_csrf_token() ? 'yes' : 'no'
     ]);
 }
 

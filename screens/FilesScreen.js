@@ -65,7 +65,24 @@ export default function FilesScreen({ navigation }) {
   // Transfer Manager (Uploads & Downloads)
   const [isTransferVisible, setIsTransferVisible] = useState(false);
   const [transfers, setTransfers] = useState([]);
+  const [csrfToken, setCsrfToken] = useState('');
+  const csrfTokenRef = useRef('');
   const activeTasksRef = useRef({}); // taskId -> FileSystem.UploadTask
+
+  const ensureCsrfToken = async (baseUrl, token) => {
+    if (csrfTokenRef.current) return csrfTokenRef.current;
+    const cleanUrl = (baseUrl || '').replace(/\/+$/, '');
+    try {
+      const res = await fetch(`${cleanUrl}/api.php?token=${encodeURIComponent(token)}&action=csrf_token`);
+      const data = await res.json();
+      if (data && data.csrf_token) {
+        setCsrfToken(data.csrf_token);
+        csrfTokenRef.current = data.csrf_token;
+        return data.csrf_token;
+      }
+    } catch (_) {}
+    return '';
+  };
 
   /**
    * 💡 Real-Time Sync on Screen Focus:
@@ -118,11 +135,16 @@ export default function FilesScreen({ navigation }) {
     if (!baseUrl || !token) return;
     setIsLoadingList(true);
     try {
-      const url = `${baseUrl}/api.php?token=${token}&action=file_list&path=${encodeURIComponent(path)}`;
+      const cleanUrl = baseUrl.replace(/\/+$/, '');
+      const url = `${cleanUrl}/api.php?token=${encodeURIComponent(token)}&action=file_list&path=${encodeURIComponent(path)}`;
       const res = await fetch(url);
       const data = await res.json();
 
       if (data.status === 'success') {
+        if (data.csrf_token) {
+          setCsrfToken(data.csrf_token);
+          csrfTokenRef.current = data.csrf_token;
+        }
         const items = (data.items || []).map(it => ({
           ...it,
           href: it.path, // compatibility with previewUtils
@@ -273,11 +295,13 @@ export default function FilesScreen({ navigation }) {
         throw new Error('本地文件无法读取或已丢失');
       }
 
-      const totalSize = (fileInfo.size !== undefined && fileInfo.size !== null) ? fileInfo.size : (taskItem.size || 0);
+      const cleanBaseUrl = (serverUrl || '').replace(/\/+$/, '');
+      const activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
+      const csrfQuery = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
 
       // -----------------------------------------------------------------------
       // Strategy 1: Native Streaming Multipart Upload via FileSystem.uploadAsync
-      // Standard HTTP RFC 1867 multipart form - fully supported by Unraid Nginx/emhttp!
+      // Best performance for direct connections.
       // -----------------------------------------------------------------------
       let nativeSucceeded = false;
       let nativeError = '';
@@ -290,7 +314,7 @@ export default function FilesScreen({ navigation }) {
       } : t)));
 
       try {
-        const nativeUploadUrl = `${serverUrl}/api.php?token=${apiToken}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}`;
+        const nativeUploadUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}`;
         const nativeRes = await FileSystem.uploadAsync(nativeUploadUrl, fileUri, {
           fieldName: 'file',
           httpMethod: 'POST',
@@ -298,6 +322,14 @@ export default function FilesScreen({ navigation }) {
           headers: {
             'Accept': 'application/json',
             'X-API-Token': apiToken,
+            ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
+          },
+          parameters: {
+            csrf_token: activeCsrf || '',
+            token: apiToken,
+            action: 'file_upload',
+            path: taskItem.targetPath,
+            filename: taskItem.name,
           },
         });
 
@@ -334,22 +366,23 @@ export default function FilesScreen({ navigation }) {
           progress: 100,
           speed: `已保存: ${savedPath}`,
         } : t)));
-        loadDirectory(serverUrl, apiToken, currentPath);
+        loadDirectory(cleanBaseUrl, apiToken, currentPath);
         Alert.alert('上传成功', `文件已成功写入 Unraid 存储：\n${savedPath}`);
         return;
       }
 
       // -----------------------------------------------------------------------
-      // Strategy 2: Micro-Chunk Fallback Engine (for very large files or proxy bypass)
+      // Strategy 2: 64KB Form-Data Chunk Engine (POST)
+      // Safely bypasses PHP post_max_size / upload_max_filesize limitations
       // -----------------------------------------------------------------------
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
         status: 'running',
         progress: 15,
-        speed: `原生直传未命中，切换分片传输引擎...`,
+        speed: `切换分片传输引擎 (64KB/片)...`,
       } : t)));
 
-      const CHUNK_SIZE = 128 * 1024; // 128 KB per chunk
+      const CHUNK_SIZE = 64 * 1024; // 64 KB per chunk
       const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
 
       let startChunk = taskItem.chunkIndex || 0;
@@ -357,6 +390,8 @@ export default function FilesScreen({ navigation }) {
 
       let lastTime = Date.now();
       let lastBytes = startChunk * CHUNK_SIZE;
+      let chunkEngineFailed = false;
+      let chunkEngineError = '';
 
       for (let i = startChunk; i < totalChunks; i++) {
         if (activeTasksRef.current[taskId]?.cancelled) {
@@ -375,108 +410,162 @@ export default function FilesScreen({ navigation }) {
           });
         }
 
-        const chunkUrl = `${serverUrl}/api.php?token=${apiToken}&action=file_chunk`;
-        const res = await fetch(chunkUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-API-Token': apiToken,
-          },
-          body: JSON.stringify({
-            path: taskItem.targetPath,
-            filename: taskItem.name,
-            chunk_index: i,
-            total_chunks: totalChunks,
-            offset: offset,
-            total_size: totalSize,
-            data: base64Chunk,
-          }),
-          signal: abortController.signal,
-        });
-
-        let resText = '';
         try {
-          resText = await res.text();
-        } catch (readErr) {
-          throw new Error(`读取服务端响应失败: ${readErr.message}`);
-        }
+          const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_chunk`;
+          const formData = new FormData();
+          formData.append('token', apiToken);
+          formData.append('action', 'file_chunk');
+          formData.append('path', taskItem.targetPath);
+          formData.append('filename', taskItem.name);
+          formData.append('chunk_index', String(i));
+          formData.append('total_chunks', String(totalChunks));
+          formData.append('offset', String(offset));
+          formData.append('total_size', String(totalSize));
+          formData.append('data', base64Chunk);
+          if (activeCsrf) formData.append('csrf_token', activeCsrf);
 
-        if (!res.ok) {
-          let msg = `HTTP ${res.status}`;
-          try {
-            const errJson = JSON.parse(resText);
-            if (errJson.message) msg = errJson.message;
-          } catch (_) {
-            if (resText) msg = resText.slice(0, 150);
-          }
-          if (msg.includes('Unknown action')) {
-            msg = '服务端 api.php 缺少分片上传功能，请更新 api.php 后重试。';
-          }
-          throw new Error(msg);
-        }
+          const res = await fetch(chunkUrl, {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json',
+              'X-API-Token': apiToken,
+              ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
+            },
+            body: formData,
+            signal: abortController.signal,
+          });
 
-        if (!resText || !resText.trim()) {
-          // Attempt to fetch server-side diagnostic log to pinpoint failure reason
-          let serverDiag = '';
-          try {
-            const diagRes = await fetch(`${serverUrl}/api.php?token=${apiToken}&action=upload_debug`, {
-              headers: { 'X-API-Token': apiToken }
-            });
-            const diagJson = await diagRes.json();
-            if (diagJson) {
-              serverDiag = `\n\n【服务端运行环境诊断】:\n` +
-                `· PHP: ${diagJson.php_version || '未知'} (${diagJson.php_sapi || ''})\n` +
-                `· post_max_size: ${diagJson.post_max_size || '未知'}\n` +
-                `· upload_max_filesize: ${diagJson.upload_max_filesize || '未知'}\n` +
-                `· open_basedir: ${diagJson.open_basedir || '无'}\n` +
-                `· 运行用户: ${diagJson.current_user || '未知'}\n` +
-                `· 临时目录可写: ${diagJson.tmp_writable || '未知'}\n` +
-                `· 日志记录:\n${diagJson.log || '无日志'}`;
+          const resText = await res.text();
+          if (!res.ok || !resText || !resText.trim()) {
+            throw new Error(`HTTP ${res.status}: ${resText ? resText.slice(0, 100) : '服务端返回 0 字节'}`);
+          }
+
+          const resData = JSON.parse(resText);
+          if (resData.status !== 'success') {
+            throw new Error(resData.message || '分片写入失败');
+          }
+
+          // Calculate progress & speed
+          const currentBytes = offset + length;
+          const now = Date.now();
+          const timeDiff = (now - lastTime) / 1000;
+          let speedStr = '';
+          if (timeDiff >= 0.5) {
+            const bytesDiff = currentBytes - lastBytes;
+            const currentSpeed = bytesDiff / timeDiff;
+            speedStr = ` · ${formatBytes(currentSpeed)}/s`;
+            lastTime = now;
+            lastBytes = currentBytes;
+          }
+
+          const pct = totalSize > 0 ? Math.min(99, Math.round((currentBytes / totalSize) * 100)) : 100;
+
+          setTransfers(prev => prev.map(t => {
+            if (t.id === taskId) {
+              return {
+                ...t,
+                status: 'running',
+                chunkIndex: i + 1,
+                progress: pct,
+                speed: `${formatBytes(currentBytes)} / ${formatBytes(totalSize)} (${pct}%)${speedStr}`,
+              };
             }
-          } catch (_) {}
-
-          throw new Error(`服务端返回空数据 (0 字节)。请确保 Unraid 已更新最新的 api.php。${serverDiag}`);
+            return t;
+          }));
+        } catch (chunkErr) {
+          console.log(`[FilesScreen] POST chunk ${i} failed:`, chunkErr);
+          chunkEngineFailed = true;
+          chunkEngineError = chunkErr.message;
+          break;
         }
+      }
 
-        let resData = null;
-        try {
-          resData = JSON.parse(resText);
-        } catch (parseErr) {
-          throw new Error(`服务端响应异常: ${resText.slice(0, 120)}`);
-        }
+      // -----------------------------------------------------------------------
+      // Strategy 3: 4KB Micro-Chunk GET Fallback Engine
+      // Triggered if Unraid emhttp / Nginx / proxy intercepts and drops all POST requests.
+      // Standard GET requests are NEVER blocked by CSRF or post_max_size!
+      // -----------------------------------------------------------------------
+      if (chunkEngineFailed) {
+        setTransfers(prev => prev.map(t => (t.id === taskId ? {
+          ...t,
+          status: 'running',
+          progress: 10,
+          speed: `启用微分片容灾通道 (4KB/片)...`,
+        } : t)));
 
-        if (resData.status !== 'success') {
-          throw new Error(resData.message || '分片写入失败');
-        }
+        const MICRO_CHUNK = 4096; // 4 KB binary = ~5.4KB Base64, fits in 8KB URL limits
+        const microTotal = totalSize > 0 ? Math.ceil(totalSize / MICRO_CHUNK) : 1;
+        let microLastTime = Date.now();
+        let microLastBytes = 0;
 
-        // Calculate progress & speed
-        const currentBytes = offset + length;
-        const now = Date.now();
-        const timeDiff = (now - lastTime) / 1000;
-        let speedStr = '';
-        if (timeDiff >= 0.5) {
-          const bytesDiff = currentBytes - lastBytes;
-          const currentSpeed = bytesDiff / timeDiff;
-          speedStr = ` · ${formatBytes(currentSpeed)}/s`;
-          lastTime = now;
-          lastBytes = currentBytes;
-        }
-
-        const pct = totalSize > 0 ? Math.min(99, Math.round((currentBytes / totalSize) * 100)) : 100;
-
-        setTransfers(prev => prev.map(t => {
-          if (t.id === taskId) {
-            return {
-              ...t,
-              status: 'running',
-              chunkIndex: i + 1,
-              progress: pct,
-              speed: `${formatBytes(currentBytes)} / ${formatBytes(totalSize)} (${pct}%)${speedStr}`,
-            };
+        for (let m = 0; m < microTotal; m++) {
+          if (activeTasksRef.current[taskId]?.cancelled) {
+            return;
           }
-          return t;
-        }));
+
+          const mOffset = m * MICRO_CHUNK;
+          const mLength = Math.min(MICRO_CHUNK, totalSize - mOffset);
+
+          let mChunkData = '';
+          if (totalSize > 0 && mLength > 0) {
+            mChunkData = await FileSystem.readAsStringAsync(fileUri, {
+              encoding: FileSystem.EncodingType.Base64,
+              position: mOffset,
+              length: mLength,
+            });
+          }
+
+          const getChunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_chunk` +
+            `&path=${encodeURIComponent(taskItem.targetPath)}` +
+            `&filename=${encodeURIComponent(taskItem.name)}` +
+            `&chunk_index=${m}` +
+            `&total_chunks=${microTotal}` +
+            `&offset=${mOffset}` +
+            `&total_size=${totalSize}` +
+            `&data=${encodeURIComponent(mChunkData)}`;
+
+          const getRes = await fetch(getChunkUrl, {
+            method: 'GET',
+            signal: abortController.signal,
+          });
+
+          const getText = await getRes.text();
+          if (!getRes.ok || !getText || !getText.trim()) {
+            throw new Error(`微分片上传异常 (HTTP ${getRes.status}): ${getText ? getText.slice(0, 100) : '服务端未响应'}`);
+          }
+
+          const getData = JSON.parse(getText);
+          if (getData.status !== 'success') {
+            throw new Error(getData.message || '微分片写入失败');
+          }
+
+          const currentBytes = mOffset + mLength;
+          const now = Date.now();
+          const timeDiff = (now - microLastTime) / 1000;
+          let speedStr = '';
+          if (timeDiff >= 0.5) {
+            const bytesDiff = currentBytes - microLastBytes;
+            const currentSpeed = bytesDiff / timeDiff;
+            speedStr = ` · ${formatBytes(currentSpeed)}/s`;
+            microLastTime = now;
+            microLastBytes = currentBytes;
+          }
+
+          const pct = totalSize > 0 ? Math.min(99, Math.round((currentBytes / totalSize) * 100)) : 100;
+
+          setTransfers(prev => prev.map(t => {
+            if (t.id === taskId) {
+              return {
+                ...t,
+                status: 'running',
+                chunkIndex: m + 1,
+                progress: pct,
+                speed: `${formatBytes(currentBytes)} / ${formatBytes(totalSize)} (${pct}%)${speedStr}`,
+              };
+            }
+            return t;
+          }));
+        }
       }
 
       delete activeTasksRef.current[taskId];
@@ -494,7 +583,7 @@ export default function FilesScreen({ navigation }) {
       } : t)));
 
       // Refresh directory list
-      loadDirectory(serverUrl, apiToken, currentPath);
+      loadDirectory(cleanBaseUrl, apiToken, currentPath);
       Alert.alert('上传成功', `文件已成功写入 Unraid 存储：\n${savedPath}`);
     } catch (err) {
       delete activeTasksRef.current[taskId];
