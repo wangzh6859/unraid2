@@ -19,6 +19,16 @@ import { getDownloadDir, formatBytes } from '../utils/cacheManager';
 import FilePreviewer from '../components/FilePreviewer';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 
+// Formats bytes with fixed 1 decimal place to prevent layout shift
+const formatBytesFixed = (bytes) => {
+  if (!bytes || bytes <= 0) return '0.0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  if (i === 0) return `${bytes} B`;
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+};
+
 export default function FilesScreen({ navigation }) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -302,7 +312,10 @@ export default function FilesScreen({ navigation }) {
           type: '上传',
           status: 'running', // 'running' | 'paused' | 'success' | 'error'
           progress: 0,
-          speed: '正在准备...',
+          transferredBytes: 0,
+          totalBytes: file.size || 0,
+          sizeText: `${formatBytesFixed(0)} / ${formatBytesFixed(file.size || 0)}`,
+          speedDisplay: '准备中...',
         };
 
         setTransfers(prev => [newTask, ...prev]);
@@ -365,8 +378,11 @@ export default function FilesScreen({ navigation }) {
         setTransfers(prev => prev.map(t => (t.id === taskId ? {
           ...t,
           status: 'running',
-          progress: 25,
-          speed: `原生直传中 (${formatBytes(totalSize)})...`,
+          progress: (t.progress !== undefined && t.progress > 0) ? t.progress : 25,
+          transferredBytes: 0,
+          totalBytes: totalSize,
+          sizeText: `${formatBytesFixed(0)} / ${formatBytesFixed(totalSize)}`,
+          speedDisplay: '原生直传中...',
         } : t)));
 
         try {
@@ -415,7 +431,10 @@ export default function FilesScreen({ navigation }) {
             ...t,
             status: 'success',
             progress: 100,
-            speed: `已保存: ${savedPath}`,
+            transferredBytes: totalSize,
+            totalBytes: totalSize,
+            sizeText: `${formatBytesFixed(totalSize)} / ${formatBytesFixed(totalSize)}`,
+            speedDisplay: '已完成',
           } : t)));
           loadDirectory(cleanBaseUrl, apiToken, currentPath);
           showConfirm({
@@ -431,34 +450,35 @@ export default function FilesScreen({ navigation }) {
 
       // -----------------------------------------------------------------------
       // Strategy 2: High-Throughput Pipelined Chunk Engine (POST)
-      // 2MB (<=20MB) | 3.5MB (>20MB)
-      // 3.5MB binary = ~4.67MB Base64, well within PHP post_max_size (8M).
-      // Double buffering: reads chunk (i + 1) asynchronously while chunk (i)
-      // is transmitting over the network to saturate network bandwidth!
       // -----------------------------------------------------------------------
       let CHUNK_SIZE = 2 * 1024 * 1024; // 2 MB per chunk
       if (totalSize > 20 * 1024 * 1024) {
         CHUNK_SIZE = 3.5 * 1024 * 1024; // 3.5 MB per chunk for larger files
       }
 
-      setTransfers(prev => prev.map(t => (t.id === taskId ? {
-        ...t,
-        status: 'running',
-        progress: 5,
-        speed: `极速分片传输中 (${formatBytes(CHUNK_SIZE)}/片)...`,
-      } : t)));
-
       const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
       let startChunk = taskItem.chunkIndex || 0;
       if (startChunk >= totalChunks) startChunk = 0;
 
+      const initialBytes = startChunk * CHUNK_SIZE;
+      const initialPct = totalSize > 0 ? Math.min(99, Math.round((initialBytes / totalSize) * 100)) : 0;
+
+      setTransfers(prev => prev.map(t => (t.id === taskId ? {
+        ...t,
+        status: 'running',
+        progress: (t.progress !== undefined && t.progress > 0) ? t.progress : initialPct,
+        transferredBytes: (t.transferredBytes !== undefined && t.transferredBytes > 0) ? t.transferredBytes : initialBytes,
+        totalBytes: totalSize,
+        sizeText: `${formatBytesFixed((t.transferredBytes !== undefined && t.transferredBytes > 0) ? t.transferredBytes : initialBytes)} / ${formatBytesFixed(totalSize)}`,
+        speedDisplay: startChunk > 0 ? '续传中...' : '传输中...',
+      } : t)));
+
       let lastTime = Date.now();
       let lastBytes = startChunk * CHUNK_SIZE;
-      let currentSpeedStr = ''; // Persists speed display across chunks to avoid flicker
+      let currentSpeedStr = '';
       let chunkEngineFailed = false;
       let chunkEngineError = '';
 
-      // Async chunk reader with error safety
       const readChunkAsync = async (chunkIdx) => {
         const off = chunkIdx * CHUNK_SIZE;
         if (off >= totalSize) return '';
@@ -476,24 +496,27 @@ export default function FilesScreen({ navigation }) {
         }
       };
 
-      // Prefetch the very first chunk before entering the loop
       let nextChunkPromise = readChunkAsync(startChunk);
 
       for (let i = startChunk; i < totalChunks; i++) {
-        if (activeTasksRef.current[taskId]?.cancelled) {
+        if (activeTasksRef.current[taskId]?.cancelled || abortController.signal.aborted) {
+          delete activeTasksRef.current[taskId];
           return;
         }
 
         const offset = i * CHUNK_SIZE;
         const length = Math.min(CHUNK_SIZE, totalSize - offset);
 
-        // Await the pre-read chunk
         let base64Chunk = await nextChunkPromise;
         if (!base64Chunk && length > 0) {
           base64Chunk = await readChunkAsync(i);
         }
 
-        // Prefetch chunk (i + 1) immediately in parallel with network upload
+        if (activeTasksRef.current[taskId]?.cancelled || abortController.signal.aborted) {
+          delete activeTasksRef.current[taskId];
+          return;
+        }
+
         if (i + 1 < totalChunks) {
           nextChunkPromise = readChunkAsync(i + 1);
         } else {
@@ -518,7 +541,10 @@ export default function FilesScreen({ navigation }) {
         let lastErr = null;
 
         while (!chunkSuccess && chunkAttempt < 3) {
-          if (activeTasksRef.current[taskId]?.cancelled) return;
+          if (activeTasksRef.current[taskId]?.cancelled || abortController.signal.aborted) {
+            delete activeTasksRef.current[taskId];
+            return;
+          }
           chunkAttempt++;
           try {
             const res = await fetch(chunkUrl, {
@@ -543,8 +569,11 @@ export default function FilesScreen({ navigation }) {
             }
             chunkSuccess = true;
           } catch (err) {
+            if (activeTasksRef.current[taskId]?.cancelled || abortController.signal.aborted || err.name === 'AbortError' || (err.message && err.message.includes('abort'))) {
+              delete activeTasksRef.current[taskId];
+              return;
+            }
             lastErr = err;
-            if (activeTasksRef.current[taskId]?.cancelled) return;
             if (chunkAttempt < 3) {
               await new Promise(resolve => setTimeout(resolve, 500));
             }
@@ -552,13 +581,16 @@ export default function FilesScreen({ navigation }) {
         }
 
         if (!chunkSuccess) {
+          if (activeTasksRef.current[taskId]?.cancelled || abortController.signal.aborted) {
+            delete activeTasksRef.current[taskId];
+            return;
+          }
           console.log(`[FilesScreen] POST chunk ${i} failed after 3 attempts:`, lastErr);
           chunkEngineFailed = true;
           chunkEngineError = lastErr ? lastErr.message : '分片写入失败';
           break;
         }
 
-        // Smooth speed calculation without jitter
         const currentBytes = offset + length;
         const now = Date.now();
         const timeDiff = (now - lastTime) / 1000;
@@ -567,7 +599,7 @@ export default function FilesScreen({ navigation }) {
           const bytesDiff = currentBytes - lastBytes;
           if (timeDiff > 0 && bytesDiff > 0) {
             const currentSpeed = bytesDiff / timeDiff;
-            currentSpeedStr = ` · ${formatBytes(currentSpeed)}/s`;
+            currentSpeedStr = `${formatBytesFixed(currentSpeed)}/s`;
           }
           lastTime = now;
           lastBytes = currentBytes;
@@ -582,7 +614,10 @@ export default function FilesScreen({ navigation }) {
               status: 'running',
               chunkIndex: i + 1,
               progress: pct,
-              speed: `${formatBytes(currentBytes)} / ${formatBytes(totalSize)} (${pct}%)${currentSpeedStr}`,
+              transferredBytes: currentBytes,
+              totalBytes: totalSize,
+              sizeText: `${formatBytesFixed(currentBytes)} / ${formatBytesFixed(totalSize)}`,
+              speedDisplay: currentSpeedStr || '计算中...',
             };
           }
           return t;
@@ -591,25 +626,23 @@ export default function FilesScreen({ navigation }) {
 
       // -----------------------------------------------------------------------
       // Strategy 3: 4KB Micro-Chunk GET Fallback Engine
-      // Triggered if Unraid emhttp / Nginx / proxy intercepts and drops all POST requests.
-      // Standard GET requests are NEVER blocked by CSRF or post_max_size!
       // -----------------------------------------------------------------------
       if (chunkEngineFailed) {
         setTransfers(prev => prev.map(t => (t.id === taskId ? {
           ...t,
           status: 'running',
-          progress: 10,
-          speed: `启用微分片容灾通道 (4KB/片)...`,
+          speedDisplay: '容灾传输中...',
         } : t)));
 
-        const MICRO_CHUNK = 4096; // 4 KB binary = ~5.4KB Base64, fits in 8KB URL limits
+        const MICRO_CHUNK = 4096;
         const microTotal = totalSize > 0 ? Math.ceil(totalSize / MICRO_CHUNK) : 1;
         let microLastTime = Date.now();
         let microLastBytes = 0;
         let microSpeedStr = '';
 
         for (let m = 0; m < microTotal; m++) {
-          if (activeTasksRef.current[taskId]?.cancelled) {
+          if (activeTasksRef.current[taskId]?.cancelled || abortController.signal.aborted) {
+            delete activeTasksRef.current[taskId];
             return;
           }
 
@@ -656,7 +689,7 @@ export default function FilesScreen({ navigation }) {
             const bytesDiff = currentBytes - microLastBytes;
             if (timeDiff > 0 && bytesDiff > 0) {
               const currentSpeed = bytesDiff / timeDiff;
-              microSpeedStr = ` · ${formatBytes(currentSpeed)}/s`;
+              microSpeedStr = `${formatBytesFixed(currentSpeed)}/s`;
             }
             microLastTime = now;
             microLastBytes = currentBytes;
@@ -671,7 +704,10 @@ export default function FilesScreen({ navigation }) {
                 status: 'running',
                 chunkIndex: m + 1,
                 progress: pct,
-                speed: `${formatBytes(currentBytes)} / ${formatBytes(totalSize)} (${pct}%)${microSpeedStr}`,
+                transferredBytes: currentBytes,
+                totalBytes: totalSize,
+                sizeText: `${formatBytesFixed(currentBytes)} / ${formatBytesFixed(totalSize)}`,
+                speedDisplay: microSpeedStr || '容灾中...',
               };
             }
             return t;
@@ -690,7 +726,10 @@ export default function FilesScreen({ navigation }) {
         ...t,
         status: 'success',
         progress: 100,
-        speed: `已保存: ${savedPath}`,
+        transferredBytes: totalSize,
+        totalBytes: totalSize,
+        sizeText: `${formatBytesFixed(totalSize)} / ${formatBytesFixed(totalSize)}`,
+        speedDisplay: '已完成',
       } : t)));
 
       // Refresh directory list
@@ -708,18 +747,18 @@ export default function FilesScreen({ navigation }) {
         FileSystem.deleteAsync(tempLocalUri, { idempotent: true }).catch(() => {});
       }
 
-      const isCancelled = err.name === 'AbortError' || (err.message && err.message.includes('abort'));
+      const isCancelled = abortController.signal.aborted || err.name === 'AbortError' || (err.message && err.message.includes('abort'));
       if (isCancelled) {
         setTransfers(prev => prev.map(t => (t.id === taskId ? {
           ...t,
           status: 'paused',
-          speed: `已暂停 (${t.progress || 0}%)`,
+          speedDisplay: '已暂停',
         } : t)));
       } else {
         setTransfers(prev => prev.map(t => (t.id === taskId ? {
           ...t,
           status: 'error',
-          speed: `失败: ${err.message}`,
+          speedDisplay: '失败',
         } : t)));
         showConfirm({
           type: 'warning',
@@ -740,14 +779,26 @@ export default function FilesScreen({ navigation }) {
       try {
         task.abortController.abort();
       } catch (_) {}
-      delete activeTasksRef.current[taskId];
     }
-    setTransfers(prev => prev.map(t => (t.id === taskId ? { ...t, status: 'paused', speed: `已暂停 (${t.progress || 0}%)` } : t)));
+    setTransfers(prev => prev.map(t => {
+      if (t.id === taskId) {
+        return {
+          ...t,
+          status: 'paused',
+          speedDisplay: '已暂停',
+        };
+      }
+      return t;
+    }));
   };
 
   // Resume / Retry upload
   const resumeUploadTask = (taskItem) => {
-    setTransfers(prev => prev.map(t => (t.id === taskItem.id ? { ...t, status: 'running', speed: '继续传输中...' } : t)));
+    setTransfers(prev => prev.map(t => (t.id === taskItem.id ? {
+      ...t,
+      status: 'running',
+      speedDisplay: '准备续传...',
+    } : t)));
     startUploadTask(taskItem);
   };
 
@@ -776,7 +827,10 @@ export default function FilesScreen({ navigation }) {
         type: '下载',
         status: 'running',
         progress: 0,
-        speed: '正在下载...',
+        transferredBytes: 0,
+        totalBytes: item.size || 0,
+        sizeText: `${formatBytesFixed(0)} / ${formatBytesFixed(item.size || 0)}`,
+        speedDisplay: '正在下载...',
       };
       setTransfers(prev => [newTask, ...prev]);
       setIsTransferVisible(true);
@@ -796,18 +850,42 @@ export default function FilesScreen({ navigation }) {
       }
 
       await FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => {});
-      setTransfers(prev => prev.map(t => (t.id === taskId ? { ...t, status: 'success', progress: 100, speed: '下载完成' } : t)));
+      setTransfers(prev => prev.map(t => (t.id === taskId ? {
+        ...t,
+        status: 'success',
+        progress: 100,
+        transferredBytes: item.size || 0,
+        totalBytes: item.size || 0,
+        sizeText: `${formatBytesFixed(item.size || 0)} / ${formatBytesFixed(item.size || 0)}`,
+        speedDisplay: '下载完成',
+      } : t)));
     } catch (e) {
       console.log('[FilesScreen] Download error:', e);
-      Alert.alert('下载失败', e.message);
-      setTransfers(prev => prev.map(t => (t.name === item.name && t.status === 'running' ? { ...t, status: 'error', speed: '下载中断' } : t)));
+      showConfirm({
+        type: 'warning',
+        title: '下载失败',
+        message: e.message || '网络或存储权限异常',
+        confirmText: '知道了',
+        showCancel: false,
+      });
+      setTransfers(prev => prev.map(t => ((t.id === taskId || (t.name === item.name && t.status === 'running')) ? {
+        ...t,
+        status: 'error',
+        speedDisplay: '下载中断',
+      } : t)));
     }
   };
 
   const handleBatchDownload = async () => {
     const items = fileList.filter(f => selected.has(f.path) && !f.isFolder);
     if (items.length === 0) {
-      Alert.alert('提示', '请选择要下载的文件（文件夹暂不支持批量打包下载）');
+      showConfirm({
+        type: 'info',
+        title: '提示',
+        message: '请选择要下载的文件（文件夹暂不支持批量打包下载）',
+        confirmText: '好的',
+        showCancel: false,
+      });
       return;
     }
     setPreviewItem(null);
@@ -1506,48 +1584,148 @@ export default function FilesScreen({ navigation }) {
 
                 return (
                   <View key={item.id} style={styles.transferRow}>
-                    <View style={styles.transferIconBox}>
-                      {item.type === '上传' ? (
-                        <UploadCloud color={colors.amber} size={22} />
-                      ) : (
-                        <DownloadCloud color={colors.green} size={22} />
-                      )}
-                    </View>
-
-                    <View style={styles.transferInfo}>
-                      <Text style={styles.transferName} numberOfLines={1}>{item.name}</Text>
-                      <Text style={[
-                        styles.transferStatus,
-                        { color: isSuccess ? colors.green : isError ? colors.red : isPaused ? colors.amber : colors.accent }
+                    {/* Top Row: Icon + Name & Status Tag + Top-Right Actions */}
+                    <View style={styles.transferTopRow}>
+                      <View style={[
+                        styles.transferIconBox,
+                        {
+                          backgroundColor: isSuccess
+                            ? 'rgba(16, 185, 129, 0.12)'
+                            : isError
+                            ? 'rgba(239, 68, 68, 0.12)'
+                            : isPaused
+                            ? 'rgba(245, 158, 11, 0.12)'
+                            : 'rgba(59, 130, 246, 0.12)'
+                        }
                       ]}>
-                        {item.type} · {item.speed}
-                      </Text>
+                        {item.type === '上传' ? (
+                          <UploadCloud
+                            color={isSuccess ? colors.green : isError ? colors.red : isPaused ? colors.amber : colors.accent}
+                            size={20}
+                          />
+                        ) : (
+                          <DownloadCloud
+                            color={isSuccess ? colors.green : isError ? colors.red : colors.green}
+                            size={20}
+                          />
+                        )}
+                      </View>
 
-                      {/* Progress Bar */}
-                      {item.type === '上传' && (
-                        <View style={styles.transferProgressBar}>
-                          <View style={[styles.transferProgressFill, { width: `${item.progress || 0}%`, backgroundColor: isSuccess ? colors.green : isError ? colors.red : isPaused ? colors.amber : colors.accent }]} />
+                      <View style={styles.transferHeaderContent}>
+                        <Text style={styles.transferName} numberOfLines={1}>{item.name}</Text>
+                        <View style={styles.transferTagRow}>
+                          <View style={[
+                            styles.transferStatusTag,
+                            {
+                              backgroundColor: isSuccess
+                                ? 'rgba(16, 185, 129, 0.15)'
+                                : isError
+                                ? 'rgba(239, 68, 68, 0.15)'
+                                : isPaused
+                                ? 'rgba(245, 158, 11, 0.15)'
+                                : 'rgba(59, 130, 246, 0.15)'
+                            }
+                          ]}>
+                            <Text style={[
+                              styles.transferStatusTagText,
+                              {
+                                color: isSuccess
+                                  ? colors.green
+                                  : isError
+                                  ? colors.red
+                                  : isPaused
+                                  ? colors.amber
+                                  : colors.accent
+                              }
+                            ]}>
+                              {item.type} · {isSuccess ? '已完成' : isError ? '传输失败' : isPaused ? '已暂停' : '传输中'}
+                            </Text>
+                          </View>
                         </View>
-                      )}
+                      </View>
+
+                      {/* Top-Right Optimized Action Buttons: Distinct, Ergonomic, Pill-shaped */}
+                      <View style={styles.transferActionGroup}>
+                        {item.type === '上传' && isRunning && (
+                          <TouchableOpacity
+                            style={[styles.transferActionBtn, { backgroundColor: 'rgba(245, 158, 11, 0.14)' }]}
+                            onPress={() => pauseUploadTask(item.id)}
+                            activeOpacity={0.7}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
+                            <Pause color={colors.amber} size={15} />
+                          </TouchableOpacity>
+                        )}
+
+                        {item.type === '上传' && (isPaused || isError) && (
+                          <TouchableOpacity
+                            style={[styles.transferActionBtn, { backgroundColor: 'rgba(59, 130, 246, 0.14)' }]}
+                            onPress={() => resumeUploadTask(item)}
+                            activeOpacity={0.7}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
+                            <Play color={colors.accent} size={15} />
+                          </TouchableOpacity>
+                        )}
+
+                        <TouchableOpacity
+                          style={[styles.transferActionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.12)' }]}
+                          onPress={() => deleteTransferRecord(item.id)}
+                          activeOpacity={0.7}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <Trash2 color={colors.red} size={15} />
+                        </TouchableOpacity>
+                      </View>
                     </View>
 
-                    {/* Action buttons (Pause / Resume / Delete record) */}
-                    <View style={styles.transferActions}>
-                      {item.type === '上传' && isRunning && (
-                        <TouchableOpacity style={styles.transferActionBtn} onPress={() => pauseUploadTask(item.id)}>
-                          <Pause color={colors.sub} size={18} />
-                        </TouchableOpacity>
-                      )}
+                    {/* Middle: Full-width Progress Bar */}
+                    <View style={styles.transferProgressBar}>
+                      <View
+                        style={[
+                          styles.transferProgressFill,
+                          {
+                            width: `${Math.max(2, Math.min(100, item.progress || 0))}%`,
+                            backgroundColor: isSuccess
+                              ? colors.green
+                              : isError
+                              ? colors.red
+                              : isPaused
+                              ? colors.amber
+                              : colors.accent,
+                          }
+                        ]}
+                      />
+                    </View>
 
-                      {item.type === '上传' && (isPaused || isError) && (
-                        <TouchableOpacity style={styles.transferActionBtn} onPress={() => resumeUploadTask(item)}>
-                          <Play color={colors.accent} size={18} />
-                        </TouchableOpacity>
-                      )}
+                    {/* Bottom: 3 Independent Fixed Anchored Columns (Never shifts/shakes!) */}
+                    <View style={styles.transferMetaRow}>
+                      {/* Left Anchor: Transferred Size / Total Size */}
+                      <View style={styles.transferMetaLeft}>
+                        <Text style={[styles.transferSizeText, { color: colors.sub }]} numberOfLines={1}>
+                          {item.sizeText || `${formatBytesFixed(item.transferredBytes || 0)} / ${formatBytesFixed(item.totalBytes || item.size || 0)}`}
+                        </Text>
+                      </View>
 
-                      <TouchableOpacity style={styles.transferActionBtn} onPress={() => deleteTransferRecord(item.id)}>
-                        <Trash2 color={colors.sub} size={18} />
-                      </TouchableOpacity>
+                      {/* Center Anchor: Percentage with Tabular Nums */}
+                      <View style={styles.transferMetaCenter}>
+                        <Text style={[
+                          styles.transferPctText,
+                          { color: isSuccess ? colors.green : isPaused ? colors.amber : colors.accent }
+                        ]}>
+                          {item.progress || 0}%
+                        </Text>
+                      </View>
+
+                      {/* Right Anchor: Fixed Right-Aligned Speed with Tabular Nums */}
+                      <View style={styles.transferMetaRight}>
+                        <Text style={[
+                          styles.transferSpeedText,
+                          { color: isRunning ? colors.accent : colors.muted }
+                        ]} numberOfLines={1}>
+                          {item.speedDisplay || (isRunning ? '计算中...' : isPaused ? '已暂停' : isSuccess ? '完成' : '停止')}
+                        </Text>
+                      </View>
                     </View>
                   </View>
                 );
@@ -1837,21 +2015,103 @@ const createStyles = (colors) => StyleSheet.create({
   closeText: { color: colors.accent, fontSize: 15, fontWeight: 'bold' },
   transferContent: { padding: 16 },
   transferRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
     backgroundColor: colors.card,
-    padding: 16,
+    padding: 14,
     borderRadius: 18,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.04)',
+    borderColor: 'rgba(255, 255, 255, 0.05)',
   },
-  transferIconBox: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.input, justifyContent: 'center', alignItems: 'center', marginRight: 14 },
-  transferInfo: { flex: 1 },
-  transferName: { color: colors.text, fontSize: 15, fontWeight: '600', marginBottom: 4 },
-  transferStatus: { fontSize: 12, fontWeight: '600' },
-  transferProgressBar: { height: 6, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 3, marginTop: 8, overflow: 'hidden' },
-  transferProgressFill: { height: '100%', borderRadius: 3 },
-  transferActions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginLeft: 10 },
-  transferActionBtn: { padding: 8, borderRadius: 10, backgroundColor: colors.input },
+  transferTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  transferIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  transferHeaderContent: {
+    flex: 1,
+    marginRight: 8,
+  },
+  transferName: {
+    color: colors.textStrong,
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 3,
+  },
+  transferTagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  transferStatusTag: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  transferStatusTagText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  transferActionGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  transferActionBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  transferProgressBar: {
+    height: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  transferProgressFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  transferMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  transferMetaLeft: {
+    flex: 1,
+    alignItems: 'flex-start',
+  },
+  transferSizeText: {
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '500',
+  },
+  transferMetaCenter: {
+    paddingHorizontal: 8,
+    alignItems: 'center',
+  },
+  transferPctText: {
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+    fontWeight: 'bold',
+  },
+  transferMetaRight: {
+    flex: 1,
+    alignItems: 'flex-end',
+  },
+  transferSpeedText: {
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '600',
+    textAlign: 'right',
+  },
 });
