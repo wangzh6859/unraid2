@@ -278,10 +278,25 @@ switch ($action) {
         handle_docker_action($action);
         break;
 
+    case 'docker_logs':
+        handle_docker_logs();
+        break;
+
     case 'start_vm':
     case 'stop_vm':
     case 'restart_vm':
+    case 'force_stop_vm':
+    case 'pause_vm':
+    case 'resume_vm':
         handle_vm_action($action);
+        break;
+
+    case 'parity_control':
+        handle_parity_control();
+        break;
+
+    case 'syslog':
+        handle_syslog();
         break;
 
     case 'smart_info':
@@ -624,7 +639,8 @@ function handle_status() {
         }
     }
 
-    $dockerPs = @shell_exec('docker ps -a --format "{{.Names}}\t{{.Status}}\t{{.ID}}" 2>/dev/null');
+    $serverHost = !empty($_SERVER['HTTP_HOST']) ? preg_replace('/:.*$/', '', $_SERVER['HTTP_HOST']) : '192.168.1.1';
+    $dockerPs = @shell_exec('docker ps -a --format "{{.Names}}\t{{.Status}}\t{{.ID}}\t{{.Ports}}" 2>/dev/null');
     if ($dockerPs) {
         $lines = explode("\n", trim($dockerPs));
         foreach ($lines as $line) {
@@ -633,8 +649,19 @@ function handle_status() {
                 $cName = trim($cols[0]);
                 $cleanName = ltrim($cName, '/');
                 $cId = isset($cols[2]) ? trim($cols[2]) : '';
+                $cPortsRaw = isset($cols[3]) ? trim($cols[3]) : '';
                 $cStatus = (strpos($cols[1], 'Up') === 0) ? 'running' : 'stopped';
                 
+                // Parse primary web port & WebUI URL
+                $primaryPort = '';
+                $webuiUrl = '';
+                if (!empty($cPortsRaw)) {
+                    if (preg_match('/(?:0\.0\.0\.0|:::|\[::\])?:?(\d+)->(\d+)\/tcp/', $cPortsRaw, $pm)) {
+                        $primaryPort = $pm[1];
+                        $webuiUrl = "http://{$serverHost}:{$primaryPort}";
+                    }
+                }
+
                 $cStats = null;
                 if (isset($statsMap[$cName])) {
                     $cStats = $statsMap[$cName];
@@ -651,7 +678,10 @@ function handle_status() {
                     'status' => $cStatus,
                     'cpu' => $cpuStr,
                     'memory' => $memStr,
-                    'mem' => $memStr
+                    'mem' => $memStr,
+                    'ports' => $cPortsRaw,
+                    'port' => $primaryPort,
+                    'webui' => $webuiUrl
                 ];
             }
         }
@@ -670,7 +700,7 @@ function handle_status() {
                 $cols = preg_split('/\s+/', trim($line));
                 if (count($cols) >= 3) {
                     $vName = $cols[1];
-                    $vState = ($cols[2] === 'running') ? 'running' : 'shut off';
+                    $vState = ($cols[2] === 'running') ? 'running' : ($cols[2] === 'paused' ? 'paused' : 'shut off');
                     $vmsList[] = [
                         'name' => $vName,
                         'status' => $vState,
@@ -702,6 +732,65 @@ function handle_status() {
         }
     }
 
+    // 8. Array Parity Check Telemetry (var.ini & /proc/mdstat)
+    $parityData = [
+        'status' => 'idle',
+        'progress' => 0,
+        'speed' => '',
+        'errors' => 0,
+        'finish' => '',
+        'action' => '空闲',
+        'is_checking' => false
+    ];
+
+    $varIniPath = '/var/local/emhttp/var.ini';
+    $emhttpVars = [];
+    if (file_exists($varIniPath)) {
+        $emhttpVars = @parse_ini_file($varIniPath);
+    }
+
+    if (!empty($emhttpVars)) {
+        $mdResync = isset($emhttpVars['mdResync']) ? (string)$emhttpVars['mdResync'] : '0';
+        $mdResyncPct = isset($emhttpVars['mdResyncPct']) ? (float)$emhttpVars['mdResyncPct'] : 0;
+        $mdResyncSpeed = isset($emhttpVars['mdResyncSpeed']) ? (string)$emhttpVars['mdResyncSpeed'] : '';
+        $mdResyncErrors = isset($emhttpVars['mdResyncErrors']) ? (int)$emhttpVars['mdResyncErrors'] : 0;
+        $mdResyncFinish = isset($emhttpVars['mdResyncFinish']) ? (string)$emhttpVars['mdResyncFinish'] : '';
+        $mdResyncAction = isset($emhttpVars['mdResyncAction']) ? (string)$emhttpVars['mdResyncAction'] : 'Parity-Check';
+
+        if ($mdResync === '1' || $mdResyncPct > 0) {
+            $isPaused = (stripos($mdResyncAction, 'pause') !== false || ($mdResyncSpeed === '0' || $mdResyncSpeed === '0.0'));
+            $parityData['status'] = $isPaused ? 'paused' : 'checking';
+            $parityData['is_checking'] = true;
+            $parityData['progress'] = $mdResyncPct;
+            $parityData['speed'] = $mdResyncSpeed ? (is_numeric($mdResyncSpeed) ? round((float)$mdResyncSpeed / 1024, 1) . ' MB/s' : $mdResyncSpeed) : '';
+            $parityData['errors'] = $mdResyncErrors;
+            $parityData['finish'] = $mdResyncFinish ? $mdResyncFinish : '';
+            $parityData['action'] = $mdResyncAction;
+        }
+    }
+
+    // Fallback checking via /proc/mdstat if var.ini not reporting resync
+    if (!$parityData['is_checking'] && file_exists('/proc/mdstat')) {
+        $mdstat = @file_get_contents('/proc/mdstat');
+        if ($mdstat && preg_match('/resync\s*=\s*([0-9\.]+)%.*?speed=([0-9\.]+)\s*(?:K\/sec|KB\/s)?/i', $mdstat, $pm)) {
+            $parityData['status'] = 'checking';
+            $parityData['is_checking'] = true;
+            $parityData['progress'] = (float)$pm[1];
+            $speedKb = (float)$pm[2];
+            $parityData['speed'] = round($speedKb / 1024, 1) . ' MB/s';
+            if (preg_match('/finish=([0-9\.]+)min/i', $mdstat, $fm)) {
+                $finishMin = (float)$fm[1];
+                if ($finishMin > 60) {
+                    $hours = floor($finishMin / 60);
+                    $mins = round($finishMin % 60);
+                    $parityData['finish'] = "约 {$hours} 小时 {$mins} 分钟";
+                } else {
+                    $parityData['finish'] = "约 " . round($finishMin) . " 分钟";
+                }
+            }
+        }
+    }
+
     json_output([
         'stats' => ['cpu' => $cpuUsage, 'memory' => $memUsage],
         'gpu' => $gpuData,
@@ -725,6 +814,7 @@ function handle_status() {
             'rx_bytes' => $netRx,
             'tx_bytes' => $netTx
         ],
+        'parity' => $parityData,
         'csrf_token' => get_system_csrf_token()
     ]);
 }
@@ -746,6 +836,28 @@ function handle_docker_action($action) {
     json_output(['status' => 'success', 'message' => "Docker action {$action} executed", 'output' => trim($out)]);
 }
 
+function handle_docker_logs() {
+    $target = isset($_GET['target']) ? trim($_GET['target']) : (isset($_GET['name']) ? trim($_GET['name']) : '');
+    if (empty($target)) {
+        json_output(['status' => 'error', 'message' => 'Missing container name'], 400);
+    }
+    $lines = isset($_GET['lines']) ? (int)$_GET['lines'] : 150;
+    if ($lines <= 0 || $lines > 1000) $lines = 150;
+
+    $escaped = escapeshellarg($target);
+    $out = @shell_exec("docker logs --tail {$lines} --timestamps {$escaped} 2>&1");
+    if ($out === null || $out === false) {
+        $out = "未能读取到容器 [{$target}] 的日志。";
+    }
+
+    json_output([
+        'status' => 'success',
+        'name' => $target,
+        'lines' => $lines,
+        'logs' => $out
+    ]);
+}
+
 function handle_vm_action($action) {
     $target = isset($_GET['target']) ? escapeshellarg($_GET['target']) : '';
     if (empty($target)) {
@@ -755,9 +867,68 @@ function handle_vm_action($action) {
     if ($action === 'start_vm') $cmd = "virsh start {$target}";
     elseif ($action === 'stop_vm') $cmd = "virsh shutdown {$target}";
     elseif ($action === 'restart_vm') $cmd = "virsh reboot {$target}";
+    elseif ($action === 'force_stop_vm') $cmd = "virsh destroy {$target}";
+    elseif ($action === 'pause_vm') $cmd = "virsh suspend {$target}";
+    elseif ($action === 'resume_vm') $cmd = "virsh resume {$target}";
     
     $out = shell_exec($cmd . ' 2>&1');
     json_output(['status' => 'success', 'message' => "VM action {$action} executed", 'output' => trim($out)]);
+}
+
+function handle_parity_control() {
+    $cmd = isset($_GET['cmd']) ? trim($_GET['cmd']) : (isset($_POST['cmd']) ? trim($_POST['cmd']) : '');
+    if (empty($cmd)) {
+        json_output(['status' => 'error', 'message' => 'Missing parity command (cmd)'], 400);
+    }
+    
+    $out = '';
+    $msg = '';
+    if ($cmd === 'start' || $cmd === 'check') {
+        $out = @shell_exec('/usr/local/sbin/mdcmd check 2>&1');
+        $msg = '已发起阵列奇偶校验';
+    } elseif ($cmd === 'pause') {
+        $out = @shell_exec('/usr/local/sbin/mdcmd check pause 2>&1');
+        $msg = '已暂停阵列奇偶校验';
+    } elseif ($cmd === 'resume') {
+        $out = @shell_exec('/usr/local/sbin/mdcmd check resume 2>&1');
+        $msg = '已恢复阵列奇偶校验';
+    } elseif ($cmd === 'cancel' || $cmd === 'stop') {
+        $out = @shell_exec('/usr/local/sbin/mdcmd check cancel 2>&1');
+        $msg = '已终止阵列奇偶校验';
+    } else {
+        json_output(['status' => 'error', 'message' => "Unsupported parity command: {$cmd}"], 400);
+    }
+
+    json_output([
+        'status' => 'success',
+        'message' => $msg,
+        'command' => $cmd,
+        'output' => trim($out)
+    ]);
+}
+
+function handle_syslog() {
+    $lines = isset($_GET['lines']) ? (int)$_GET['lines'] : 150;
+    if ($lines <= 0 || $lines > 1000) $lines = 150;
+
+    $logFile = '/var/log/syslog';
+    if (!file_exists($logFile)) {
+        $logFile = '/var/log/messages';
+    }
+
+    $out = '';
+    if (file_exists($logFile)) {
+        $out = @shell_exec("tail -n {$lines} " . escapeshellarg($logFile) . " 2>&1");
+    } else {
+        $out = "系统日志文件未找到 (/var/log/syslog)";
+    }
+
+    json_output([
+        'status' => 'success',
+        'file' => $logFile,
+        'lines' => $lines,
+        'logs' => $out ?: '暂无系统日志记录'
+    ]);
 }
 
 function handle_smart_info() {

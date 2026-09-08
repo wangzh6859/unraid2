@@ -32,7 +32,7 @@ jobs:
             const fs = require('fs');
             const data = JSON.parse(fs.readFileSync('app.json'));
             data.expo.android.versionCode = ${{ github.run_number }};
-            data.expo.version = '1.2.${{ github.run_number }}';
+            data.expo.version = '1.3.${{ github.run_number }}';
             fs.writeFileSync('app.json', JSON.stringify(data, null, 2));
             console.log('v' + data.expo.version + ' (code: ' + data.expo.android.versionCode + ')');
           "
@@ -82,19 +82,20 @@ jobs:
               logText = execSync('git log -n 5 --pretty=format:\"- %s (%h)\"').toString();
             } catch (e) {}
             const lines = [
-              '## 📱 Unraid Mobile Manager v1.2.${{ github.run_number }}',
+              '## 📱 Unraid Mobile Manager v1.3.${{ github.run_number }}',
               '',
-              '### 🌟 本次版本核心更新与功能特性 (Highlights)',
-              '- 🔄 **应用内在线检查更新与一键安装 (In-App Updates)**：在设置中心新增“软件版本与在线更新”专区，支持一键直连 GitHub Releases 智能对比版本号。当有新版本时，自动弹出包含版本号、安装包大小及详细更新日志的精致弹窗，支持一键跳转下载并完成无缝升级。',
-              '- 🔒 **生物识别应用锁与高危操作守卫 (Biometric Security Guard)**：深度集成系统原生指纹/面容识别能力，支持应用启动与从后台切换回前台时的全屏安全锁屏；对服务器重启、关机等高危运维指令增加生物识别二次鉴权确认，全方位守护 NAS 数据安全。',
-              '- 💾 **传输任务队列持久化与断点自愈 (Persistent Queue & Auto-Resume)**：全面实现传输任务队列的本地持久化存储（@transfers_queue_v1）。无论应用意外闪退、被系统后台查杀或用户主动退出重开，未完成的上传/下载队列、精确到字节与切片索引的进度百分比均能完整恢复，支持随时一键断点续传。',
-              '- 🛠️ **传输任务中心全面优化**：独立三列定宽等宽数字排版彻底根除网速位置跳动，右上角拟物胶囊触控按键防误触，全面提升交互质感。',
+              '### 🌟 本次版本核心更新与功能特性 (P1 里程碑 Highlights)',
+              '- 🐳 **Docker 容器实时日志流与 WebUI 直达**：容器详情页集成全功能极客终端风格实时日志弹窗（Monospace 等宽字体、关键字实时过滤检索、一键复制全部日志并附带操作反馈）；自动智能解析容器映射端口，为运行中的容器提供 WebUI 一键直达快捷启动。',
+              '- 🛡️ **阵列奇偶校验实时监控与生命周期运维**：仪表盘全新上线“阵列奇偶校验”卡片，实时掌握校验状态、同步进度百分比、MB/s 读写速率、预计完成倒计时及错误计数；支持手动触发启动校验、暂停、恢复与安全终止生命周期操作。',
+              '- 📜 **系统日志 (Syslog) 实时查看器**：仪表盘支持一键呼出系统日志中心（读取 `/var/log/syslog` 尾部实时流），支持全部 / 错误 / 警告 / 信息多级别过滤标签、实时关键字搜索与一键剪贴板复制。',
+              '- 💻 **虚拟机高级电源管理与状态调度**：虚拟机管理全面支持挂起/暂停（`virsh suspend`）、恢复运行（`virsh resume`）、ACPI 正常关机、强制断电（`virsh destroy`）以及快速重启；全面接入现代化 Squircle 圆角二次防误触确认弹窗。',
+              '- 🔄 **应用内在线更新与安全加固**：全面联动服务端 API 与 GitHub Releases，持续提升手机端运维流畅度与安全性。',
               '',
               '### 📦 提交历史目录 (Changelog)',
               logText,
               '',
               '### 📥 下载与服务端同步',
-              '- **Android 客户端**: 请下载下方 Assets 中的 \`unraid-v1.2.${{ github.run_number }}.apk\`',
+              '- **Android 客户端**: 请下载下方 Assets 中的 \`unraid-v1.3.${{ github.run_number }}.apk\`',
               '- **服务端 API 脚本**: 请在 Unraid 服务器端同步更新 \`/usr/local/emhttp/api.php\` 并执行 \`chmod 755 /usr/local/emhttp/api.php\`'
             ];
             fs.writeFileSync('release_notes.md', lines.join('\n'));
@@ -106,8 +107,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v1.2.${{ github.run_number }}
-          release_name: Unraid v1.2.${{ github.run_number }}
+          tag_name: v1.3.${{ github.run_number }}
+          release_name: Unraid v1.3.${{ github.run_number }}
           body_path: release_notes.md
           draft: false
           prerelease: false
@@ -119,5 +120,5 @@ jobs:
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ${{ steps.sign_app.outputs.signedReleaseFile }}
-          asset_name: unraid-v1.2.${{ github.run_number }}.apk
+          asset_name: unraid-v1.3.${{ github.run_number }}.apk
           asset_content_type: application/vnd.android.package-archive
