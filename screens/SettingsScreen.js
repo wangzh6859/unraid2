@@ -19,8 +19,45 @@ import {
   getCacheSize as getPreviewCacheSize, getCacheLimitBytes, setCacheLimitMB,
   clearCache as clearPreviewCache, formatBytes as fmtBytes,
 } from '../utils/cacheManager';
+import ModernConfirmDialog from '../components/ModernConfirmDialog';
 
 export default function SettingsScreen({ navigation }) {
+  // Modern squircle confirm & result dialog state
+  const [confirmDialog, setConfirmDialog] = useState({
+    visible: false,
+    type: 'info',
+    title: '',
+    message: '',
+    confirmText: '',
+    cancelText: '取消',
+    showCancel: true,
+    onConfirm: null,
+  });
+
+  const showConfirm = ({
+    type = 'info',
+    title,
+    message,
+    confirmText,
+    cancelText = '取消',
+    showCancel = true,
+    onConfirm,
+  }) => {
+    setConfirmDialog({
+      visible: true,
+      type,
+      title,
+      message,
+      confirmText,
+      cancelText,
+      showCancel,
+      onConfirm: () => {
+        setConfirmDialog(prev => ({ ...prev, visible: false }));
+        if (onConfirm) onConfirm();
+      },
+    });
+  };
+
   const [cacheSize, setCacheSize] = useState('计算中...');
   const [isClearing, setIsClearing] = useState(false);
 
@@ -92,32 +129,49 @@ export default function SettingsScreen({ navigation }) {
     await resetDownloadDir();
     const dir = await getDownloadDir();
     setDownloadDirState(dir);
-    Alert.alert('已恢复', '下载位置已恢复为应用内置默认目录。');
+    showConfirm({
+      type: 'success',
+      title: '已恢复默认',
+      message: '下载存储位置已恢复为应用内置默认目录。',
+      confirmText: '好的',
+      showCancel: false,
+    });
   };
 
   // Preview cache
   const clearPreviewCacheHandler = async () => {
-    Alert.alert('清理预览缓存', '确定要清除所有本地预览缓存文件吗？', [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '彻底清除',
-        style: 'destructive',
-        onPress: async () => {
-          setIsClearing(true);
-          try {
-            await clearPreviewCache();
-            const bytes = await getPreviewCacheSize();
-            setCacheSizeBytes(bytes);
-            setCacheSize(fmtBytes(bytes));
-            Alert.alert('清理完成', '本地预览缓存已清空！');
-          } catch (e) {
-            Alert.alert('清理失败', e.message);
-          } finally {
-            setIsClearing(false);
-          }
-        },
+    showConfirm({
+      type: 'danger',
+      title: '清理预览缓存',
+      message: '确定要清除所有本地预览缓存文件吗？',
+      confirmText: '确认清理',
+      onConfirm: async () => {
+        setIsClearing(true);
+        try {
+          await clearPreviewCache();
+          const bytes = await getPreviewCacheSize();
+          setCacheSizeBytes(bytes);
+          setCacheSize(fmtBytes(bytes));
+          showConfirm({
+            type: 'success',
+            title: '清理完成',
+            message: '本地预览缓存已全部安全清空！',
+            confirmText: '好的',
+            showCancel: false,
+          });
+        } catch (e) {
+          showConfirm({
+            type: 'warning',
+            title: '清理失败',
+            message: e.message,
+            confirmText: '知道了',
+            showCancel: false,
+          });
+        } finally {
+          setIsClearing(false);
+        }
       },
-    ]);
+    });
   };
 
   const openLimitInput = () => {
@@ -128,42 +182,38 @@ export default function SettingsScreen({ navigation }) {
   const confirmLimitInput = async () => {
     const n = parseInt(limitValue, 10);
     if (isNaN(n) || n <= 0) {
-      Alert.alert('无效', '请输入有效的正整数（MB）');
+      showConfirm({
+        type: 'warning',
+        title: '输入无效',
+        message: '请输入有效的正整数（MB）。',
+        confirmText: '知道了',
+        showCancel: false,
+      });
       return;
     }
     const saved = await setCacheLimitMB(n);
     setCacheLimitMBState(saved);
     setLimitVisible(false);
-    Alert.alert('已保存', `缓存上限已设为 ${saved} MB，超出时将自动清理最早缓存。`);
+    showConfirm({
+      type: 'success',
+      title: '配置已保存',
+      message: `缓存上限已设为 ${saved} MB，超出时将自动清理最早缓存。`,
+      confirmText: '好的',
+      showCancel: false,
+    });
   };
 
   // Edit Server URL & Token
   const editServerUrl = () => {
-    if (Platform.OS === 'ios') {
-      Alert.prompt('请输入 Unraid 服务器地址', undefined, (text) => {
-        const v = (text || '').trim();
-        let cleanUrl = v;
-        if (cleanUrl && !cleanUrl.startsWith('http')) cleanUrl = 'http://' + cleanUrl;
-        if (cleanUrl.endsWith('/')) cleanUrl = cleanUrl.slice(0, -1);
-        AsyncStorage.setItem('@server_url', cleanUrl).then(() => setUnraidUrl(cleanUrl));
-      });
-    } else {
-      setServerInput(unraidUrl === '未连接' ? '' : unraidUrl);
-      setServerEditField('url');
-      setServerEditVisible(true);
-    }
+    setServerInput(unraidUrl === '未连接' ? '' : unraidUrl);
+    setServerEditField('url');
+    setServerEditVisible(true);
   };
 
   const editApiToken = () => {
-    if (Platform.OS === 'ios') {
-      Alert.prompt('请输入 API Token', undefined, (text) => {
-        AsyncStorage.setItem('@api_token', (text || '').trim()).then(() => setApiToken(text || ''));
-      });
-    } else {
-      setServerInput(apiToken);
-      setServerEditField('token');
-      setServerEditVisible(true);
-    }
+    setServerInput(apiToken);
+    setServerEditField('token');
+    setServerEditVisible(true);
   };
 
   const confirmServerEdit = async () => {
@@ -179,24 +229,29 @@ export default function SettingsScreen({ navigation }) {
       setApiToken(v);
     }
     setServerEditVisible(false);
-    Alert.alert('已保存', '连接配置已实时保存并即时生效！');
+    showConfirm({
+      type: 'success',
+      title: '配置已生效',
+      message: '服务器连接配置已实时保存并即时生效！',
+      confirmText: '好的',
+      showCancel: false,
+    });
   };
 
   const handleUnraidLogout = () => {
-    Alert.alert('注销服务器凭据', '确定要清除当前 Unraid 系统的连接配置吗？', [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '清除并断开',
-        style: 'destructive',
-        onPress: async () => {
-          await AsyncStorage.removeItem('@server_url');
-          await AsyncStorage.removeItem('@api_token');
-          setUnraidUrl('未连接');
-          setApiToken('');
-          navigation.navigate('首页');
-        },
+    showConfirm({
+      type: 'warning',
+      title: '注销服务器凭据',
+      message: '确定要清除当前 Unraid 系统的连接配置吗？\n断开后需重新输入地址与 API Token。',
+      confirmText: '注销断开',
+      onConfirm: async () => {
+        await AsyncStorage.removeItem('@server_url');
+        await AsyncStorage.removeItem('@api_token');
+        setUnraidUrl('未连接');
+        setApiToken('');
+        navigation.navigate('首页');
       },
-    ]);
+    });
   };
 
   // =========================================================================
@@ -204,64 +259,90 @@ export default function SettingsScreen({ navigation }) {
   // =========================================================================
   const handleServerReboot = () => {
     if (!unraidUrl || unraidUrl === '未连接' || !apiToken) {
-      Alert.alert('未连接', '请先配置有效的服务器连接地址与 API Token。');
+      showConfirm({
+        type: 'warning',
+        title: '未连接服务器',
+        message: '请先配置有效的服务器连接地址与 API Token。',
+        confirmText: '我知道了',
+        showCancel: false,
+      });
       return;
     }
 
-    Alert.alert(
-      '⚠️ 确认重启 Unraid 服务器？',
-      '服务器将在数秒内开始安全重启流程。系统所有 Docker 容器与虚拟机服务将短暂离线，约需 1~3 分钟恢复。',
-      [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '确定重启',
-          style: 'destructive',
-          onPress: async () => {
-            setPowerLoading(true);
-            try {
-              const res = await fetch(`${unraidUrl}/api.php?token=${apiToken}&action=reboot`);
-              const data = await res.json();
-              Alert.alert('重启指令已发送', data.message || '服务器正在执行安全重启...');
-            } catch (e) {
-              Alert.alert('请求异常', e.message);
-            } finally {
-              setPowerLoading(false);
-            }
-          },
-        },
-      ]
-    );
+    showConfirm({
+      type: 'reboot',
+      title: '确认重启 Unraid 服务器？',
+      message: '服务器将在数秒内开始安全重启流程。系统所有 Docker 容器与虚拟机服务将短暂离线，约需 1~3 分钟恢复。',
+      confirmText: '确认重启',
+      onConfirm: async () => {
+        setPowerLoading(true);
+        try {
+          const res = await fetch(`${unraidUrl}/api.php?token=${apiToken}&action=reboot`);
+          const data = await res.json();
+          showConfirm({
+            type: 'success',
+            title: '重启指令已发送',
+            message: data.message || '服务器正在执行安全重启，系统服务将在数分钟内恢复。',
+            confirmText: '好的',
+            showCancel: false,
+          });
+        } catch (e) {
+          showConfirm({
+            type: 'warning',
+            title: '请求异常',
+            message: e.message,
+            confirmText: '知道了',
+            showCancel: false,
+          });
+        } finally {
+          setPowerLoading(false);
+        }
+      },
+    });
   };
 
   const handleServerPoweroff = () => {
     if (!unraidUrl || unraidUrl === '未连接' || !apiToken) {
-      Alert.alert('未连接', '请先配置有效的服务器连接地址与 API Token。');
+      showConfirm({
+        type: 'warning',
+        title: '未连接服务器',
+        message: '请先配置有效的服务器连接地址与 API Token。',
+        confirmText: '我知道了',
+        showCancel: false,
+      });
       return;
     }
 
-    Alert.alert(
-      '🚨 危险：确认关闭 Unraid 服务器？',
-      '执行关机后，主机将彻底切断电源停止运行！\n\n注意：除非您的服务器主板已配置 WOL (网络唤醒) 或由管理员手动按下物理开机键，否则此 App 将无法再远程唤醒开机！',
-      [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '彻底关机',
-          style: 'destructive',
-          onPress: async () => {
-            setPowerLoading(true);
-            try {
-              const res = await fetch(`${unraidUrl}/api.php?token=${apiToken}&action=poweroff`);
-              const data = await res.json();
-              Alert.alert('关机指令已发送', data.message || '服务器正在安全关机...');
-            } catch (e) {
-              Alert.alert('请求异常', e.message);
-            } finally {
-              setPowerLoading(false);
-            }
-          },
-        },
-      ]
-    );
+    showConfirm({
+      type: 'power',
+      title: '危险：确认关闭 Unraid 服务器？',
+      message: '执行关机后，主机将彻底切断电源停止运行！\n\n注意：除非服务器主板已配置 WOL 网络唤醒或由管理员手动按下物理电源键，否则无法远程唤醒开机。',
+      confirmText: '彻底关机',
+      onConfirm: async () => {
+        setPowerLoading(true);
+        try {
+          const res = await fetch(`${unraidUrl}/api.php?token=${apiToken}&action=poweroff`);
+          const data = await res.json();
+          showConfirm({
+            type: 'success',
+            title: '关机指令已生效',
+            message: data.message || '服务器正在安全关机...',
+            confirmText: '好的',
+            showCancel: false,
+          });
+        } catch (e) {
+          showConfirm({
+            type: 'warning',
+            title: '请求异常',
+            message: e.message,
+            confirmText: '知道了',
+            showCancel: false,
+          });
+        } finally {
+          setPowerLoading(false);
+        }
+      },
+    });
   };
 
   return (
@@ -523,6 +604,19 @@ export default function SettingsScreen({ navigation }) {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Modern Squircle Confirm Dialog */}
+      <ModernConfirmDialog
+        visible={confirmDialog.visible}
+        type={confirmDialog.type}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText}
+        cancelText={confirmDialog.cancelText}
+        showCancel={confirmDialog.showCancel}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog(prev => ({ ...prev, visible: false }))}
+      />
     </ScrollView>
   );
 }

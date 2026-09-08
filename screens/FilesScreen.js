@@ -17,10 +17,47 @@ import * as FileSystem from 'expo-file-system';
 import { useTheme } from '../ThemeContext';
 import { getDownloadDir, formatBytes } from '../utils/cacheManager';
 import FilePreviewer from '../components/FilePreviewer';
+import ModernConfirmDialog from '../components/ModernConfirmDialog';
 
 export default function FilesScreen({ navigation }) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+
+  // Modern confirmation & result dialog state
+  const [confirmDialog, setConfirmDialog] = useState({
+    visible: false,
+    type: 'info',
+    title: '',
+    message: '',
+    confirmText: '',
+    cancelText: '取消',
+    showCancel: true,
+    onConfirm: null,
+  });
+
+  const showConfirm = ({
+    type = 'info',
+    title,
+    message,
+    confirmText,
+    cancelText = '取消',
+    showCancel = true,
+    onConfirm,
+  }) => {
+    setConfirmDialog({
+      visible: true,
+      type,
+      title,
+      message,
+      confirmText,
+      cancelText,
+      showCancel,
+      onConfirm: () => {
+        setConfirmDialog(prev => ({ ...prev, visible: false }));
+        if (onConfirm) onConfirm();
+      },
+    });
+  };
 
   // Server credentials synced from Settings / AsyncStorage
   const [serverUrl, setServerUrl] = useState('');
@@ -238,7 +275,13 @@ export default function FilesScreen({ navigation }) {
   const handleUpload = async () => {
     setIsMenuVisible(false);
     if (!currentPath || currentPath === '/mnt' || currentPath === '/mnt/user') {
-      Alert.alert('无法直接上传到共享根目录', 'Unraid 根目录不允许直接存放散装文件。请先在列表中点击进入具体的共享文件夹（例如 downloads、appdata 等）后再点击上传。');
+      showConfirm({
+        type: 'warning',
+        title: '无法直接上传到共享根目录',
+        message: 'Unraid 根目录不允许直接存放散装文件。请先进入具体的共享文件夹（例如 downloads、appdata 等）后再点击上传。',
+        confirmText: '我知道了',
+        showCancel: false,
+      });
       return;
     }
     try {
@@ -267,7 +310,13 @@ export default function FilesScreen({ navigation }) {
         startUploadTask(newTask);
       }
     } catch (e) {
-      Alert.alert('选择文件异常', e.message);
+      showConfirm({
+        type: 'warning',
+        title: '选择文件异常',
+        message: e.message,
+        confirmText: '知道了',
+        showCancel: false,
+      });
     }
   };
 
@@ -303,94 +352,100 @@ export default function FilesScreen({ navigation }) {
 
       // -----------------------------------------------------------------------
       // Strategy 1: Native Streaming Multipart Upload via FileSystem.uploadAsync
-      // Best performance for direct connections.
+      // ONLY attempt Strategy 1 for files <= 2MB!
+      // Unraid emhttp php.ini hard-limits upload_max_filesize = 2M.
+      // Any file > 2MB will be rejected by PHP with UPLOAD_ERR_INI_SIZE!
+      // Bypassing Strategy 1 for files > 2MB prevents uploading the file twice
+      // and eliminates the fake 6MB/s spike and stuck progress delay!
       // -----------------------------------------------------------------------
       let nativeSucceeded = false;
-      let nativeError = '';
+      const MAX_PHP_DIRECT = 2 * 1024 * 1024; // 2 MB limit for direct multipart
 
-      setTransfers(prev => prev.map(t => (t.id === taskId ? {
-        ...t,
-        status: 'running',
-        progress: 10,
-        speed: `正在原生高速直传 (${formatBytes(totalSize)})...`,
-      } : t)));
-
-      try {
-        const nativeUploadUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}`;
-        const nativeRes = await FileSystem.uploadAsync(nativeUploadUrl, fileUri, {
-          fieldName: 'file',
-          httpMethod: 'POST',
-          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-          headers: {
-            'Accept': 'application/json',
-            'X-API-Token': apiToken,
-            ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
-          },
-          parameters: {
-            csrf_token: activeCsrf || '',
-            token: apiToken,
-            action: 'file_upload',
-            path: taskItem.targetPath,
-            filename: taskItem.name,
-          },
-        });
-
-        if (nativeRes.status === 200 && nativeRes.body) {
-          try {
-            const data = JSON.parse(nativeRes.body);
-            if (data.status === 'success') {
-              nativeSucceeded = true;
-            } else if (data.message) {
-              nativeError = data.message;
-            }
-          } catch (_) {
-            if (nativeRes.body.includes('success')) {
-              nativeSucceeded = true;
-            }
-          }
-        } else {
-          nativeError = `HTTP ${nativeRes.status}: ${nativeRes.body ? nativeRes.body.slice(0, 100) : '无响应内容'}`;
-        }
-      } catch (nativeErr) {
-        console.log('[FilesScreen] Native uploadAsync error, falling back to chunking:', nativeErr);
-        nativeError = nativeErr.message || '原生直传失败';
-      }
-
-      if (nativeSucceeded) {
-        delete activeTasksRef.current[taskId];
-        if (tempLocalUri) {
-          FileSystem.deleteAsync(tempLocalUri, { idempotent: true }).catch(() => {});
-        }
-        const savedPath = `${taskItem.targetPath}/${taskItem.name}`;
+      if (totalSize <= MAX_PHP_DIRECT) {
         setTransfers(prev => prev.map(t => (t.id === taskId ? {
           ...t,
-          status: 'success',
-          progress: 100,
-          speed: `已保存: ${savedPath}`,
+          status: 'running',
+          progress: 25,
+          speed: `原生直传中 (${formatBytes(totalSize)})...`,
         } : t)));
-        loadDirectory(cleanBaseUrl, apiToken, currentPath);
-        Alert.alert('上传成功', `文件已成功写入 Unraid 存储：\n${savedPath}`);
-        return;
+
+        try {
+          const nativeUploadUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}`;
+          const nativeRes = await FileSystem.uploadAsync(nativeUploadUrl, fileUri, {
+            fieldName: 'file',
+            httpMethod: 'POST',
+            uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+            headers: {
+              'Accept': 'application/json',
+              'X-API-Token': apiToken,
+              ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
+            },
+            parameters: {
+              csrf_token: activeCsrf || '',
+              token: apiToken,
+              action: 'file_upload',
+              path: taskItem.targetPath,
+              filename: taskItem.name,
+            },
+          });
+
+          if (nativeRes.status === 200 && nativeRes.body) {
+            try {
+              const data = JSON.parse(nativeRes.body);
+              if (data.status === 'success') {
+                nativeSucceeded = true;
+              }
+            } catch (_) {
+              if (nativeRes.body.includes('success')) {
+                nativeSucceeded = true;
+              }
+            }
+          }
+        } catch (nativeErr) {
+          console.log('[FilesScreen] Small file direct upload failed, fallback to chunking:', nativeErr);
+        }
+
+        if (nativeSucceeded) {
+          delete activeTasksRef.current[taskId];
+          if (tempLocalUri) {
+            FileSystem.deleteAsync(tempLocalUri, { idempotent: true }).catch(() => {});
+          }
+          const savedPath = `${taskItem.targetPath}/${taskItem.name}`;
+          setTransfers(prev => prev.map(t => (t.id === taskId ? {
+            ...t,
+            status: 'success',
+            progress: 100,
+            speed: `已保存: ${savedPath}`,
+          } : t)));
+          loadDirectory(cleanBaseUrl, apiToken, currentPath);
+          showConfirm({
+            type: 'success',
+            title: '上传成功',
+            message: `文件已成功写入 Unraid 存储：\n${savedPath}`,
+            confirmText: '好的',
+            showCancel: false,
+          });
+          return;
+        }
       }
 
       // -----------------------------------------------------------------------
-      // Strategy 2: Adaptive High-Speed Form-Data Chunk Engine (POST)
-      // 512KB (<=2MB) | 1MB (2MB-20MB) | 2MB (>20MB)
-      // Safely bypasses PHP upload_max_filesize (2M) via form parameter data
-      // 2MB binary = ~2.67MB Base64, well within PHP post_max_size (8M)
+      // Strategy 2: High-Throughput Pipelined Chunk Engine (POST)
+      // 2MB (<=20MB) | 3.5MB (>20MB)
+      // 3.5MB binary = ~4.67MB Base64, well within PHP post_max_size (8M).
+      // Double buffering: reads chunk (i + 1) asynchronously while chunk (i)
+      // is transmitting over the network to saturate network bandwidth!
       // -----------------------------------------------------------------------
-      let CHUNK_SIZE = 512 * 1024; // 512 KB default for small files
+      let CHUNK_SIZE = 2 * 1024 * 1024; // 2 MB per chunk
       if (totalSize > 20 * 1024 * 1024) {
-        CHUNK_SIZE = 2 * 1024 * 1024; // 2 MB per chunk for files > 20MB
-      } else if (totalSize > 2 * 1024 * 1024) {
-        CHUNK_SIZE = 1024 * 1024; // 1 MB per chunk for files 2MB - 20MB
+        CHUNK_SIZE = 3.5 * 1024 * 1024; // 3.5 MB per chunk for larger files
       }
 
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
         status: 'running',
-        progress: 15,
-        speed: `高速分片传输中 (${formatBytes(CHUNK_SIZE)}/片)...`,
+        progress: 5,
+        speed: `极速分片传输中 (${formatBytes(CHUNK_SIZE)}/片)...`,
       } : t)));
 
       const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
@@ -403,6 +458,27 @@ export default function FilesScreen({ navigation }) {
       let chunkEngineFailed = false;
       let chunkEngineError = '';
 
+      // Async chunk reader with error safety
+      const readChunkAsync = async (chunkIdx) => {
+        const off = chunkIdx * CHUNK_SIZE;
+        if (off >= totalSize) return '';
+        const len = Math.min(CHUNK_SIZE, totalSize - off);
+        if (len <= 0) return '';
+        try {
+          return await FileSystem.readAsStringAsync(fileUri, {
+            encoding: FileSystem.EncodingType.Base64,
+            position: off,
+            length: len,
+          });
+        } catch (readErr) {
+          console.log(`[FilesScreen] Read chunk ${chunkIdx} error:`, readErr);
+          return '';
+        }
+      };
+
+      // Prefetch the very first chunk before entering the loop
+      let nextChunkPromise = readChunkAsync(startChunk);
+
       for (let i = startChunk; i < totalChunks; i++) {
         if (activeTasksRef.current[taskId]?.cancelled) {
           return;
@@ -411,13 +487,17 @@ export default function FilesScreen({ navigation }) {
         const offset = i * CHUNK_SIZE;
         const length = Math.min(CHUNK_SIZE, totalSize - offset);
 
-        let base64Chunk = '';
-        if (totalSize > 0 && length > 0) {
-          base64Chunk = await FileSystem.readAsStringAsync(fileUri, {
-            encoding: FileSystem.EncodingType.Base64,
-            position: offset,
-            length: length,
-          });
+        // Await the pre-read chunk
+        let base64Chunk = await nextChunkPromise;
+        if (!base64Chunk && length > 0) {
+          base64Chunk = await readChunkAsync(i);
+        }
+
+        // Prefetch chunk (i + 1) immediately in parallel with network upload
+        if (i + 1 < totalChunks) {
+          nextChunkPromise = readChunkAsync(i + 1);
+        } else {
+          nextChunkPromise = null;
         }
 
         const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_chunk`;
@@ -615,7 +695,13 @@ export default function FilesScreen({ navigation }) {
 
       // Refresh directory list
       loadDirectory(cleanBaseUrl, apiToken, currentPath);
-      Alert.alert('上传成功', `文件已成功写入 Unraid 存储：\n${savedPath}`);
+      showConfirm({
+        type: 'success',
+        title: '上传成功',
+        message: `文件已成功写入 Unraid 存储：\n${savedPath}`,
+        confirmText: '好的',
+        showCancel: false,
+      });
     } catch (err) {
       delete activeTasksRef.current[taskId];
       if (tempLocalUri) {
@@ -635,7 +721,13 @@ export default function FilesScreen({ navigation }) {
           status: 'error',
           speed: `失败: ${err.message}`,
         } : t)));
-        Alert.alert('上传失败', err.message || '网络或服务端异常');
+        showConfirm({
+          type: 'warning',
+          title: '上传失败',
+          message: err.message || '网络或服务端异常',
+          confirmText: '知道了',
+          showCancel: false,
+        });
       }
     }
   };
@@ -781,49 +873,45 @@ export default function FilesScreen({ navigation }) {
   };
 
   const handleDelete = (item) => {
-    Alert.alert(
-      '确认删除',
-      `确定彻底删除 ${item.isFolder ? '文件夹' : '文件'} \n"${item.name}" 吗？\n此操作不可撤销！`,
-      [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '彻底删除',
-          style: 'destructive',
-          onPress: async () => {
-            const ok = await doDelete(item);
-            if (ok) {
-              setDetailItem(null);
-              loadDirectory(serverUrl, apiToken, currentPath);
-            } else {
-              Alert.alert('删除失败', '服务器拒绝删除，请检查权限');
-            }
-          }
+    showConfirm({
+      type: 'danger',
+      title: '确认删除',
+      message: `确定彻底删除 ${item.isFolder ? '文件夹' : '文件'} \n"${item.name}" 吗？\n此操作不可撤销！`,
+      confirmText: '彻底删除',
+      onConfirm: async () => {
+        const ok = await doDelete(item);
+        if (ok) {
+          setDetailItem(null);
+          loadDirectory(serverUrl, apiToken, currentPath);
+        } else {
+          showConfirm({
+            type: 'warning',
+            title: '删除失败',
+            message: '服务器拒绝删除，请检查操作权限。',
+            confirmText: '知道了',
+            showCancel: false,
+          });
         }
-      ]
-    );
+      },
+    });
   };
 
   const handleBatchDelete = () => {
     const items = fileList.filter(f => selected.has(f.path));
     if (items.length === 0) return;
-    Alert.alert(
-      '批量删除',
-      `确定要删除选中的 ${items.length} 个项目吗？\n此操作不可恢复！`,
-      [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '全部删除',
-          style: 'destructive',
-          onPress: async () => {
-            for (const item of items) {
-              await doDelete(item);
-            }
-            exitMultiSelect();
-            loadDirectory(serverUrl, apiToken, currentPath);
-          }
+    showConfirm({
+      type: 'danger',
+      title: '批量删除确认',
+      message: `确定要彻底删除选中的 ${items.length} 个项目吗？\n此操作不可恢复！`,
+      confirmText: '全部删除',
+      onConfirm: async () => {
+        for (const item of items) {
+          await doDelete(item);
         }
-      ]
-    );
+        exitMultiSelect();
+        loadDirectory(serverUrl, apiToken, currentPath);
+      },
+    });
   };
 
   // Target directory picker for Move / Copy
@@ -875,7 +963,13 @@ export default function FilesScreen({ navigation }) {
         if (json.status === 'success') count++;
       } catch (e) {}
     }
-    Alert.alert('操作完成', `${pickerMode === 'move' ? '移动' : '复制'}成功 ${count} 个项目`);
+    showConfirm({
+      type: 'success',
+      title: '操作完成',
+      message: `已成功将 ${count} 个项目${pickerMode === 'move' ? '移动' : '复制'}至目标目录。`,
+      confirmText: '好的',
+      showCancel: false,
+    });
     loadDirectory(serverUrl, apiToken, currentPath);
   };
 
@@ -1462,6 +1556,19 @@ export default function FilesScreen({ navigation }) {
           </ScrollView>
         </View>
       </Modal>
+
+      {/* Sleek Modern Confirm & Result Dialog */}
+      <ModernConfirmDialog
+        visible={confirmDialog.visible}
+        type={confirmDialog.type}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText}
+        cancelText={confirmDialog.cancelText}
+        showCancel={confirmDialog.showCancel}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog(prev => ({ ...prev, visible: false }))}
+      />
     </View>
   );
 }

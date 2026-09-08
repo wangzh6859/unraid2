@@ -32,7 +32,7 @@ jobs:
             const fs = require('fs');
             const data = JSON.parse(fs.readFileSync('app.json'));
             data.expo.android.versionCode = ${{ github.run_number }};
-            data.expo.version = '1.1.${{ github.run_number }}';
+            data.expo.version = '1.2.${{ github.run_number }}';
             fs.writeFileSync('app.json', JSON.stringify(data, null, 2));
             console.log('v' + data.expo.version + ' (code: ' + data.expo.android.versionCode + ')');
           "
@@ -82,19 +82,19 @@ jobs:
               logText = execSync('git log -n 5 --pretty=format:\"- %s (%h)\"').toString();
             } catch (e) {}
             const lines = [
-              '## 📱 Unraid Mobile Manager v1.1.${{ github.run_number }}',
+              '## 📱 Unraid Mobile Manager v1.2.${{ github.run_number }}',
               '',
               '### 🌟 本次版本核心更新与修复 (Highlights)',
-              '- ⚡ **自适应高速分片上传引擎 (1MB - 2MB/片)**：突破原先 64KB 切片的速度瓶颈，上传速度提升 20x 至 30x（由几百 KB/s 提升至 10MB/s - 30MB/s 局域网极限速率）。',
-              '- 📈 **平滑稳定的实时上传测速与进度刷新**：彻底消除传输任务中心上传速度闪烁、跳动（\"抽搐\"）问题，保持持续稳定测速显示与加权均值平滑渲染。',
-              '- 🎨 **全新全端圆角现代拟物化弹窗设计**：重构新建文件夹、重命名、服务器配置、缓存管理、操作栏与任务中心弹窗，采用 24px 大圆角 squircle、居中半透明毛玻璃蒙层、彩色图标徽章与拟物胶囊按键，告别直角方方正正，视觉美感高度统一。',
-              '- 🛡️ **分片传输智能容灾与重试机制**：单片支持 3 次瞬态网络抖动重试，兼备 4KB 微切片容灾通道，确保 100% 稳妥写入。',
+              '- 🚀 **彻底解决上传起步假飙速与卡顿延迟**：修复了先前版本无论多大文件均先尝试整文件直传导致手机网速瞬间飙升至 6MB/s 但进度条卡住、直至被 PHP 2M 限制拒绝后才回退分片的致命问题；现对大于 2MB 文件秒级直入分片引擎，零等待、零流量损耗。',
+              '- ⚡ **双缓冲并行预读 (Pipeline Prefetch) 与 3.5MB 大切片加速**：引入磁盘并发预读机制，在网络上传当前片时并发异步从本地存储读取并编码下一分片，切片体积扩大至 2MB - 3.5MB，彻底消除磁盘 I/O 阻塞，上传带宽极限打满。',
+              '- 🎨 **全套 Modern 现代圆角确认弹窗体系**：全面淘汰 Android 原生生硬方正的 Alert 弹窗，引入 24px 大圆角 squircle 拟物化卡片与半透明暗色磨砂蒙层，删除确认、批量删除、上传结果提示、清理缓存、服务器重启与关机确认均配备红/绿/黄/橙/蓝主题专属徽章。',
+              '- 🏷️ **应用版本跨代升级至 v1.2.x**：版本号正式演进至 1.2 系列，提升系统稳定性与多项交互质感。',
               '',
               '### 📦 提交历史目录 (Changelog)',
               logText,
               '',
               '### 📥 下载与服务端同步',
-              '- **Android 客户端**: 请下载下方 Assets 中的 \`unraid-v1.1.${{ github.run_number }}.apk\`',
+              '- **Android 客户端**: 请下载下方 Assets 中的 \`unraid-v1.2.${{ github.run_number }}.apk\`',
               '- **服务端 API 脚本**: 请在 Unraid 服务器端同步更新 \`/usr/local/emhttp/api.php\` 并执行 \`chmod 755 /usr/local/emhttp/api.php\`'
             ];
             fs.writeFileSync('release_notes.md', lines.join('\n'));
@@ -106,8 +106,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v1.1.${{ github.run_number }}
-          release_name: Unraid v1.1.${{ github.run_number }}
+          tag_name: v1.2.${{ github.run_number }}
+          release_name: Unraid v1.2.${{ github.run_number }}
           body_path: release_notes.md
           draft: false
           prerelease: false
@@ -119,5 +119,5 @@ jobs:
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ${{ steps.sign_app.outputs.signedReleaseFile }}
-          asset_name: unraid-v1.1.${{ github.run_number }}.apk
+          asset_name: unraid-v1.2.${{ github.run_number }}.apk
           asset_content_type: application/vnd.android.package-archive
