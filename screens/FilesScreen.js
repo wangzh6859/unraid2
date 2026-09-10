@@ -18,6 +18,7 @@ import { useTheme } from '../ThemeContext';
 import { getDownloadDir, formatBytes } from '../utils/cacheManager';
 import FilePreviewer from '../components/FilePreviewer';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
+import backgroundTransferManager from '../utils/backgroundTransferManager';
 
 // Formats bytes with fixed 1 decimal place to prevent layout shift
 const formatBytesFixed = (bytes) => {
@@ -407,6 +408,9 @@ export default function FilesScreen({ navigation }) {
     const abortController = new AbortController();
     activeTasksRef.current[taskId] = { abortController, cancelled: false };
 
+    // Register with Android Foreground Service for lockscreen background transfer
+    backgroundTransferManager.notifyTransferStarted(taskItem);
+
     let tempLocalUri = null;
     try {
       let fileUri = taskItem.uri;
@@ -520,6 +524,7 @@ export default function FilesScreen({ navigation }) {
             confirmText: '好的',
             showCancel: false,
           });
+          backgroundTransferManager.notifyTransferEnded(taskId);
           return;
         }
       }
@@ -704,6 +709,14 @@ export default function FilesScreen({ navigation }) {
           }
           return next;
         });
+
+        // Throttle-update Android Foreground Service persistent notification
+        backgroundTransferManager.updateForegroundProgress({
+          name: taskItem.name,
+          progress: pct,
+          speedStr: currentSpeedStr,
+          sizeText: `${formatBytesFixed(currentBytes)} / ${formatBytesFixed(totalSize)}`,
+        });
       }
 
       // -----------------------------------------------------------------------
@@ -823,6 +836,7 @@ export default function FilesScreen({ navigation }) {
 
       // Refresh directory list
       loadDirectory(cleanBaseUrl, apiToken, currentPath);
+      backgroundTransferManager.notifyTransferEnded(taskId);
       showConfirm({
         type: 'success',
         title: '上传成功',
@@ -835,6 +849,7 @@ export default function FilesScreen({ navigation }) {
       if (tempLocalUri) {
         FileSystem.deleteAsync(tempLocalUri, { idempotent: true }).catch(() => {});
       }
+      backgroundTransferManager.notifyTransferEnded(taskId);
 
       const isCancelled = abortController.signal.aborted || err.name === 'AbortError' || (err.message && err.message.includes('abort'));
       if (isCancelled) {
@@ -877,6 +892,7 @@ export default function FilesScreen({ navigation }) {
         task.abortController.abort();
       } catch (_) {}
     }
+    backgroundTransferManager.notifyTransferEnded(taskId);
     setTransfers(prev => {
       const next = prev.map(t => {
         if (t.id === taskId) {
@@ -955,6 +971,7 @@ export default function FilesScreen({ navigation }) {
         return next;
       });
       setIsTransferVisible(true);
+      backgroundTransferManager.notifyTransferStarted(newTask);
 
       const downloadUrl = getDirectUrl(item.path);
       const localUri = FileSystem.cacheDirectory + 'dl_' + Date.now() + '_' + encodeURIComponent(item.name);
@@ -971,6 +988,7 @@ export default function FilesScreen({ navigation }) {
       }
 
       await FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => {});
+      backgroundTransferManager.notifyTransferEnded(taskId);
       setTransfers(prev => {
         const next = prev.map(t => (t.id === taskId ? {
           ...t,
@@ -986,6 +1004,7 @@ export default function FilesScreen({ navigation }) {
       });
     } catch (e) {
       console.log('[FilesScreen] Download error:', e);
+      backgroundTransferManager.notifyTransferEnded(taskId);
       showConfirm({
         type: 'warning',
         title: '下载失败',

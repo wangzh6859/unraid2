@@ -13,7 +13,7 @@ import {
   HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server,
   LogOut, Moon, Sun, FolderDown, RefreshCw, Trash2, Key, Power,
   RotateCw, AlertTriangle, CheckCircle, Fingerprint, ShieldAlert,
-  Sparkles, DownloadCloud, ExternalLink,
+  Sparkles, DownloadCloud, ExternalLink, Activity,
 } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import {
@@ -22,6 +22,7 @@ import {
   clearCache as clearPreviewCache, formatBytes as fmtBytes,
 } from '../utils/cacheManager';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
+import backgroundTransferManager from '../utils/backgroundTransferManager';
 
 export default function SettingsScreen({ navigation }) {
   // Modern squircle confirm & result dialog state
@@ -84,6 +85,7 @@ export default function SettingsScreen({ navigation }) {
   const [appLockEnabled, setAppLockEnabled] = useState(false);
   const [highRiskAuthEnabled, setHighRiskAuthEnabled] = useState(false);
   const [biometricSupported, setBiometricSupported] = useState(false);
+  const [bgTransferEnabled, setBgTransferEnabled] = useState(true);
 
   // In-App Software Update
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
@@ -209,6 +211,23 @@ export default function SettingsScreen({ navigation }) {
     }
   };
 
+  const toggleBgTransfer = async (value) => {
+    setBgTransferEnabled(value);
+    await backgroundTransferManager.setEnabled(value);
+    if (value) {
+      await backgroundTransferManager.requestNotificationPermission();
+    }
+    showConfirm({
+      type: 'info',
+      title: value ? '后台锁屏传输已启用' : '后台传输已关闭',
+      message: value
+        ? '大文件传输时，系统将通过 Android 前台服务常驻通知栏，保持网络活跃与动态速率展示，防止锁屏中断。'
+        : '已关闭前台保活服务，切到后台或手机熄屏时传输可能被系统休眠暂停。',
+      confirmText: '好的',
+      showCancel: false,
+    });
+  };
+
   const loadSettings = async () => {
     try {
       const savedUrl = await AsyncStorage.getItem('@server_url');
@@ -221,6 +240,9 @@ export default function SettingsScreen({ navigation }) {
 
       const riskVal = await AsyncStorage.getItem('@security_high_risk_auth');
       if (riskVal !== null) setHighRiskAuthEnabled(riskVal === 'true');
+
+      const bgVal = await backgroundTransferManager.getEnabled();
+      setBgTransferEnabled(bgVal);
 
       const hasHw = await LocalAuthentication.hasHardwareAsync();
       if (hasHw) {
@@ -619,6 +641,28 @@ export default function SettingsScreen({ navigation }) {
             value={highRiskAuthEnabled}
             onValueChange={toggleHighRiskAuth}
             trackColor={{ false: colors.input, true: colors.red }}
+            thumbColor={'#ffffff'}
+          />
+        </View>
+      </View>
+
+      {/* Background Transfer & Foreground Service */}
+      <Text style={styles.sectionTitle}>传输与后台保活</Text>
+      <View style={styles.card}>
+        <View style={styles.row}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+            <Activity color={colors.green || '#10b981'} size={20} />
+          </View>
+          <View style={styles.infoBox}>
+            <Text style={styles.rowTitle}>后台锁屏持续传输 (常驻通知栏)</Text>
+            <Text style={styles.rowSub}>
+              {bgTransferEnabled ? '开启中：锁屏与切后台时保持 CPU 与网络活跃，通知栏实时显示速率' : '关闭：切入后台或锁屏时可能被系统休眠中断'}
+            </Text>
+          </View>
+          <Switch
+            value={bgTransferEnabled}
+            onValueChange={toggleBgTransfer}
+            trackColor={{ false: colors.input, true: colors.green || '#10b981' }}
             thumbColor={'#ffffff'}
           />
         </View>
