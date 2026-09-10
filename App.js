@@ -6,7 +6,6 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Home, Folder, Settings } from 'lucide-react-native';
 import AppLockModal from './components/AppLockModal';
-import DynamicIsland from './components/DynamicIsland';
 
 // 引入所有子页面
 import DashboardScreen from './screens/DashboardScreen';
@@ -147,15 +146,6 @@ function ThemedRoot() {
           />
         </Stack.Navigator>
       </NavigationContainer>
-
-      {/* 🚀 全局顶部灵动岛（胶囊通知与动态进度） */}
-      <DynamicIsland
-        onOpenTransfers={() => {
-          if (navRef.isReady()) {
-            navRef.navigate('MainTabs', { screen: '文件' });
-          }
-        }}
-      />
 
       {/* 生物识别全屏安全锁遮罩 */}
       <AppLockModal visible={isLocked} onUnlock={() => setIsLocked(false)} />

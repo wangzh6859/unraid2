@@ -1,9 +1,12 @@
-import { Platform, PermissionsAndroid } from 'react-native';
+import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BackgroundService from 'react-native-background-actions';
 
-// Storage key for user preference
+const { DynamicIslandOverlay } = NativeModules;
+
+// Storage keys
 export const BG_TRANSFER_STORAGE_KEY = '@transfer_foreground_service_enabled';
+export const SYSTEM_ISLAND_STORAGE_KEY = '@system_dynamic_island_overlay_enabled';
 
 class BackgroundTransferManager {
   constructor() {
@@ -13,6 +16,7 @@ class BackgroundTransferManager {
     this.currentType = '上传';
     this.isEnabled = true;
     this.isServiceRunning = false;
+    this.isSystemIslandEnabled = true; // Enabled by default if permitted
     this.listeners = new Set();
     this.islandState = {
       active: false,
@@ -23,15 +27,23 @@ class BackgroundTransferManager {
       sizeText: '',
       type: '上传',
     };
-    this.initPreference();
+    this.initPreferences();
   }
 
-  async initPreference() {
+  async initPreferences() {
     try {
       const val = await AsyncStorage.getItem(BG_TRANSFER_STORAGE_KEY);
-      this.isEnabled = val !== 'false'; // Default enabled
+      this.isEnabled = val !== 'false';
     } catch (_) {
       this.isEnabled = true;
+    }
+
+    try {
+      const islandVal = await AsyncStorage.getItem(SYSTEM_ISLAND_STORAGE_KEY);
+      // Default to true for new installs, but user can toggle off
+      this.isSystemIslandEnabled = islandVal !== 'false';
+    } catch (_) {
+      this.isSystemIslandEnabled = true;
     }
   }
 
@@ -47,15 +59,48 @@ class BackgroundTransferManager {
 
   async getEnabled() {
     try {
-      await this.initPreference();
+      await this.initPreferences();
     } catch (_) {}
     return this.isEnabled;
   }
 
-  // --- Dynamic Island Observer Pattern ---
+  // --- Native System Overlay Dynamic Island Controls ---
+  async setSystemIslandEnabled(enabled) {
+    this.isSystemIslandEnabled = !!enabled;
+    try {
+      await AsyncStorage.setItem(SYSTEM_ISLAND_STORAGE_KEY, enabled ? 'true' : 'false');
+      if (!enabled && DynamicIslandOverlay) {
+        DynamicIslandOverlay.hideIsland();
+      }
+    } catch (_) {}
+  }
+
+  async getSystemIslandEnabled() {
+    try {
+      await this.initPreferences();
+    } catch (_) {}
+    return this.isSystemIslandEnabled;
+  }
+
+  async canDrawOverlays() {
+    if (Platform.OS !== 'android' || !DynamicIslandOverlay) return false;
+    try {
+      return await DynamicIslandOverlay.canDrawOverlays();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  requestOverlayPermission() {
+    if (Platform.OS !== 'android' || !DynamicIslandOverlay) return;
+    try {
+      DynamicIslandOverlay.requestOverlayPermission();
+    } catch (_) {}
+  }
+
+  // --- Dynamic Island Observer Pattern (In-App or External) ---
   subscribe(callback) {
     this.listeners.add(callback);
-    // Immediately emit current state safely
     try {
       if (typeof callback === 'function') {
         callback(this.islandState);
@@ -103,8 +148,8 @@ class BackgroundTransferManager {
         const granted = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
           {
-            title: 'Unraid 传输与灵动岛权限',
-            message: '允许展示后台传输动态进度条与灵动胶囊，保证切后台或锁屏传输大文件不被中断。',
+            title: 'Unraid 传输通知权限',
+            message: '允许展示后台传输动态进度条与实时速率，保证切后台或锁屏传输大文件不被中断。',
             buttonPositive: '立即开启',
             buttonNegative: '稍后',
           }
@@ -132,7 +177,7 @@ class BackgroundTransferManager {
 
   /**
    * Notify that a transfer task has started.
-   * Starts both the Android Foreground Service notification and the Dynamic Island capsule.
+   * Starts both the Android Foreground Service notification and the native System Dynamic Island.
    */
   async notifyTransferStarted(taskItem) {
     try {
@@ -144,7 +189,7 @@ class BackgroundTransferManager {
       const initialSpeed = taskItem?.speedDisplay || '准备传输...';
       const initialSize = taskItem?.sizeText || '';
 
-      // Update in-app Dynamic Island immediately
+      // 1. Notify internal observers
       this.notifyIsland({
         active: true,
         status: 'running',
@@ -155,10 +200,22 @@ class BackgroundTransferManager {
         type: this.currentType,
       });
 
+      // 2. Launch Native System Overlay Dynamic Island at camera hole (if permitted)
+      if (this.isSystemIslandEnabled && DynamicIslandOverlay) {
+        try {
+          DynamicIslandOverlay.showIsland({
+            name: this.currentTaskName,
+            progress: initialPct,
+            speed: initialSpeed,
+            size: initialSize,
+            status: 'running',
+          });
+        } catch (_) {}
+      }
+
       if (Platform.OS !== 'android' || !this.isEnabled) return;
 
       if (this.isServiceRunning && BackgroundService.isRunning()) {
-        // Already running, update notification content immediately
         await this.updateForegroundProgress({
           name: this.currentTaskName,
           progress: initialPct,
@@ -199,15 +256,15 @@ class BackgroundTransferManager {
   }
 
   /**
-   * Update progress with 400ms throttle for Android notifications,
-   * while updating Dynamic Island smoothly.
+   * Update progress with throttle for Android notifications,
+   * while updating native System Dynamic Island smoothly.
    */
   async updateForegroundProgress({ name, progress, speedStr, sizeText, force = false, status = 'running' } = {}) {
     try {
       const fileName = name || this.currentTaskName || '文件';
       const pct = Math.min(100, Math.max(0, Math.round(progress || 0)));
 
-      // 1. Update in-app Dynamic Island immediately for smooth UI
+      // 1. Update internal observers
       this.notifyIsland({
         active: true,
         status,
@@ -217,7 +274,19 @@ class BackgroundTransferManager {
         sizeText: sizeText || '',
       });
 
-      // 2. Update Android Foreground Service (throttled)
+      // 2. Update Native System Overlay Dynamic Island
+      if (this.isSystemIslandEnabled && DynamicIslandOverlay) {
+        try {
+          DynamicIslandOverlay.updateProgress({
+            progress: pct,
+            speed: speedStr || '',
+            size: sizeText || '',
+            status,
+          });
+        } catch (_) {}
+      }
+
+      // 3. Update Android Foreground Service notification (throttled)
       if (Platform.OS !== 'android' || !this.isEnabled || !this.isServiceRunning) return;
 
       const now = Date.now();
@@ -260,7 +329,6 @@ class BackgroundTransferManager {
       const safeFileInfo = fileInfo || {};
 
       if (result === 'success') {
-        // Show celebration in Dynamic Island
         this.notifyIsland({
           active: true,
           status: 'success',
@@ -269,6 +337,18 @@ class BackgroundTransferManager {
           speedStr: '传输完成',
           sizeText: safeFileInfo.sizeText || '',
         });
+
+        // Update Native System Overlay Dynamic Island to complete celebration
+        if (this.isSystemIslandEnabled && DynamicIslandOverlay) {
+          try {
+            DynamicIslandOverlay.updateProgress({
+              progress: 100,
+              speed: '传输已顺利完成',
+              size: safeFileInfo.sizeText || '',
+              status: 'success',
+            });
+          } catch (_) {}
+        }
 
         // Update Android notification to 100% completed
         if (this.isServiceRunning && BackgroundService.isRunning()) {
@@ -285,7 +365,6 @@ class BackgroundTransferManager {
           } catch (_) {}
         }
 
-        // Auto dismiss celebration after 3.5 seconds if no more active tasks
         setTimeout(async () => {
           try {
             if (this.activeTaskCount <= 0) {
@@ -301,6 +380,16 @@ class BackgroundTransferManager {
           name: safeFileInfo.name || this.currentTaskName,
           speedStr: '传输异常',
         });
+        if (this.isSystemIslandEnabled && DynamicIslandOverlay) {
+          try {
+            DynamicIslandOverlay.updateProgress({
+              progress: 0,
+              speed: '传输异常',
+              size: '',
+              status: 'error',
+            });
+          } catch (_) {}
+        }
         setTimeout(async () => {
           try {
             if (this.activeTaskCount <= 0) {
@@ -316,6 +405,16 @@ class BackgroundTransferManager {
           name: safeFileInfo.name || this.currentTaskName,
           speedStr: '已暂停',
         });
+        if (this.isSystemIslandEnabled && DynamicIslandOverlay) {
+          try {
+            DynamicIslandOverlay.updateProgress({
+              progress: 0,
+              speed: '已暂停',
+              size: '',
+              status: 'paused',
+            });
+          } catch (_) {}
+        }
         if (this.activeTaskCount <= 0) {
           setTimeout(async () => {
             try {
@@ -329,6 +428,11 @@ class BackgroundTransferManager {
       } else {
         if (this.activeTaskCount <= 0) {
           this.notifyIsland({ active: false, status: 'idle' });
+          if (this.isSystemIslandEnabled && DynamicIslandOverlay) {
+            try {
+              DynamicIslandOverlay.hideIsland();
+            } catch (_) {}
+          }
           await this.stopService();
         }
       }
@@ -344,6 +448,11 @@ class BackgroundTransferManager {
     try {
       this.activeTaskCount = 0;
       this.currentTaskName = '';
+      if (DynamicIslandOverlay) {
+        try {
+          DynamicIslandOverlay.hideIsland();
+        } catch (_) {}
+      }
       if (this.isServiceRunning || BackgroundService.isRunning()) {
         try {
           await BackgroundService.stop();
