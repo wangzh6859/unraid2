@@ -59,6 +59,48 @@ module.exports = function withForegroundService(config) {
       existingService.$['android:exported'] = 'false';
     }
 
+    // 3. Ensure MainActivity has launchMode="singleTask" and exported="true" for direct notification jump
+    if (app.activity && app.activity.length > 0) {
+      const mainAct = app.activity.find(
+        (a) => a.$ && (a.$['android:name'] === '.MainActivity' || a.$['android:name'] === 'com.yourname.unraidmanager.MainActivity')
+      ) || app.activity[0];
+
+      if (mainAct && mainAct.$) {
+        mainAct.$['android:launchMode'] = 'singleTask';
+        mainAct.$['android:exported'] = 'true';
+
+        if (!mainAct['intent-filter']) {
+          mainAct['intent-filter'] = [];
+        }
+
+        const hasUnraidScheme = mainAct['intent-filter'].some(
+          (filter) => filter.data && filter.data.some((d) => d.$ && d.$['android:scheme'] === 'unraid')
+        );
+
+        if (!hasUnraidScheme) {
+          mainAct['intent-filter'].push({
+            action: [{ $: { 'android:name': 'android.intent.action.VIEW' } }],
+            category: [
+              { $: { 'android:name': 'android.intent.category.DEFAULT' } },
+              { $: { 'android:name': 'android.intent.category.BROWSABLE' } },
+            ],
+            data: [{ $: { 'android:scheme': 'unraid' } }],
+          });
+        }
+      }
+    }
+
+    // 4. Ensure background actions library is patched
+    try {
+      const path = require('path');
+      const fs = require('fs');
+      const patchScript = path.resolve(__dirname, '../scripts/patch-background-actions.js');
+      if (fs.existsSync(patchScript)) {
+        require(patchScript);
+      }
+    } catch (_) {}
+
     return config;
   });
 };
+

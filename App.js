@@ -130,13 +130,28 @@ function ThemedRoot() {
 
   const navRef = useNavigationContainerRef();
 
+  const linking = {
+    prefixes: ['unraid://', 'unraidmanager://'],
+    config: {
+      screens: {
+        MainTabs: {
+          screens: {
+            文件: 'transfer',
+            首页: 'home',
+            设置: 'settings',
+          },
+        },
+      },
+    },
+  };
+
   return (
     <>
       <StatusBar
         barStyle={colors.mode === 'dark' ? 'light-content' : 'dark-content'}
         backgroundColor={colors.bg}
       />
-      <NavigationContainer ref={navRef}>
+      <NavigationContainer ref={navRef} linking={linking}>
         <Stack.Navigator>
           {/* 主导航底座（包含底部 3 个 Tab 页面） */}
           <Stack.Screen

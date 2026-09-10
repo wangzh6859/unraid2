@@ -144,6 +144,7 @@ class BackgroundTransferManager {
             type: 'mipmap',
           },
           color: '#3b82f6',
+          linkingURI: 'unraid://transfer',
           parameters: {
             delay: 1000,
           },

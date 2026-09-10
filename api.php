@@ -359,6 +359,14 @@ switch ($action) {
         handle_file_copy();
         break;
 
+    case 'file_extract':
+        handle_file_extract();
+        break;
+
+    case 'file_compress':
+        handle_file_compress();
+        break;
+
     default:
         json_output(['status' => 'error', 'message' => "Unknown action: {$action}"], 400);
         break;
@@ -1798,3 +1806,151 @@ function handle_file_copy() {
 
     json_output(['status' => 'success', 'message' => 'Item copied', 'target' => $targetDir]);
 }
+
+function handle_file_extract() {
+    $source = sanitize_path(isset($_GET['source']) ? $_GET['source'] : (isset($_POST['source']) ? $_POST['source'] : ''));
+    $targetDir = sanitize_path(isset($_GET['target']) ? $_GET['target'] : (isset($_POST['target']) ? $_POST['target'] : ''));
+    $createFolder = isset($_GET['create_folder']) ? $_GET['create_folder'] : (isset($_POST['create_folder']) ? $_POST['create_folder'] : 'false');
+    $createFolder = ($createFolder === 'true' || $createFolder === true || $createFolder === '1' || $createFolder === 1);
+
+    if (!file_exists($source) || is_dir($source)) {
+        json_output(['status' => 'error', 'message' => '压缩包文件不存在或为目录'], 400);
+    }
+
+    if (empty($targetDir)) {
+        $targetDir = dirname($source);
+    }
+
+    if (!file_exists($targetDir)) {
+        @mkdir($targetDir, 0755, true);
+    }
+
+    if (!is_dir($targetDir)) {
+        json_output(['status' => 'error', 'message' => '目标解压路径无效'], 400);
+    }
+
+    $baseName = safe_basename($source);
+    // If createFolder is requested, create a subfolder with the archive base name (minus extension)
+    if ($createFolder) {
+        $folderName = preg_replace('/\.(zip|tar\.gz|tgz|tar\.bz2|tbz2|tar\.xz|txz|tar|7z|rar)$/i', '', $baseName);
+        if (empty($folderName)) {
+            $folderName = $baseName . '_extracted';
+        }
+        $targetDir = rtrim($targetDir, '/') . '/' . $folderName;
+        if (!file_exists($targetDir)) {
+            if (!@mkdir($targetDir, 0755, true)) {
+                json_output(['status' => 'error', 'message' => '无法创建解压子目录'], 500);
+            }
+        }
+    }
+
+    $lower = strtolower($baseName);
+    $cmd = '';
+
+    if (substr($lower, -4) === '.zip') {
+        $cmd = "unzip -o -q " . escapeshellarg($source) . " -d " . escapeshellarg($targetDir);
+    } elseif (substr($lower, -7) === '.tar.gz' || substr($lower, -4) === '.tgz') {
+        $cmd = "tar -zxf " . escapeshellarg($source) . " -C " . escapeshellarg($targetDir);
+    } elseif (substr($lower, -8) === '.tar.bz2' || substr($lower, -5) === '.tbz2') {
+        $cmd = "tar -jxf " . escapeshellarg($source) . " -C " . escapeshellarg($targetDir);
+    } elseif (substr($lower, -7) === '.tar.xz' || substr($lower, -4) === '.txz') {
+        $cmd = "tar -Jxf " . escapeshellarg($source) . " -C " . escapeshellarg($targetDir);
+    } elseif (substr($lower, -4) === '.tar') {
+        $cmd = "tar -xf " . escapeshellarg($source) . " -C " . escapeshellarg($targetDir);
+    } elseif (substr($lower, -3) === '.7z') {
+        $cmd = "7z x -y -o" . escapeshellarg($targetDir) . " " . escapeshellarg($source);
+    } elseif (substr($lower, -4) === '.rar') {
+        $cmd = "unrar x -o+ " . escapeshellarg($source) . " " . escapeshellarg($targetDir . '/');
+    } else {
+        $cmd = "unzip -o -q " . escapeshellarg($source) . " -d " . escapeshellarg($targetDir);
+    }
+
+    exec($cmd . " 2>&1", $out, $ret);
+    if ($ret !== 0) {
+        $errMsg = !empty($out) ? implode("\n", array_slice($out, -3)) : '解压失败，请确认服务端安装了对应解压工具 (unzip/tar/7z)';
+        json_output(['status' => 'error', 'message' => $errMsg], 500);
+    }
+
+    json_output([
+        'status' => 'success',
+        'message' => '解压完成',
+        'source' => $source,
+        'target' => $targetDir
+    ]);
+}
+
+function handle_file_compress() {
+    $rawSources = isset($_POST['sources']) ? $_POST['sources'] : (isset($_GET['sources']) ? $_GET['sources'] : '');
+    $targetDir = sanitize_path(isset($_POST['target_dir']) ? $_POST['target_dir'] : (isset($_GET['target_dir']) ? $_GET['target_dir'] : ''));
+    $zipName = isset($_POST['zip_name']) ? trim($_POST['zip_name']) : (isset($_GET['zip_name']) ? trim($_GET['zip_name']) : '');
+
+    if (empty($rawSources)) {
+        json_output(['status' => 'error', 'message' => '未指定需要打包的文件或目录'], 400);
+    }
+
+    $sourcesList = is_array($rawSources) ? $rawSources : json_decode($rawSources, true);
+    if (!is_array($sourcesList)) {
+        $sourcesList = explode(',', $rawSources);
+    }
+
+    $validSources = [];
+    foreach ($sourcesList as $s) {
+        $p = sanitize_path(trim($s));
+        if (file_exists($p)) {
+            $validSources[] = $p;
+        }
+    }
+
+    if (empty($validSources)) {
+        json_output(['status' => 'error', 'message' => '所选文件或目录均不存在'], 400);
+    }
+
+    if (empty($targetDir)) {
+        $targetDir = dirname($validSources[0]);
+    }
+
+    if (!file_exists($targetDir) || !is_dir($targetDir)) {
+        json_output(['status' => 'error', 'message' => '目标输出目录不存在'], 400);
+    }
+
+    if (empty($zipName)) {
+        if (count($validSources) === 1) {
+            $zipName = safe_basename($validSources[0]) . '.zip';
+        } else {
+            $zipName = 'Archive_' . date('Ymd_His') . '.zip';
+        }
+    }
+
+    if (substr(strtolower($zipName), -4) !== '.zip') {
+        $zipName .= '.zip';
+    }
+
+    $zipName = preg_replace('/[\\\\\/:\*\?"<>\|]/', '_', $zipName);
+    $outZipPath = rtrim($targetDir, '/') . '/' . $zipName;
+
+    $commonParent = $targetDir;
+    $relArgs = [];
+    foreach ($validSources as $src) {
+        if (strpos($src, $commonParent . '/') === 0) {
+            $relArgs[] = escapeshellarg(substr($src, strlen($commonParent) + 1));
+        } else {
+            $relArgs[] = escapeshellarg($src);
+        }
+    }
+
+    $cmd = "cd " . escapeshellarg($commonParent) . " && zip -r -q " . escapeshellarg($outZipPath) . " " . implode(' ', $relArgs);
+    exec($cmd . " 2>&1", $out, $ret);
+
+    if ($ret !== 0) {
+        $errMsg = !empty($out) ? implode("\n", array_slice($out, -3)) : '服务端打包 Zip 失败，请检查 Unraid 是否具备 zip 工具';
+        json_output(['status' => 'error', 'message' => $errMsg], 500);
+    }
+
+    json_output([
+        'status' => 'success',
+        'message' => '打包压缩完成',
+        'zip_path' => $outZipPath,
+        'zip_name' => $zipName
+    ]);
+}
+

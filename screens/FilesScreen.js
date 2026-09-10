@@ -10,7 +10,7 @@ import {
   Folder, Server, Key, File, ChevronLeft, HardDrive, Plus, ArrowDownUp,
   FolderPlus, UploadCloud, DownloadCloud, X, Download, Pencil, Copy, MoveRight,
   Trash2, CheckCircle, Circle, ArrowUp, FolderOpen, Info, Pause, Play,
-  RefreshCw, Settings, Check, Search, Filter,
+  RefreshCw, Settings, Check, Search, Filter, Archive,
 } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
@@ -28,6 +28,10 @@ const formatBytesFixed = (bytes) => {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   if (i === 0) return `${bytes} B`;
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+};
+
+const isArchiveFile = (name) => {
+  return /\.(zip|tar\.gz|tgz|tar\.bz2|tbz2|tar\.xz|txz|tar|7z|rar)$/i.test(name || '');
 };
 
 export default function FilesScreen({ navigation }) {
@@ -101,6 +105,15 @@ export default function FilesScreen({ navigation }) {
 
   // Item details modal
   const [detailItem, setDetailItem] = useState(null);
+
+  // Server-side Extract & Compress
+  const [extractItem, setExtractItem] = useState(null);
+  const [extractCreateSubfolder, setExtractCreateSubfolder] = useState(true);
+  const [isExtracting, setIsExtracting] = useState(false);
+
+  const [compressVisible, setCompressVisible] = useState(false);
+  const [compressZipName, setCompressZipName] = useState('');
+  const [isCompressing, setIsCompressing] = useState(false);
 
   // Picker modal (Copy / Move destination)
   const [pickerVisible, setPickerVisible] = useState(false);
@@ -321,6 +334,10 @@ export default function FilesScreen({ navigation }) {
     }
     if (item.isFolder) {
       loadDirectory(serverUrl, apiToken, item.path);
+      return;
+    }
+    if (isArchiveFile(item.name)) {
+      setDetailItem(item);
       return;
     }
     setPreviewItem(item);
@@ -1248,10 +1265,128 @@ export default function FilesScreen({ navigation }) {
     loadDirectory(serverUrl, apiToken, currentPath);
   };
 
+  // Server-side archive extract
+  const handleExtractArchive = (item) => {
+    setDetailItem(null);
+    setExtractItem(item);
+    setExtractCreateSubfolder(true);
+  };
+
+  const confirmExtractArchive = async () => {
+    if (!extractItem) return;
+    setIsExtracting(true);
+    try {
+      const url = `${serverUrl}/api.php?token=${apiToken}&action=file_extract&source=${encodeURIComponent(extractItem.path)}&target=${encodeURIComponent(currentPath)}&create_folder=${extractCreateSubfolder ? 'true' : 'false'}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      setIsExtracting(false);
+      if (data.status === 'success') {
+        const targetDesc = data.target || currentPath;
+        setExtractItem(null);
+        showConfirm({
+          type: 'success',
+          title: '解压成功',
+          message: `已成功在服务端解压 "${extractItem.name}"\n保存至：${targetDesc}`,
+          confirmText: '好的',
+          showCancel: false,
+        });
+        loadDirectory(serverUrl, apiToken, currentPath);
+      } else {
+        showConfirm({
+          type: 'danger',
+          title: '解压失败',
+          message: data.message || '服务端解压失败，请确认服务端环境是否支持对应格式。',
+          confirmText: '知道了',
+          showCancel: false,
+        });
+      }
+    } catch (e) {
+      setIsExtracting(false);
+      showConfirm({
+        type: 'danger',
+        title: '解压异常',
+        message: e.message || '网络连接超时或服务器异常',
+        confirmText: '知道了',
+        showCancel: false,
+      });
+    }
+  };
+
+  // Server-side archive compress (Zip)
+  const handleBatchCompress = () => {
+    const items = fileList.filter(f => selected.has(f.path));
+    if (items.length === 0) return;
+    let defaultName = 'Archive.zip';
+    if (items.length === 1) {
+      defaultName = `${items[0].name}.zip`;
+    } else {
+      const now = new Date();
+      const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+      defaultName = `Archive_${dateStr}.zip`;
+    }
+    setCompressZipName(defaultName);
+    setCompressVisible(true);
+  };
+
+  const confirmBatchCompress = async () => {
+    const items = fileList.filter(f => selected.has(f.path));
+    if (items.length === 0) return;
+    const name = compressZipName.trim();
+    if (!name) return;
+
+    setIsCompressing(true);
+    try {
+      const sourcePaths = items.map(it => it.path);
+      const formData = new FormData();
+      formData.append('sources', JSON.stringify(sourcePaths));
+      formData.append('target_dir', currentPath);
+      formData.append('zip_name', name);
+
+      const url = `${serverUrl}/api.php?token=${apiToken}&action=file_compress`;
+      const res = await fetch(url, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      setIsCompressing(false);
+      if (data.status === 'success') {
+        setCompressVisible(false);
+        exitMultiSelect();
+        showConfirm({
+          type: 'success',
+          title: '打包完成',
+          message: `已成功在服务端生成压缩包：\n"${data.zip_name || name}"`,
+          confirmText: '好的',
+          showCancel: false,
+        });
+        loadDirectory(serverUrl, apiToken, currentPath);
+      } else {
+        showConfirm({
+          type: 'danger',
+          title: '打包失败',
+          message: data.message || '服务端打包失败，请检查磁盘空间或写入权限。',
+          confirmText: '知道了',
+          showCancel: false,
+        });
+      }
+    } catch (e) {
+      setIsCompressing(false);
+      showConfirm({
+        type: 'danger',
+        title: '打包异常',
+        message: e.message || '网络连接超时或服务器异常',
+        confirmText: '知道了',
+        showCancel: false,
+      });
+    }
+  };
+
   // Hardware back button navigation (only active when Files tab is focused)
   useFocusEffect(
     useCallback(() => {
       const onBackPress = () => {
+        if (extractItem) { if (!isExtracting) setExtractItem(null); return true; }
+        if (compressVisible) { if (!isCompressing) setCompressVisible(false); return true; }
         if (previewItem) { setPreviewItem(null); return true; }
         if (multiSelect) { exitMultiSelect(); return true; }
         if (pickerVisible) { setPickerVisible(false); return true; }
@@ -1262,7 +1397,7 @@ export default function FilesScreen({ navigation }) {
       };
       const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
       return () => subscription.remove();
-    }, [isConfigured, isAtRoot, goBack, previewItem, multiSelect, pickerVisible, renameItem, detailItem])
+    }, [isConfigured, isAtRoot, goBack, previewItem, multiSelect, pickerVisible, renameItem, detailItem, extractItem, isExtracting, compressVisible, isCompressing])
   );
 
   // Header configuration
@@ -1431,6 +1566,8 @@ export default function FilesScreen({ navigation }) {
                   <View style={styles.fileIconBox}>
                     {item.isFolder ? (
                       <Folder color={colors.accent} size={24} fill="rgba(59, 130, 246, 0.2)" />
+                    ) : isArchiveFile(item.name) ? (
+                      <Archive color={colors.green} size={24} />
                     ) : (
                       <File color={colors.sub} size={24} />
                     )}
@@ -1503,6 +1640,14 @@ export default function FilesScreen({ navigation }) {
             >
               <Copy color={colors.accent} size={22} />
               <Text style={styles.bottomBarBtnText}>复制</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.bottomBarBtn}
+              onPress={handleBatchCompress}
+            >
+              <Archive color={colors.green} size={22} />
+              <Text style={[styles.bottomBarBtnText, { color: colors.green }]}>压缩</Text>
             </TouchableOpacity>
 
             {selected.size === 1 && (
@@ -1634,9 +1779,13 @@ export default function FilesScreen({ navigation }) {
           <View style={styles.actionSheet}>
             <View style={styles.sheetGrabPill} />
             <View style={styles.detailHeader}>
-              <View style={[styles.detailIconBadge, { backgroundColor: detailItem?.isFolder ? 'rgba(59, 130, 246, 0.12)' : 'rgba(156, 163, 175, 0.12)' }]}>
+              <View style={[styles.detailIconBadge, {
+                backgroundColor: detailItem?.isFolder ? 'rgba(59, 130, 246, 0.12)' : isArchiveFile(detailItem?.name) ? 'rgba(16, 185, 129, 0.12)' : 'rgba(156, 163, 175, 0.12)'
+              }]}>
                 {detailItem?.isFolder ? (
                   <Folder color={colors.accent} size={30} />
+                ) : isArchiveFile(detailItem?.name) ? (
+                  <Archive color={colors.green} size={30} />
                 ) : (
                   <File color={colors.sub} size={30} />
                 )}
@@ -1647,7 +1796,9 @@ export default function FilesScreen({ navigation }) {
             <View style={styles.detailRows}>
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>类型</Text>
-                <Text style={styles.detailValue}>{detailItem?.isFolder ? '文件夹' : '文件'}</Text>
+                <Text style={styles.detailValue}>
+                  {detailItem?.isFolder ? '文件夹' : isArchiveFile(detailItem?.name) ? '压缩归档文件' : '文件'}
+                </Text>
               </View>
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>大小</Text>
@@ -1663,9 +1814,23 @@ export default function FilesScreen({ navigation }) {
               </View>
             </View>
 
-            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 12 }}>
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+              {isArchiveFile(detailItem?.name) && (
+                <TouchableOpacity
+                  style={[styles.detailActionBtn, { backgroundColor: 'rgba(16, 185, 129, 0.12)', flex: 1, minWidth: '45%' }]}
+                  onPress={() => {
+                    const it = detailItem;
+                    setDetailItem(null);
+                    handleExtractArchive(it);
+                  }}
+                >
+                  <Archive color={colors.green} size={18} style={{ marginRight: 6 }} />
+                  <Text style={[styles.detailActionText, { color: colors.green }]}>服务端解压</Text>
+                </TouchableOpacity>
+              )}
+
               <TouchableOpacity
-                style={styles.detailActionBtn}
+                style={[styles.detailActionBtn, isArchiveFile(detailItem?.name) ? { flex: 1, minWidth: '45%' } : {}]}
                 onPress={() => {
                   const it = detailItem;
                   setDetailItem(null);
@@ -1679,7 +1844,7 @@ export default function FilesScreen({ navigation }) {
 
               {!detailItem?.isFolder && (
                 <TouchableOpacity
-                  style={styles.detailActionBtn}
+                  style={[styles.detailActionBtn, isArchiveFile(detailItem?.name) ? { flex: 1, minWidth: '45%' } : {}]}
                   onPress={() => {
                     const it = detailItem;
                     setDetailItem(null);
@@ -1692,7 +1857,7 @@ export default function FilesScreen({ navigation }) {
               )}
 
               <TouchableOpacity
-                style={[styles.detailActionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.12)' }]}
+                style={[styles.detailActionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.12)' }, isArchiveFile(detailItem?.name) ? { flex: 1, minWidth: '45%' } : {}]}
                 onPress={() => handleDelete(detailItem)}
               >
                 <Trash2 color={colors.red} size={18} style={{ marginRight: 6 }} />
@@ -1705,6 +1870,114 @@ export default function FilesScreen({ navigation }) {
             </TouchableOpacity>
           </View>
         </Pressable>
+      </Modal>
+
+      {/* Server-side Archive Extract Modal */}
+      <Modal visible={!!extractItem} transparent animationType="fade" onRequestClose={() => !isExtracting && setExtractItem(null)}>
+        <KeyboardAvoidingView style={styles.dialogOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => !isExtracting && setExtractItem(null)} />
+          <View style={styles.dialogCard}>
+            <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(16, 185, 129, 0.12)' }]}>
+              <Archive color={colors.green} size={28} />
+            </View>
+            <Text style={styles.dialogTitle}>服务端在线解压</Text>
+            <Text style={styles.dialogSub}>由 Unraid 服务器原生极速解压，无需耗费手机流量</Text>
+
+            <View style={{ backgroundColor: colors.surface, padding: 12, borderRadius: 10, marginVertical: 12, width: '100%' }}>
+              <Text style={{ fontSize: 13, color: colors.sub, marginBottom: 4 }}>待解压归档：</Text>
+              <Text style={{ fontSize: 14, color: colors.textStrong, fontWeight: '600' }} numberOfLines={1}>{extractItem?.name}</Text>
+              <Text style={{ fontSize: 13, color: colors.sub, marginTop: 8, marginBottom: 4 }}>解压目标目录：</Text>
+              <Text style={{ fontSize: 13, color: colors.accent }} numberOfLines={1}>{currentPath}</Text>
+            </View>
+
+            {/* Subfolder switch */}
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 8, width: '100%' }}
+              onPress={() => setExtractCreateSubfolder(!extractCreateSubfolder)}
+              disabled={isExtracting}
+            >
+              <View style={{
+                width: 22,
+                height: 22,
+                borderRadius: 5,
+                borderWidth: 1.5,
+                borderColor: extractCreateSubfolder ? colors.accent : colors.muted,
+                backgroundColor: extractCreateSubfolder ? colors.accent : 'transparent',
+                justifyContent: 'center',
+                alignItems: 'center',
+                marginRight: 8,
+              }}>
+                {extractCreateSubfolder && <Check color="#fff" size={14} />}
+              </View>
+              <Text style={{ fontSize: 14, color: colors.textStrong }}>解压至新建同名子文件夹</Text>
+            </TouchableOpacity>
+
+            <View style={styles.dialogActions}>
+              <TouchableOpacity
+                style={[styles.dialogBtn, styles.dialogCancelBtn]}
+                onPress={() => setExtractItem(null)}
+                disabled={isExtracting}
+              >
+                <Text style={styles.dialogCancelText}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.dialogBtn, { backgroundColor: colors.green }]}
+                onPress={confirmExtractArchive}
+                disabled={isExtracting}
+              >
+                {isExtracting ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.dialogConfirmText}>立即解压</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Server-side Archive Compress Modal */}
+      <Modal visible={compressVisible} transparent animationType="fade" onRequestClose={() => !isCompressing && setCompressVisible(false)}>
+        <KeyboardAvoidingView style={styles.dialogOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => !isCompressing && setCompressVisible(false)} />
+          <View style={styles.dialogCard}>
+            <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
+              <Archive color={colors.accent} size={28} />
+            </View>
+            <Text style={styles.dialogTitle}>服务端打包压缩 (Zip)</Text>
+            <Text style={styles.dialogSub}>已选 {selected.size} 个项目，将在 Unraid 服务器直接打包</Text>
+
+            <TextInput
+              style={[styles.dialogInput, { marginTop: 12 }]}
+              value={compressZipName}
+              onChangeText={setCompressZipName}
+              placeholder="请输入压缩包文件名 (如 archive.zip)"
+              placeholderTextColor={colors.muted}
+              editable={!isCompressing}
+            />
+
+            <View style={styles.dialogActions}>
+              <TouchableOpacity
+                style={[styles.dialogBtn, styles.dialogCancelBtn]}
+                onPress={() => setCompressVisible(false)}
+                disabled={isCompressing}
+              >
+                <Text style={styles.dialogCancelText}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.dialogBtn, styles.dialogConfirmBtn]}
+                onPress={confirmBatchCompress}
+                disabled={isCompressing}
+              >
+                {isCompressing ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.dialogConfirmText}>开始打包</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Target Directory Picker (Move / Copy) */}
