@@ -95,7 +95,7 @@ if (fs.existsSync(moduleFile)) {
             final BackgroundTaskOptions bgOptions = new BackgroundTaskOptions(reactContext, options);
             currentServiceIntent.putExtras(bgOptions.getExtras());
             try {
-                ContextCompat.startForegroundService(reactContext, currentServiceIntent);
+                androidx.core.content.ContextCompat.startForegroundService(reactContext, currentServiceIntent);
             } catch (Throwable t) {
                 android.util.Log.e(TAG, "ContextCompat.startForegroundService failed: " + t.getMessage(), t);
             }
