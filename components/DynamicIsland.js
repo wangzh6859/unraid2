@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   Animated,
   Platform,
-  Pressable,
 } from 'react-native';
 import {
   Zap,
@@ -16,115 +15,155 @@ import {
   ChevronDown,
   ChevronUp,
   FolderOpen,
-  ArrowUpRight,
-  Sparkles,
 } from 'lucide-react-native';
 import backgroundTransferManager from '../utils/backgroundTransferManager';
 
-export default function DynamicIsland({ onOpenTransfers }) {
+// 🛡️ Error Boundary to guarantee that no rendering issue in DynamicIsland can ever crash the parent app
+class DynamicIslandErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.log('[DynamicIsland] ErrorBoundary caught error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return null;
+    }
+    return this.props.children;
+  }
+}
+
+function DynamicIslandInner({ onOpenTransfers }) {
   const [islandState, setIslandState] = useState(backgroundTransferManager.getIslandState());
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isVisible, setIsVisible] = useState(Boolean(islandState?.active));
 
-  // Animation values
+  // Animation values - ALL useNativeDriver: false to prevent mixed driver fatal exceptions
   const expandAnim = useRef(new Animated.Value(0)).current; // 0 = pill, 1 = expanded
-  const fadeAnim = useRef(new Animated.Value(0)).current; // 0 = hidden, 1 = shown
-  const scaleAnim = useRef(new Animated.Value(0.85)).current;
+  const fadeAnim = useRef(new Animated.Value(islandState?.active ? 1 : 0)).current; // 0 = hidden, 1 = shown
+  const scaleAnim = useRef(new Animated.Value(islandState?.active ? 1 : 0.85)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   // Pulse animation for active running status
   useEffect(() => {
     let pulseLoop = null;
-    if (islandState.active && islandState.status === 'running') {
-      pulseLoop = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 1.25,
-            duration: 800,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 1,
-            duration: 800,
-            useNativeDriver: true,
-          }),
-        ])
-      );
-      pulseLoop.start();
-    } else {
-      pulseAnim.setValue(1);
-    }
+    try {
+      if (islandState?.active && islandState?.status === 'running') {
+        pulseLoop = Animated.loop(
+          Animated.sequence([
+            Animated.timing(pulseAnim, {
+              toValue: 1.25,
+              duration: 800,
+              useNativeDriver: false,
+            }),
+            Animated.timing(pulseAnim, {
+              toValue: 1,
+              duration: 800,
+              useNativeDriver: false,
+            }),
+          ])
+        );
+        pulseLoop.start();
+      } else {
+        pulseAnim.setValue(1);
+      }
+    } catch (_) {}
     return () => {
-      if (pulseLoop) pulseLoop.stop();
+      if (pulseLoop) {
+        try {
+          pulseLoop.stop();
+        } catch (_) {}
+      }
     };
-  }, [islandState.active, islandState.status]);
+  }, [islandState?.active, islandState?.status]);
 
   // Subscribe to backgroundTransferManager updates
   useEffect(() => {
     const unsubscribe = backgroundTransferManager.subscribe((state) => {
-      setIslandState(state);
-      if (state.active) {
-        // Pop in with spring animation
-        Animated.parallel([
-          Animated.timing(fadeAnim, {
-            toValue: 1,
-            duration: 250,
-            useNativeDriver: true,
-          }),
-          Animated.spring(scaleAnim, {
-            toValue: 1,
-            friction: 6,
-            tension: 80,
-            useNativeDriver: true,
-          }),
-        ]).start();
-      } else {
-        // Fade out smoothly
-        Animated.parallel([
-          Animated.timing(fadeAnim, {
-            toValue: 0,
-            duration: 300,
-            useNativeDriver: true,
-          }),
-          Animated.timing(scaleAnim, {
-            toValue: 0.85,
-            duration: 300,
-            useNativeDriver: true,
-          }),
-        ]).start(() => {
-          setIsExpanded(false);
-          expandAnim.setValue(0);
-        });
+      try {
+        setIslandState(state);
+        if (state && state.active) {
+          setIsVisible(true);
+          Animated.parallel([
+            Animated.timing(fadeAnim, {
+              toValue: 1,
+              duration: 250,
+              useNativeDriver: false,
+            }),
+            Animated.spring(scaleAnim, {
+              toValue: 1,
+              friction: 6,
+              tension: 80,
+              useNativeDriver: false,
+            }),
+          ]).start();
+        } else {
+          Animated.parallel([
+            Animated.timing(fadeAnim, {
+              toValue: 0,
+              duration: 250,
+              useNativeDriver: false,
+            }),
+            Animated.timing(scaleAnim, {
+              toValue: 0.85,
+              duration: 250,
+              useNativeDriver: false,
+            }),
+          ]).start(() => {
+            setIsVisible(false);
+            setIsExpanded(false);
+            expandAnim.setValue(0);
+          });
+        }
+      } catch (err) {
+        console.log('[DynamicIsland] subscribe callback err:', err);
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      try {
+        unsubscribe();
+      } catch (_) {}
+    };
   }, []);
 
   const toggleExpand = () => {
-    const toValue = isExpanded ? 0 : 1;
-    Animated.spring(expandAnim, {
-      toValue,
-      friction: 8,
-      tension: 60,
-      useNativeDriver: false,
-    }).start();
-    setIsExpanded(!isExpanded);
+    try {
+      const toValue = isExpanded ? 0 : 1;
+      Animated.spring(expandAnim, {
+        toValue,
+        friction: 8,
+        tension: 60,
+        useNativeDriver: false,
+      }).start();
+      setIsExpanded(!isExpanded);
+    } catch (e) {
+      console.log('[DynamicIsland] toggleExpand err:', e);
+    }
   };
 
-  if (!islandState.active && fadeAnim._value === 0) {
+  if (!isVisible && (!islandState || !islandState.active)) {
     return null;
   }
 
   // Dynamic colors based on status
   let statusColor = '#3b82f6'; // default blue
   let glowColor = 'rgba(59, 130, 246, 0.35)';
-  if (islandState.status === 'success') {
+  if (islandState?.status === 'success') {
     statusColor = '#10b981'; // emerald green
     glowColor = 'rgba(16, 185, 129, 0.4)';
-  } else if (islandState.status === 'error') {
+  } else if (islandState?.status === 'error') {
     statusColor = '#ef4444'; // red
     glowColor = 'rgba(239, 68, 68, 0.4)';
-  } else if (islandState.status === 'paused') {
+  } else if (islandState?.status === 'paused') {
     statusColor = '#f59e0b'; // amber
     glowColor = 'rgba(245, 158, 11, 0.35)';
   }
@@ -155,6 +194,9 @@ export default function DynamicIsland({ onOpenTransfers }) {
     outputRange: [0, 1],
     extrapolate: 'clamp',
   });
+
+  const rawProgress = islandState?.progress !== undefined ? islandState.progress : 0;
+  const displayPct = Math.min(100, Math.max(0, Math.round(rawProgress)));
 
   return (
     <View style={styles.outerWrapper} pointerEvents="box-none">
@@ -194,16 +236,16 @@ export default function DynamicIsland({ onOpenTransfers }) {
 
               {/* Status & Speed */}
               <Text style={[styles.compactPct, { color: statusColor }]}>
-                {islandState.status === 'success'
+                {islandState?.status === 'success'
                   ? '已完成'
-                  : islandState.status === 'paused'
+                  : islandState?.status === 'paused'
                   ? '已暂停'
-                  : islandState.status === 'error'
+                  : islandState?.status === 'error'
                   ? '异常'
-                  : `${islandState.progress}%`}
+                  : `${displayPct}%`}
               </Text>
 
-              {islandState.status === 'running' && islandState.speedStr ? (
+              {islandState?.status === 'running' && islandState?.speedStr ? (
                 <Text style={styles.compactSpeed} numberOfLines={1}>
                   · {islandState.speedStr}
                 </Text>
@@ -211,7 +253,7 @@ export default function DynamicIsland({ onOpenTransfers }) {
 
               {/* File name */}
               <Text style={styles.compactName} numberOfLines={1}>
-                {islandState.name || '文件'}
+                {islandState?.name || '文件'}
               </Text>
 
               <ChevronDown color="rgba(255, 255, 255, 0.45)" size={14} style={{ marginLeft: 3 }} />
@@ -225,16 +267,16 @@ export default function DynamicIsland({ onOpenTransfers }) {
             {/* Top row: Icon + File Name + Collapse Btn */}
             <View style={styles.expHeader}>
               <View style={[styles.expIconBadge, { backgroundColor: glowColor }]}>
-                {islandState.status === 'success' ? (
+                {islandState?.status === 'success' ? (
                   <CheckCircle2 color={statusColor} size={15} />
-                ) : islandState.status === 'error' ? (
+                ) : islandState?.status === 'error' ? (
                   <AlertCircle color={statusColor} size={15} />
                 ) : (
                   <Zap color={statusColor} size={15} />
                 )}
               </View>
               <Text style={styles.expFileName} numberOfLines={1}>
-                {islandState.name || '文件传输'}
+                {islandState?.name || '文件传输'}
               </Text>
               <TouchableOpacity onPress={toggleExpand} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <ChevronUp color="rgba(255, 255, 255, 0.6)" size={18} />
@@ -245,13 +287,13 @@ export default function DynamicIsland({ onOpenTransfers }) {
             <View style={styles.expMetrics}>
               <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
                 <Text style={[styles.expBigPct, { color: statusColor }]}>
-                  {islandState.progress}%
+                  {displayPct}%
                 </Text>
-                {islandState.speedStr ? (
+                {islandState?.speedStr ? (
                   <Text style={styles.expSpeedBadge}>{islandState.speedStr}</Text>
                 ) : null}
               </View>
-              {islandState.sizeText ? (
+              {islandState?.sizeText ? (
                 <Text style={styles.expSizeText}>{islandState.sizeText}</Text>
               ) : null}
             </View>
@@ -262,7 +304,7 @@ export default function DynamicIsland({ onOpenTransfers }) {
                 style={[
                   styles.progressBarFill,
                   {
-                    width: `${Math.min(100, Math.max(2, islandState.progress))}%`,
+                    width: `${Math.min(100, Math.max(2, displayPct))}%`,
                     backgroundColor: statusColor,
                   },
                 ]}
@@ -279,7 +321,9 @@ export default function DynamicIsland({ onOpenTransfers }) {
                   style={[styles.expNavBtn, { backgroundColor: statusColor }]}
                   onPress={() => {
                     toggleExpand();
-                    onOpenTransfers();
+                    try {
+                      onOpenTransfers();
+                    } catch (_) {}
                   }}
                   activeOpacity={0.8}
                 >
@@ -292,6 +336,14 @@ export default function DynamicIsland({ onOpenTransfers }) {
         )}
       </Animated.View>
     </View>
+  );
+}
+
+export default function DynamicIsland(props) {
+  return (
+    <DynamicIslandErrorBoundary>
+      <DynamicIslandInner {...props} />
+    </DynamicIslandErrorBoundary>
   );
 }
 

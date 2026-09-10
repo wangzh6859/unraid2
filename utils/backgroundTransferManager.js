@@ -46,33 +46,45 @@ class BackgroundTransferManager {
   }
 
   async getEnabled() {
-    await this.initPreference();
+    try {
+      await this.initPreference();
+    } catch (_) {}
     return this.isEnabled;
   }
 
   // --- Dynamic Island Observer Pattern ---
   subscribe(callback) {
     this.listeners.add(callback);
-    // Immediately emit current state
+    // Immediately emit current state safely
     try {
-      callback(this.islandState);
+      if (typeof callback === 'function') {
+        callback(this.islandState);
+      }
     } catch (_) {}
     return () => {
-      this.listeners.delete(callback);
+      try {
+        this.listeners.delete(callback);
+      } catch (_) {}
     };
   }
 
-  notifyIsland(changes) {
-    this.islandState = {
-      ...this.islandState,
-      ...changes,
-    };
-    for (const listener of this.listeners) {
-      try {
-        listener(this.islandState);
-      } catch (err) {
-        console.log('[BTM] Island listener error:', err);
+  notifyIsland(changes = {}) {
+    try {
+      this.islandState = {
+        ...this.islandState,
+        ...(changes || {}),
+      };
+      for (const listener of Array.from(this.listeners)) {
+        try {
+          if (typeof listener === 'function') {
+            listener(this.islandState);
+          }
+        } catch (err) {
+          console.log('[BTM] Island listener error:', err);
+        }
       }
+    } catch (err) {
+      console.log('[BTM] notifyIsland error:', err);
     }
   }
 
@@ -109,9 +121,11 @@ class BackgroundTransferManager {
   // Daemon task kept alive by BackgroundService
   backgroundDaemonTask = async (taskData) => {
     await new Promise(async (resolve) => {
-      while (BackgroundService.isRunning()) {
-        await new Promise((r) => setTimeout(r, 1000));
-      }
+      try {
+        while (BackgroundService.isRunning()) {
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      } catch (_) {}
       resolve();
     });
   };
@@ -121,40 +135,40 @@ class BackgroundTransferManager {
    * Starts both the Android Foreground Service notification and the Dynamic Island capsule.
    */
   async notifyTransferStarted(taskItem) {
-    this.activeTaskCount = Math.max(0, this.activeTaskCount) + 1;
-    this.currentTaskName = taskItem?.name || '文件';
-    this.currentType = taskItem?.type || '上传';
+    try {
+      this.activeTaskCount = Math.max(0, this.activeTaskCount) + 1;
+      this.currentTaskName = taskItem?.name || '文件';
+      this.currentType = taskItem?.type || '上传';
 
-    const initialPct = taskItem?.progress || 0;
-    const initialSpeed = taskItem?.speedDisplay || '准备传输...';
-    const initialSize = taskItem?.sizeText || '';
+      const initialPct = taskItem?.progress || 0;
+      const initialSpeed = taskItem?.speedDisplay || '准备传输...';
+      const initialSize = taskItem?.sizeText || '';
 
-    // Update in-app Dynamic Island immediately
-    this.notifyIsland({
-      active: true,
-      status: 'running',
-      name: this.currentTaskName,
-      progress: initialPct,
-      speedStr: initialSpeed,
-      sizeText: initialSize,
-      type: this.currentType,
-    });
-
-    if (Platform.OS !== 'android' || !this.isEnabled) return;
-
-    if (this.isServiceRunning && BackgroundService.isRunning()) {
-      // Already running, update notification content immediately
-      await this.updateForegroundProgress({
+      // Update in-app Dynamic Island immediately
+      this.notifyIsland({
+        active: true,
+        status: 'running',
         name: this.currentTaskName,
         progress: initialPct,
         speedStr: initialSpeed,
         sizeText: initialSize,
-        force: true,
+        type: this.currentType,
       });
-      return;
-    }
 
-    try {
+      if (Platform.OS !== 'android' || !this.isEnabled) return;
+
+      if (this.isServiceRunning && BackgroundService.isRunning()) {
+        // Already running, update notification content immediately
+        await this.updateForegroundProgress({
+          name: this.currentTaskName,
+          progress: initialPct,
+          speedStr: initialSpeed,
+          sizeText: initialSize,
+          force: true,
+        });
+        return;
+      }
+
       await this.requestNotificationPermission();
 
       const options = {
@@ -188,48 +202,52 @@ class BackgroundTransferManager {
    * Update progress with 400ms throttle for Android notifications,
    * while updating Dynamic Island smoothly.
    */
-  async updateForegroundProgress({ name, progress, speedStr, sizeText, force = false, status = 'running' }) {
-    const fileName = name || this.currentTaskName || '文件';
-    const pct = Math.min(100, Math.max(0, Math.round(progress || 0)));
-
-    // 1. Update in-app Dynamic Island immediately for smooth UI
-    this.notifyIsland({
-      active: true,
-      status,
-      name: fileName,
-      progress: pct,
-      speedStr: speedStr || '',
-      sizeText: sizeText || '',
-    });
-
-    // 2. Update Android Foreground Service (throttled)
-    if (Platform.OS !== 'android' || !this.isEnabled || !this.isServiceRunning) return;
-
-    const now = Date.now();
-    if (!force && now - this.lastUpdateTime < 400 && pct < 100) {
-      return;
-    }
-    this.lastUpdateTime = now;
-
-    const descParts = [];
-    if (pct !== undefined) descParts.push(`${pct}%`);
-    if (speedStr && speedStr !== '计算中...') descParts.push(speedStr);
-    if (sizeText) descParts.push(sizeText);
-
+  async updateForegroundProgress({ name, progress, speedStr, sizeText, force = false, status = 'running' } = {}) {
     try {
-      if (BackgroundService.isRunning()) {
-        await BackgroundService.updateNotification({
-          taskTitle: `Unraid 传输中: ${this.truncateName(fileName)}`,
-          taskDesc: descParts.join(' · ') || '正在持续传输...',
-          progressBar: {
-            max: 100,
-            value: pct,
-            indeterminate: false,
-          },
-        });
+      const fileName = name || this.currentTaskName || '文件';
+      const pct = Math.min(100, Math.max(0, Math.round(progress || 0)));
+
+      // 1. Update in-app Dynamic Island immediately for smooth UI
+      this.notifyIsland({
+        active: true,
+        status,
+        name: fileName,
+        progress: pct,
+        speedStr: speedStr || '',
+        sizeText: sizeText || '',
+      });
+
+      // 2. Update Android Foreground Service (throttled)
+      if (Platform.OS !== 'android' || !this.isEnabled || !this.isServiceRunning) return;
+
+      const now = Date.now();
+      if (!force && now - this.lastUpdateTime < 400 && pct < 100) {
+        return;
+      }
+      this.lastUpdateTime = now;
+
+      const descParts = [];
+      if (pct !== undefined) descParts.push(`${pct}%`);
+      if (speedStr && speedStr !== '计算中...') descParts.push(speedStr);
+      if (sizeText) descParts.push(sizeText);
+
+      try {
+        if (BackgroundService.isRunning()) {
+          await BackgroundService.updateNotification({
+            taskTitle: `Unraid 传输中: ${this.truncateName(fileName)}`,
+            taskDesc: descParts.join(' · ') || '正在持续传输...',
+            progressBar: {
+              max: 100,
+              value: pct,
+              indeterminate: false,
+            },
+          });
+        }
+      } catch (err) {
+        console.log('[BTM] updateNotification err:', err);
       }
     } catch (err) {
-      console.log('[BTM] updateNotification err:', err);
+      console.log('[BTM] updateForegroundProgress err:', err);
     }
   }
 
@@ -237,74 +255,85 @@ class BackgroundTransferManager {
    * Notify that a transfer task has finished, paused, or errored.
    */
   async notifyTransferEnded(taskId, result = 'success', fileInfo = {}) {
-    this.activeTaskCount = Math.max(0, this.activeTaskCount - 1);
+    try {
+      this.activeTaskCount = Math.max(0, this.activeTaskCount - 1);
+      const safeFileInfo = fileInfo || {};
 
-    if (result === 'success') {
-      // Show celebration in Dynamic Island
-      this.notifyIsland({
-        active: true,
-        status: 'success',
-        name: fileInfo.name || this.currentTaskName,
-        progress: 100,
-        speedStr: '传输完成',
-        sizeText: fileInfo.sizeText || '',
-      });
+      if (result === 'success') {
+        // Show celebration in Dynamic Island
+        this.notifyIsland({
+          active: true,
+          status: 'success',
+          name: safeFileInfo.name || this.currentTaskName,
+          progress: 100,
+          speedStr: '传输完成',
+          sizeText: safeFileInfo.sizeText || '',
+        });
 
-      // Update Android notification to 100% completed
-      if (this.isServiceRunning && BackgroundService.isRunning()) {
-        try {
-          await BackgroundService.updateNotification({
-            taskTitle: `Unraid: ${this.truncateName(fileInfo.name || this.currentTaskName)} 传输完成`,
-            taskDesc: '100% · 传输已顺利完成',
-            progressBar: {
-              max: 100,
-              value: 100,
-              indeterminate: false,
-            },
-          });
-        } catch (_) {}
-      }
-
-      // Auto dismiss celebration after 3.5 seconds if no more active tasks
-      setTimeout(async () => {
-        if (this.activeTaskCount <= 0) {
-          this.notifyIsland({ active: false, status: 'idle' });
-          await this.stopService();
+        // Update Android notification to 100% completed
+        if (this.isServiceRunning && BackgroundService.isRunning()) {
+          try {
+            await BackgroundService.updateNotification({
+              taskTitle: `Unraid: ${this.truncateName(safeFileInfo.name || this.currentTaskName)} 传输完成`,
+              taskDesc: '100% · 传输已顺利完成',
+              progressBar: {
+                max: 100,
+                value: 100,
+                indeterminate: false,
+              },
+            });
+          } catch (_) {}
         }
-      }, 3500);
-    } else if (result === 'error') {
-      this.notifyIsland({
-        active: true,
-        status: 'error',
-        name: fileInfo.name || this.currentTaskName,
-        speedStr: '传输异常',
-      });
-      setTimeout(async () => {
-        if (this.activeTaskCount <= 0) {
-          this.notifyIsland({ active: false, status: 'idle' });
-          await this.stopService();
-        }
-      }, 4000);
-    } else if (result === 'paused') {
-      this.notifyIsland({
-        active: true,
-        status: 'paused',
-        name: fileInfo.name || this.currentTaskName,
-        speedStr: '已暂停',
-      });
-      if (this.activeTaskCount <= 0) {
+
+        // Auto dismiss celebration after 3.5 seconds if no more active tasks
         setTimeout(async () => {
-          if (this.activeTaskCount <= 0) {
-            this.notifyIsland({ active: false, status: 'idle' });
-            await this.stopService();
-          }
-        }, 3000);
+          try {
+            if (this.activeTaskCount <= 0) {
+              this.notifyIsland({ active: false, status: 'idle' });
+              await this.stopService();
+            }
+          } catch (_) {}
+        }, 3500);
+      } else if (result === 'error') {
+        this.notifyIsland({
+          active: true,
+          status: 'error',
+          name: safeFileInfo.name || this.currentTaskName,
+          speedStr: '传输异常',
+        });
+        setTimeout(async () => {
+          try {
+            if (this.activeTaskCount <= 0) {
+              this.notifyIsland({ active: false, status: 'idle' });
+              await this.stopService();
+            }
+          } catch (_) {}
+        }, 4000);
+      } else if (result === 'paused') {
+        this.notifyIsland({
+          active: true,
+          status: 'paused',
+          name: safeFileInfo.name || this.currentTaskName,
+          speedStr: '已暂停',
+        });
+        if (this.activeTaskCount <= 0) {
+          setTimeout(async () => {
+            try {
+              if (this.activeTaskCount <= 0) {
+                this.notifyIsland({ active: false, status: 'idle' });
+                await this.stopService();
+              }
+            } catch (_) {}
+          }, 3000);
+        }
+      } else {
+        if (this.activeTaskCount <= 0) {
+          this.notifyIsland({ active: false, status: 'idle' });
+          await this.stopService();
+        }
       }
-    } else {
-      if (this.activeTaskCount <= 0) {
-        this.notifyIsland({ active: false, status: 'idle' });
-        await this.stopService();
-      }
+    } catch (err) {
+      console.log('[BTM] notifyTransferEnded err:', err);
     }
   }
 
@@ -312,16 +341,20 @@ class BackgroundTransferManager {
    * Force stop foreground service and clear notification.
    */
   async stopService() {
-    this.activeTaskCount = 0;
-    this.currentTaskName = '';
-    if (this.isServiceRunning || BackgroundService.isRunning()) {
-      try {
-        await BackgroundService.stop();
-      } catch (err) {
-        console.log('[BTM] stopService err:', err);
-      } finally {
-        this.isServiceRunning = false;
+    try {
+      this.activeTaskCount = 0;
+      this.currentTaskName = '';
+      if (this.isServiceRunning || BackgroundService.isRunning()) {
+        try {
+          await BackgroundService.stop();
+        } catch (err) {
+          console.log('[BTM] stopService err:', err);
+        } finally {
+          this.isServiceRunning = false;
+        }
       }
+    } catch (err) {
+      console.log('[BTM] stopService outer err:', err);
     }
   }
 

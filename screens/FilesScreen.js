@@ -412,7 +412,9 @@ export default function FilesScreen({ navigation }) {
     activeTasksRef.current[taskId] = { abortController, cancelled: false };
 
     // Register with Android Foreground Service for lockscreen background transfer
-    backgroundTransferManager.notifyTransferStarted(taskItem);
+    try {
+      backgroundTransferManager.notifyTransferStarted(taskItem);
+    } catch (_) {}
 
     let tempLocalUri = null;
     try {
@@ -913,14 +915,18 @@ export default function FilesScreen({ navigation }) {
 
   // Pause / Cancel active upload
   const pauseUploadTask = (taskId) => {
-    const task = activeTasksRef.current[taskId];
-    if (task) {
-      task.cancelled = true;
-      try {
-        task.abortController.abort();
-      } catch (_) {}
-    }
-    backgroundTransferManager.notifyTransferEnded(taskId);
+    try {
+      const task = activeTasksRef.current[taskId];
+      if (task) {
+        task.cancelled = true;
+        try {
+          task.abortController.abort();
+        } catch (_) {}
+      }
+    } catch (_) {}
+    try {
+      backgroundTransferManager.notifyTransferEnded(taskId);
+    } catch (_) {}
     setTransfers(prev => {
       const next = prev.map(t => {
         if (t.id === taskId) {
@@ -953,12 +959,16 @@ export default function FilesScreen({ navigation }) {
 
   // Delete a single transfer record
   const deleteTransferRecord = (taskId) => {
-    pauseUploadTask(taskId);
+    try {
+      pauseUploadTask(taskId);
+    } catch (_) {}
     setTransfers(prev => {
-      const itemToDelete = prev.find(t => t.id === taskId);
-      if (itemToDelete?.uri && itemToDelete.uri.startsWith(FileSystem.cacheDirectory + 'up_')) {
-        FileSystem.deleteAsync(itemToDelete.uri, { idempotent: true }).catch(() => {});
-      }
+      try {
+        const itemToDelete = prev.find(t => t.id === taskId);
+        if (itemToDelete?.uri && FileSystem?.cacheDirectory && itemToDelete.uri.startsWith(FileSystem.cacheDirectory + 'up_')) {
+          FileSystem.deleteAsync(itemToDelete.uri, { idempotent: true }).catch(() => {});
+        }
+      } catch (_) {}
       const next = prev.filter(t => t.id !== taskId);
       saveTransfersQueue(next);
       return next;
