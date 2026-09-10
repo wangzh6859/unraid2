@@ -192,6 +192,9 @@ export default function FilesScreen({ navigation }) {
   useFocusEffect(
     useCallback(() => {
       let isMounted = true;
+      // Proactively check/request notification permission for transfers
+      backgroundTransferManager.requestNotificationPermission();
+
       const checkAndSyncConfig = async () => {
         try {
           const savedUrl = await AsyncStorage.getItem('@server_url');
@@ -448,6 +451,14 @@ export default function FilesScreen({ navigation }) {
       const MAX_PHP_DIRECT = 2 * 1024 * 1024; // 2 MB limit for direct multipart
 
       if (totalSize <= MAX_PHP_DIRECT) {
+        backgroundTransferManager.updateForegroundProgress({
+          name: taskItem.name,
+          progress: 35,
+          speedStr: '正在上传...',
+          sizeText: `${formatBytesFixed(totalSize)}`,
+          force: true,
+        });
+
         setTransfers(prev => prev.map(t => (t.id === taskId ? {
           ...t,
           status: 'running',
@@ -524,7 +535,10 @@ export default function FilesScreen({ navigation }) {
             confirmText: '好的',
             showCancel: false,
           });
-          backgroundTransferManager.notifyTransferEnded(taskId);
+          backgroundTransferManager.notifyTransferEnded(taskId, 'success', {
+            name: taskItem.name,
+            sizeText: formatBytesFixed(totalSize),
+          });
           return;
         }
       }
@@ -543,6 +557,15 @@ export default function FilesScreen({ navigation }) {
 
       const initialBytes = startChunk * CHUNK_SIZE;
       const initialPct = totalSize > 0 ? Math.min(99, Math.round((initialBytes / totalSize) * 100)) : 0;
+
+      // Immediately notify Dynamic Island and Foreground Service
+      backgroundTransferManager.updateForegroundProgress({
+        name: taskItem.name,
+        progress: initialPct,
+        speedStr: startChunk > 0 ? '续传中...' : '传输中...',
+        sizeText: `${formatBytesFixed(initialBytes)} / ${formatBytesFixed(totalSize)}`,
+        force: true,
+      });
 
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
@@ -836,7 +859,10 @@ export default function FilesScreen({ navigation }) {
 
       // Refresh directory list
       loadDirectory(cleanBaseUrl, apiToken, currentPath);
-      backgroundTransferManager.notifyTransferEnded(taskId);
+      backgroundTransferManager.notifyTransferEnded(taskId, 'success', {
+        name: taskItem.name,
+        sizeText: formatBytesFixed(totalSize),
+      });
       showConfirm({
         type: 'success',
         title: '上传成功',
@@ -849,9 +875,11 @@ export default function FilesScreen({ navigation }) {
       if (tempLocalUri) {
         FileSystem.deleteAsync(tempLocalUri, { idempotent: true }).catch(() => {});
       }
-      backgroundTransferManager.notifyTransferEnded(taskId);
 
       const isCancelled = abortController.signal.aborted || err.name === 'AbortError' || (err.message && err.message.includes('abort'));
+      backgroundTransferManager.notifyTransferEnded(taskId, isCancelled ? 'paused' : 'error', {
+        name: taskItem.name,
+      });
       if (isCancelled) {
         setTransfers(prev => {
           const next = prev.map(t => (t.id === taskId ? {
@@ -988,7 +1016,10 @@ export default function FilesScreen({ navigation }) {
       }
 
       await FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => {});
-      backgroundTransferManager.notifyTransferEnded(taskId);
+      backgroundTransferManager.notifyTransferEnded(taskId, 'success', {
+        name: item.name,
+        sizeText: formatBytesFixed(item.size || 0),
+      });
       setTransfers(prev => {
         const next = prev.map(t => (t.id === taskId ? {
           ...t,
@@ -1004,7 +1035,9 @@ export default function FilesScreen({ navigation }) {
       });
     } catch (e) {
       console.log('[FilesScreen] Download error:', e);
-      backgroundTransferManager.notifyTransferEnded(taskId);
+      backgroundTransferManager.notifyTransferEnded(taskId, 'error', {
+        name: item.name,
+      });
       showConfirm({
         type: 'warning',
         title: '下载失败',
