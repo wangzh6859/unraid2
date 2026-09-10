@@ -152,12 +152,18 @@ function get_valid_tokens() {
     return $tokens;
 }
 
+$rawGlobalInput = @file_get_contents('php://input');
+$globalJsonInput = !empty($rawGlobalInput) ? @json_decode($rawGlobalInput, true) : null;
+
 function verify_auth() {
+    global $globalJsonInput;
     $reqToken = '';
     if (isset($_GET['token'])) {
         $reqToken = trim($_GET['token']);
     } elseif (isset($_POST['token'])) {
         $reqToken = trim($_POST['token']);
+    } elseif (isset($globalJsonInput['token'])) {
+        $reqToken = trim($globalJsonInput['token']);
     } elseif (isset($_SERVER['HTTP_X_API_TOKEN'])) {
         $reqToken = trim($_SERVER['HTTP_X_API_TOKEN']);
     } elseif (isset($_SERVER['HTTP_AUTHORIZATION'])) {
@@ -182,7 +188,7 @@ verify_auth();
 
 @setlocale(LC_ALL, 'C.UTF-8', 'en_US.UTF-8', 'zh_CN.UTF-8');
 
-$action = isset($_GET['action']) ? trim($_GET['action']) : (isset($_POST['action']) ? trim($_POST['action']) : 'status');
+$action = isset($_GET['action']) ? trim($_GET['action']) : (isset($_POST['action']) ? trim($_POST['action']) : (isset($globalJsonInput['action']) ? trim($globalJsonInput['action']) : 'status'));
 
 // -------------------------------------------------------------
 // Safe Path Normalization & Security Jail
@@ -1808,9 +1814,12 @@ function handle_file_copy() {
 }
 
 function handle_file_extract() {
-    $source = sanitize_path(isset($_GET['source']) ? $_GET['source'] : (isset($_POST['source']) ? $_POST['source'] : ''));
-    $targetDir = sanitize_path(isset($_GET['target']) ? $_GET['target'] : (isset($_POST['target']) ? $_POST['target'] : ''));
-    $createFolder = isset($_GET['create_folder']) ? $_GET['create_folder'] : (isset($_POST['create_folder']) ? $_POST['create_folder'] : 'false');
+    $rawInput = @file_get_contents('php://input');
+    $jsonInput = !empty($rawInput) ? @json_decode($rawInput, true) : null;
+
+    $source = sanitize_path(isset($jsonInput['source']) ? $jsonInput['source'] : (isset($_GET['source']) ? $_GET['source'] : (isset($_POST['source']) ? $_POST['source'] : '')));
+    $targetDir = sanitize_path(isset($jsonInput['target']) ? $jsonInput['target'] : (isset($_GET['target']) ? $_GET['target'] : (isset($_POST['target']) ? $_POST['target'] : '')));
+    $createFolder = isset($jsonInput['create_folder']) ? $jsonInput['create_folder'] : (isset($_GET['create_folder']) ? $_GET['create_folder'] : (isset($_POST['create_folder']) ? $_POST['create_folder'] : 'false'));
     $createFolder = ($createFolder === 'true' || $createFolder === true || $createFolder === '1' || $createFolder === 1);
 
     if (!file_exists($source) || is_dir($source)) {
@@ -1866,6 +1875,15 @@ function handle_file_extract() {
     }
 
     exec($cmd . " 2>&1", $out, $ret);
+    if ($ret !== 0 && substr($lower, -4) === '.zip' && class_exists('ZipArchive')) {
+        $zip = new ZipArchive();
+        if ($zip->open($source) === true) {
+            $zip->extractTo($targetDir);
+            $zip->close();
+            $ret = 0;
+        }
+    }
+
     if ($ret !== 0) {
         $errMsg = !empty($out) ? implode("\n", array_slice($out, -3)) : '解压失败，请确认服务端安装了对应解压工具 (unzip/tar/7z)';
         json_output(['status' => 'error', 'message' => $errMsg], 500);
@@ -1880,9 +1898,13 @@ function handle_file_extract() {
 }
 
 function handle_file_compress() {
-    $rawSources = isset($_POST['sources']) ? $_POST['sources'] : (isset($_GET['sources']) ? $_GET['sources'] : '');
-    $targetDir = sanitize_path(isset($_POST['target_dir']) ? $_POST['target_dir'] : (isset($_GET['target_dir']) ? $_GET['target_dir'] : ''));
-    $zipName = isset($_POST['zip_name']) ? trim($_POST['zip_name']) : (isset($_GET['zip_name']) ? trim($_GET['zip_name']) : '');
+    global $globalJsonInput;
+    $rawInput = @file_get_contents('php://input');
+    $jsonInput = !empty($rawInput) ? @json_decode($rawInput, true) : $globalJsonInput;
+
+    $rawSources = isset($jsonInput['sources']) ? $jsonInput['sources'] : (isset($_POST['sources']) ? $_POST['sources'] : (isset($_GET['sources']) ? $_GET['sources'] : ''));
+    $targetDir = sanitize_path(isset($jsonInput['target_dir']) ? $jsonInput['target_dir'] : (isset($_POST['target_dir']) ? $_POST['target_dir'] : (isset($_GET['target_dir']) ? $_GET['target_dir'] : '')));
+    $zipName = isset($jsonInput['zip_name']) ? trim($jsonInput['zip_name']) : (isset($_POST['zip_name']) ? trim($_POST['zip_name']) : (isset($_GET['zip_name']) ? trim($_GET['zip_name']) : ''));
 
     if (empty($rawSources)) {
         json_output(['status' => 'error', 'message' => '未指定需要打包的文件或目录'], 400);
@@ -1942,7 +1964,40 @@ function handle_file_compress() {
     exec($cmd . " 2>&1", $out, $ret);
 
     if ($ret !== 0) {
-        $errMsg = !empty($out) ? implode("\n", array_slice($out, -3)) : '服务端打包 Zip 失败，请检查 Unraid 是否具备 zip 工具';
+        // Fallback to PHP's built-in ZipArchive if zip CLI is missing or failed
+        if (class_exists('ZipArchive')) {
+            $zip = new ZipArchive();
+            if ($zip->open($outZipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
+                foreach ($validSources as $src) {
+                    if (is_dir($src)) {
+                        $files = new RecursiveIteratorIterator(
+                            new RecursiveDirectoryIterator($src, RecursiveDirectoryIterator::SKIP_DOTS),
+                            RecursiveIteratorIterator::SELF_FIRST
+                        );
+                        $baseDir = dirname($src);
+                        foreach ($files as $file) {
+                            $filePath = $file->getRealPath();
+                            $relativePath = substr($filePath, strlen($baseDir) + 1);
+                            if ($file->isDir()) {
+                                $zip->addEmptyDir($relativePath);
+                            } else {
+                                $zip->addFile($filePath, $relativePath);
+                            }
+                        }
+                    } else {
+                        $zip->addFile($src, safe_basename($src));
+                    }
+                }
+                $zip->close();
+                if (file_exists($outZipPath) && filesize($outZipPath) > 0) {
+                    $ret = 0;
+                }
+            }
+        }
+    }
+
+    if ($ret !== 0) {
+        $errMsg = !empty($out) ? implode("\n", array_slice($out, -3)) : '服务端打包 Zip 失败，请检查 Unraid 是否具备 zip 工具或写入权限';
         json_output(['status' => 'error', 'message' => $errMsg], 500);
     }
 

@@ -1276,10 +1276,30 @@ export default function FilesScreen({ navigation }) {
     if (!extractItem) return;
     setIsExtracting(true);
     try {
-      const url = `${serverUrl}/api.php?token=${apiToken}&action=file_extract&source=${encodeURIComponent(extractItem.path)}&target=${encodeURIComponent(currentPath)}&create_folder=${extractCreateSubfolder ? 'true' : 'false'}`;
+      const url = `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_extract&source=${encodeURIComponent(extractItem.path)}&target=${encodeURIComponent(currentPath)}&create_folder=${extractCreateSubfolder ? 'true' : 'false'}`;
       const res = await fetch(url);
-      const data = await res.json();
+      const resText = await res.text();
+      let data = null;
+      try {
+        data = JSON.parse(resText);
+      } catch (parseErr) {
+        console.log('[confirmExtractArchive] Response parse error:', resText);
+      }
+
       setIsExtracting(false);
+
+      if (!data) {
+        const preview = resText ? (resText.length > 200 ? resText.slice(0, 200) + '...' : resText) : '（服务端返回空内容）';
+        showConfirm({
+          type: 'danger',
+          title: '解压异常',
+          message: `服务端未返回有效的 JSON 数据 (HTTP ${res.status || '未知'})。\n\n服务端原始返回：\n${preview}\n\n【排查提示】：请确认 Unraid 服务器上的 /usr/local/emhttp/api.php 已同步替换为最新版本！`,
+          confirmText: '知道了',
+          showCancel: false,
+        });
+        return;
+      }
+
       if (data.status === 'success') {
         const targetDesc = data.target || currentPath;
         setExtractItem(null);
@@ -1337,18 +1357,41 @@ export default function FilesScreen({ navigation }) {
     setIsCompressing(true);
     try {
       const sourcePaths = items.map(it => it.path);
-      const formData = new FormData();
-      formData.append('sources', JSON.stringify(sourcePaths));
-      formData.append('target_dir', currentPath);
-      formData.append('zip_name', name);
-
-      const url = `${serverUrl}/api.php?token=${apiToken}&action=file_compress`;
+      const url = `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_compress`;
       const res = await fetch(url, {
         method: 'POST',
-        body: formData,
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+        body: JSON.stringify({
+          sources: sourcePaths,
+          target_dir: currentPath,
+          zip_name: name,
+        }),
       });
-      const data = await res.json();
+
+      const resText = await res.text();
+      let data = null;
+      try {
+        data = JSON.parse(resText);
+      } catch (parseErr) {
+        console.log('[confirmBatchCompress] Response parse error:', resText);
+      }
+
       setIsCompressing(false);
+
+      if (!data) {
+        const preview = resText ? (resText.length > 200 ? resText.slice(0, 200) + '...' : resText) : '（服务端返回空内容）';
+        showConfirm({
+          type: 'danger',
+          title: '压缩打包异常',
+          message: `服务端未返回有效的 JSON 数据 (HTTP ${res.status || '未知'})。\n\n服务端原始返回：\n${preview}\n\n【排查提示】：请确认 Unraid 服务器上的 /usr/local/emhttp/api.php 已同步替换为最新版本！`,
+          confirmText: '知道了',
+          showCancel: false,
+        });
+        return;
+      }
+
       if (data.status === 'success') {
         setCompressVisible(false);
         exitMultiSelect();

@@ -53,14 +53,10 @@ class BackgroundTransferManager {
         if (checkResult) return true;
 
         const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
-          {
-            title: 'Unraid 传输通知权限',
-            message: '允许展示后台传输动态进度条与实时速率，保证切后台或锁屏传输大文件不被中断。',
-            buttonPositive: '立即开启',
-            buttonNegative: '稍后',
-          }
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
         );
+        // Allow Android activity lifecycle to return to RESUMED state after system dialog dismisses
+        await new Promise((r) => setTimeout(r, 400));
         return granted === PermissionsAndroid.RESULTS.GRANTED;
       }
       return true;
@@ -145,6 +141,7 @@ class BackgroundTransferManager {
           },
           color: '#3b82f6',
           linkingURI: 'unraid://transfer',
+          foregroundServiceType: ['dataSync'],
           parameters: {
             delay: 1000,
           },
@@ -157,7 +154,11 @@ class BackgroundTransferManager {
 
         this.isServiceRunning = true;
         if (!BackgroundService.isRunning()) {
-          await BackgroundService.start(this.backgroundDaemonTask, options);
+          try {
+            await BackgroundService.start(this.backgroundDaemonTask, options);
+          } catch (bsErr) {
+            console.log('[BTM] BackgroundService.start caught error:', bsErr);
+          }
         }
         this.lastUpdateTime = Date.now();
       } catch (err) {
