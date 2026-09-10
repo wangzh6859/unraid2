@@ -8,7 +8,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import {
   Cpu, Database, RotateCw, Play, Power, Terminal, ExternalLink,
-  Search, Copy, Check, X, RefreshCw, Globe,
+  Search, Copy, Check, X, RefreshCw,
 } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
@@ -319,17 +319,6 @@ export default function DockerDetailsScreen() {
               <View style={styles.controlContainer}>
                 <View style={[styles.statusDot, { backgroundColor: isRunning ? colors.green : colors.red }]} />
                 <View style={styles.btnRow}>
-                  {/* WebUI Button (if mapped and running) */}
-                  {isRunning && docker.webui ? (
-                    <TouchableOpacity
-                      onPress={() => Linking.openURL(docker.webui)}
-                      style={[styles.actionBtn, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}
-                      activeOpacity={0.7}
-                    >
-                      <Globe size={15} color={colors.accent} />
-                    </TouchableOpacity>
-                  ) : null}
-
                   {/* Terminal Log Button */}
                   <TouchableOpacity
                     onPress={() => openDockerLogs(docker)}
