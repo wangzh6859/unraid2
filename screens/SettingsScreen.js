@@ -13,7 +13,7 @@ import {
   HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server,
   LogOut, Moon, Sun, FolderDown, RefreshCw, Trash2, Key, Power,
   RotateCw, AlertTriangle, CheckCircle, Fingerprint, ShieldAlert,
-  Sparkles, DownloadCloud, ExternalLink, Activity, Zap,
+  Sparkles, DownloadCloud, ExternalLink, Activity, Radio, Zap,
 } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import {
@@ -715,7 +715,7 @@ export default function SettingsScreen({ navigation }) {
 
         <TouchableOpacity style={styles.row} onPress={editWolBroadcastIp}>
           <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
-            <Activity color={colors.green} size={20} />
+            <Radio color={colors.green} size={20} />
           </View>
           <View style={styles.infoBox}>
             <Text style={styles.rowTitle}>局域网广播 IP</Text>
@@ -972,7 +972,7 @@ export default function SettingsScreen({ navigation }) {
               ) : serverEditField === 'wol_mac' ? (
                 <Zap color={colors.accent} size={28} />
               ) : serverEditField === 'wol_broadcast' ? (
-                <Activity color={colors.green} size={28} />
+                <Radio color={colors.green} size={28} />
               ) : (
                 <Key color={colors.accent} size={28} />
               )}

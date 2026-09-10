@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StatusBar, AppState } from 'react-native';
+import { StatusBar, AppState, View, Text, TouchableOpacity, ScrollView, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -168,11 +168,57 @@ function ThemedRoot() {
   );
 }
 
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('[ErrorBoundary caught error]', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={{ flex: 1, backgroundColor: '#111827', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#ef4444', marginBottom: 12 }}>
+            应用发生运行异常
+          </Text>
+          <Text style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center', marginBottom: 16 }}>
+            页面在渲染时遇到未捕获的错误。你可以查看详细错误信息或点击下方按钮重新加载。
+          </Text>
+          <ScrollView style={{ maxHeight: 200, width: '100%', backgroundColor: '#1f2937', borderRadius: 10, padding: 14, marginBottom: 20 }}>
+            <Text style={{ color: '#f87171', fontSize: 12, fontFamily: Platform.OS === 'android' ? 'monospace' : 'Courier' }}>
+              {String(this.state.error?.message || this.state.error || '未知错误')}
+              {'\n\n'}
+              {String(this.state.error?.stack || '')}
+            </Text>
+          </ScrollView>
+          <TouchableOpacity
+            style={{ backgroundColor: '#3b82f6', paddingHorizontal: 28, paddingVertical: 12, borderRadius: 12 }}
+            onPress={() => this.setState({ hasError: false, error: null })}
+          >
+            <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 15 }}>重新加载应用</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // 🚀 真正的 App 顶级入口
 export default function App() {
   return (
-    <ThemeProvider>
-      <ThemedRoot />
-    </ThemeProvider>
+    <ErrorBoundary>
+      <ThemeProvider>
+        <ThemedRoot />
+      </ThemeProvider>
+    </ErrorBoundary>
   );
 }
