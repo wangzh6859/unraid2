@@ -10,14 +10,16 @@ export const SYSTEM_ISLAND_STORAGE_KEY = '@system_dynamic_island_overlay_enabled
 
 class BackgroundTransferManager {
   constructor() {
-    this.activeTaskCount = 0;
+    this.activeTaskIds = new Set();
     this.lastUpdateTime = 0;
     this.currentTaskName = '';
     this.currentType = '上传';
     this.isEnabled = true;
     this.isServiceRunning = false;
+    this.isStartingService = false;
     this.isSystemIslandEnabled = true; // Enabled by default if permitted
     this.listeners = new Set();
+    this.notificationQueue = Promise.resolve();
     this.islandState = {
       active: false,
       status: 'idle', // 'running' | 'success' | 'paused' | 'error' | 'idle'
@@ -40,7 +42,6 @@ class BackgroundTransferManager {
 
     try {
       const islandVal = await AsyncStorage.getItem(SYSTEM_ISLAND_STORAGE_KEY);
-      // Default to true for new installs, but user can toggle off
       this.isSystemIslandEnabled = islandVal !== 'false';
     } catch (_) {
       this.isSystemIslandEnabled = true;
@@ -163,11 +164,30 @@ class BackgroundTransferManager {
     }
   }
 
+  // Serialized notification update queue to prevent overlapping or out-of-order notifications
+  queueNotificationUpdate(options) {
+    if (Platform.OS !== 'android' || !this.isEnabled) return Promise.resolve();
+    this.notificationQueue = this.notificationQueue
+      .then(async () => {
+        if (this.isServiceRunning && BackgroundService.isRunning()) {
+          try {
+            await BackgroundService.updateNotification(options);
+          } catch (err) {
+            console.log('[BTM] BackgroundService.updateNotification err:', err);
+          }
+        }
+      })
+      .catch((err) => {
+        console.log('[BTM] queueNotificationUpdate queue err:', err);
+      });
+    return this.notificationQueue;
+  }
+
   // Daemon task kept alive by BackgroundService
   backgroundDaemonTask = async (taskData) => {
     await new Promise(async (resolve) => {
       try {
-        while (BackgroundService.isRunning()) {
+        while (this.isServiceRunning) {
           await new Promise((r) => setTimeout(r, 1000));
         }
       } catch (_) {}
@@ -181,7 +201,8 @@ class BackgroundTransferManager {
    */
   async notifyTransferStarted(taskItem) {
     try {
-      this.activeTaskCount = Math.max(0, this.activeTaskCount) + 1;
+      const taskId = taskItem?.id || ('task_' + Date.now());
+      this.activeTaskIds.add(taskId);
       this.currentTaskName = taskItem?.name || '文件';
       this.currentType = taskItem?.type || '上传';
 
@@ -216,7 +237,7 @@ class BackgroundTransferManager {
       if (Platform.OS !== 'android' || !this.isEnabled) return;
 
       if (this.isServiceRunning && BackgroundService.isRunning()) {
-        await this.updateForegroundProgress({
+        this.updateForegroundProgress({
           name: this.currentTaskName,
           progress: initialPct,
           speedStr: initialSpeed,
@@ -226,32 +247,44 @@ class BackgroundTransferManager {
         return;
       }
 
-      await this.requestNotificationPermission();
+      if (this.isStartingService) return;
+      this.isStartingService = true;
 
-      const options = {
-        taskName: 'UnraidTransferDaemon',
-        taskTitle: `Unraid 传输中: ${this.truncateName(this.currentTaskName)}`,
-        taskDesc: `${initialPct}% · ${initialSpeed} · ${initialSize}`,
-        taskIcon: {
-          name: 'ic_launcher',
-          type: 'mipmap',
-        },
-        color: '#3b82f6',
-        parameters: {
-          delay: 1000,
-        },
-        progressBar: {
-          max: 100,
-          value: Math.min(100, Math.max(0, Math.round(initialPct))),
-          indeterminate: false,
-        },
-      };
+      try {
+        await this.requestNotificationPermission();
 
-      await BackgroundService.start(this.backgroundDaemonTask, options);
-      this.isServiceRunning = true;
-      this.lastUpdateTime = Date.now();
+        const options = {
+          taskName: 'UnraidTransferDaemon',
+          taskTitle: `Unraid 传输中: ${this.truncateName(this.currentTaskName)}`,
+          taskDesc: `${initialPct}% · ${initialSpeed} · ${initialSize}`,
+          taskIcon: {
+            name: 'ic_launcher',
+            type: 'mipmap',
+          },
+          color: '#3b82f6',
+          parameters: {
+            delay: 1000,
+          },
+          progressBar: {
+            max: 100,
+            value: Math.min(100, Math.max(0, Math.round(initialPct))),
+            indeterminate: false,
+          },
+        };
+
+        this.isServiceRunning = true;
+        if (!BackgroundService.isRunning()) {
+          await BackgroundService.start(this.backgroundDaemonTask, options);
+        }
+        this.lastUpdateTime = Date.now();
+      } catch (err) {
+        console.log('[BTM] Failed to start BackgroundService:', err);
+        this.isServiceRunning = false;
+      } finally {
+        this.isStartingService = false;
+      }
     } catch (err) {
-      console.log('[BTM] Failed to start BackgroundService:', err);
+      console.log('[BTM] notifyTransferStarted err:', err);
     }
   }
 
@@ -286,11 +319,11 @@ class BackgroundTransferManager {
         } catch (_) {}
       }
 
-      // 3. Update Android Foreground Service notification (throttled)
+      // 3. Update Android Foreground Service notification (throttled & queued)
       if (Platform.OS !== 'android' || !this.isEnabled || !this.isServiceRunning) return;
 
       const now = Date.now();
-      if (!force && now - this.lastUpdateTime < 400 && pct < 100) {
+      if (!force && now - this.lastUpdateTime < 350 && pct < 100) {
         return;
       }
       this.lastUpdateTime = now;
@@ -300,21 +333,15 @@ class BackgroundTransferManager {
       if (speedStr && speedStr !== '计算中...') descParts.push(speedStr);
       if (sizeText) descParts.push(sizeText);
 
-      try {
-        if (BackgroundService.isRunning()) {
-          await BackgroundService.updateNotification({
-            taskTitle: `Unraid 传输中: ${this.truncateName(fileName)}`,
-            taskDesc: descParts.join(' · ') || '正在持续传输...',
-            progressBar: {
-              max: 100,
-              value: pct,
-              indeterminate: false,
-            },
-          });
-        }
-      } catch (err) {
-        console.log('[BTM] updateNotification err:', err);
-      }
+      this.queueNotificationUpdate({
+        taskTitle: `Unraid 传输中: ${this.truncateName(fileName)}`,
+        taskDesc: descParts.join(' · ') || '正在持续传输...',
+        progressBar: {
+          max: 100,
+          value: pct,
+          indeterminate: false,
+        },
+      });
     } catch (err) {
       console.log('[BTM] updateForegroundProgress err:', err);
     }
@@ -325,7 +352,12 @@ class BackgroundTransferManager {
    */
   async notifyTransferEnded(taskId, result = 'success', fileInfo = {}) {
     try {
-      this.activeTaskCount = Math.max(0, this.activeTaskCount - 1);
+      if (taskId) {
+        this.activeTaskIds.delete(taskId);
+      } else {
+        this.activeTaskIds.clear();
+      }
+
       const safeFileInfo = fileInfo || {};
 
       if (result === 'success') {
@@ -338,7 +370,7 @@ class BackgroundTransferManager {
           sizeText: safeFileInfo.sizeText || '',
         });
 
-        // Update Native System Overlay Dynamic Island to complete celebration
+        // 1. Update Native System Overlay Dynamic Island to complete celebration
         if (this.isSystemIslandEnabled && DynamicIslandOverlay) {
           try {
             DynamicIslandOverlay.updateProgress({
@@ -350,25 +382,27 @@ class BackgroundTransferManager {
           } catch (_) {}
         }
 
-        // Update Android notification to 100% completed
-        if (this.isServiceRunning && BackgroundService.isRunning()) {
-          try {
-            await BackgroundService.updateNotification({
-              taskTitle: `Unraid: ${this.truncateName(safeFileInfo.name || this.currentTaskName)} 传输完成`,
-              taskDesc: '100% · 传输已顺利完成',
-              progressBar: {
-                max: 100,
-                value: 100,
-                indeterminate: false,
-              },
-            });
-          } catch (_) {}
-        }
+        // 2. Queue Android notification to 100% completed
+        this.queueNotificationUpdate({
+          taskTitle: `Unraid: ${this.truncateName(safeFileInfo.name || this.currentTaskName)} 传输完成`,
+          taskDesc: '100% · 传输已顺利完成',
+          progressBar: {
+            max: 100,
+            value: 100,
+            indeterminate: false,
+          },
+        });
 
+        // 3. Auto-dismiss after 3.5s celebration
         setTimeout(async () => {
           try {
-            if (this.activeTaskCount <= 0) {
+            if (this.activeTaskIds.size === 0) {
               this.notifyIsland({ active: false, status: 'idle' });
+              if (DynamicIslandOverlay) {
+                try {
+                  DynamicIslandOverlay.hideIsland();
+                } catch (_) {}
+              }
               await this.stopService();
             }
           } catch (_) {}
@@ -390,14 +424,28 @@ class BackgroundTransferManager {
             });
           } catch (_) {}
         }
+        this.queueNotificationUpdate({
+          taskTitle: `Unraid: ${this.truncateName(safeFileInfo.name || this.currentTaskName)} 传输异常`,
+          taskDesc: '传输中断或失败',
+          progressBar: {
+            max: 100,
+            value: 0,
+            indeterminate: false,
+          },
+        });
         setTimeout(async () => {
           try {
-            if (this.activeTaskCount <= 0) {
+            if (this.activeTaskIds.size === 0) {
               this.notifyIsland({ active: false, status: 'idle' });
+              if (DynamicIslandOverlay) {
+                try {
+                  DynamicIslandOverlay.hideIsland();
+                } catch (_) {}
+              }
               await this.stopService();
             }
           } catch (_) {}
-        }, 4000);
+        }, 3500);
       } else if (result === 'paused') {
         this.notifyIsland({
           active: true,
@@ -415,18 +463,32 @@ class BackgroundTransferManager {
             });
           } catch (_) {}
         }
-        if (this.activeTaskCount <= 0) {
+        this.queueNotificationUpdate({
+          taskTitle: `Unraid: ${this.truncateName(safeFileInfo.name || this.currentTaskName)} 已暂停`,
+          taskDesc: '传输任务已暂停',
+          progressBar: {
+            max: 100,
+            value: 0,
+            indeterminate: false,
+          },
+        });
+        if (this.activeTaskIds.size === 0) {
           setTimeout(async () => {
             try {
-              if (this.activeTaskCount <= 0) {
+              if (this.activeTaskIds.size === 0) {
                 this.notifyIsland({ active: false, status: 'idle' });
+                if (DynamicIslandOverlay) {
+                  try {
+                    DynamicIslandOverlay.hideIsland();
+                  } catch (_) {}
+                }
                 await this.stopService();
               }
             } catch (_) {}
           }, 3000);
         }
       } else {
-        if (this.activeTaskCount <= 0) {
+        if (this.activeTaskIds.size === 0) {
           this.notifyIsland({ active: false, status: 'idle' });
           if (this.isSystemIslandEnabled && DynamicIslandOverlay) {
             try {
@@ -446,24 +508,25 @@ class BackgroundTransferManager {
    */
   async stopService() {
     try {
-      this.activeTaskCount = 0;
+      this.activeTaskIds.clear();
       this.currentTaskName = '';
       if (DynamicIslandOverlay) {
         try {
           DynamicIslandOverlay.hideIsland();
         } catch (_) {}
       }
-      if (this.isServiceRunning || BackgroundService.isRunning()) {
+      this.isServiceRunning = false;
+      if (BackgroundService.isRunning()) {
         try {
           await BackgroundService.stop();
         } catch (err) {
           console.log('[BTM] stopService err:', err);
-        } finally {
-          this.isServiceRunning = false;
         }
       }
     } catch (err) {
       console.log('[BTM] stopService outer err:', err);
+    } finally {
+      this.isServiceRunning = false;
     }
   }
 

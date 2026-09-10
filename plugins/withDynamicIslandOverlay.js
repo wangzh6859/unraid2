@@ -103,6 +103,19 @@ public class DynamicIslandOverlayModule extends ReactContextBaseJavaModule {
         return "DynamicIslandOverlay";
     }
 
+    private int parseProgress(ReadableMap options) {
+        if (options == null || !options.hasKey("progress")) return 0;
+        try {
+            return (int) Math.round(options.getDouble("progress"));
+        } catch (Exception e) {
+            try {
+                return options.getInt("progress");
+            } catch (Exception ignored) {
+                return 0;
+            }
+        }
+    }
+
     @ReactMethod
     public void canDrawOverlays(Promise promise) {
         try {
@@ -135,29 +148,29 @@ public class DynamicIslandOverlayModule extends ReactContextBaseJavaModule {
     @ReactMethod
     public void showIsland(ReadableMap options) {
         try {
-            String name = options.hasKey("name") ? options.getString("name") : "文件";
-            int progress = options.hasKey("progress") ? options.getInt("progress") : 0;
-            String speed = options.hasKey("speed") ? options.getString("speed") : "";
-            String size = options.hasKey("size") ? options.getString("size") : "";
-            String status = options.hasKey("status") ? options.getString("status") : "running";
+            String name = (options != null && options.hasKey("name")) ? options.getString("name") : "文件";
+            int progress = parseProgress(options);
+            String speed = (options != null && options.hasKey("speed")) ? options.getString("speed") : "";
+            String size = (options != null && options.hasKey("size")) ? options.getString("size") : "";
+            String status = (options != null && options.hasKey("status")) ? options.getString("status") : "running";
 
             DynamicIslandOverlayManager.getInstance(reactContext).show(name, progress, speed, size, status);
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (Throwable t) {
+            t.printStackTrace();
         }
     }
 
     @ReactMethod
     public void updateProgress(ReadableMap options) {
         try {
-            int progress = options.hasKey("progress") ? options.getInt("progress") : 0;
-            String speed = options.hasKey("speed") ? options.getString("speed") : "";
-            String size = options.hasKey("size") ? options.getString("size") : "";
-            String status = options.hasKey("status") ? options.getString("status") : "running";
+            int progress = parseProgress(options);
+            String speed = (options != null && options.hasKey("speed")) ? options.getString("speed") : "";
+            String size = (options != null && options.hasKey("size")) ? options.getString("size") : "";
+            String status = (options != null && options.hasKey("status")) ? options.getString("status") : "running";
 
             DynamicIslandOverlayManager.getInstance(reactContext).update(progress, speed, size, status);
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (Throwable t) {
+            t.printStackTrace();
         }
     }
 
@@ -165,8 +178,8 @@ public class DynamicIslandOverlayModule extends ReactContextBaseJavaModule {
     public void hideIsland() {
         try {
             DynamicIslandOverlayManager.getInstance(reactContext).hide();
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (Throwable t) {
+            t.printStackTrace();
         }
     }
 }
@@ -208,7 +221,6 @@ public class DynamicIslandOverlayManager {
 
     private View pillPulseDot;
     private TextView pillTextProgress;
-    private TextView pillTextName;
 
     private TextView cardTitle;
     private TextView cardBigPct;
@@ -242,11 +254,13 @@ public class DynamicIslandOverlayManager {
     }
 
     private int getStatusBarHeight() {
-        int result = dp(32);
-        int resourceId = context.getResources().getIdentifier("status_bar_height", "dimen", "android");
-        if (resourceId > 0) {
-            result = context.getResources().getDimensionPixelSize(resourceId);
-        }
+        int result = dp(34);
+        try {
+            int resourceId = context.getResources().getIdentifier("status_bar_height", "dimen", "android");
+            if (resourceId > 0) {
+                result = context.getResources().getDimensionPixelSize(resourceId);
+            }
+        } catch (Exception ignored) {}
         return result;
     }
 
@@ -256,8 +270,7 @@ public class DynamicIslandOverlayManager {
                 : WindowManager.LayoutParams.TYPE_PHONE;
 
         int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
+                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
 
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -269,7 +282,7 @@ public class DynamicIslandOverlayManager {
         params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
 
         int sbHeight = getStatusBarHeight();
-        int pillHeight = dp(36);
+        int pillHeight = dp(28);
         params.y = Math.max(dp(2), (sbHeight - pillHeight) / 2);
         return params;
     }
@@ -277,22 +290,22 @@ public class DynamicIslandOverlayManager {
     private void buildViews() {
         FrameLayout root = new FrameLayout(context);
 
-        // --- 1. Compact Pill View ---
+        // --- 1. Compact Pill View (Ultra-compact to fit camera hole without overlapping icons) ---
         pillLayout = new LinearLayout(context);
         pillLayout.setOrientation(LinearLayout.HORIZONTAL);
         pillLayout.setGravity(Gravity.CENTER_VERTICAL);
-        pillLayout.setPadding(dp(12), dp(4), dp(12), dp(4));
+        pillLayout.setPadding(dp(10), dp(4), dp(10), dp(4));
 
         GradientDrawable pillBg = new GradientDrawable();
         pillBg.setShape(GradientDrawable.RECTANGLE);
         pillBg.setColor(Color.parseColor("#0a0d14"));
-        pillBg.setCornerRadius(dp(18));
+        pillBg.setCornerRadius(dp(15));
         pillBg.setStroke(dp(1), Color.parseColor("#3b82f6"));
         pillLayout.setBackground(pillBg);
 
         pillPulseDot = new View(context);
-        LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(dp(7), dp(7));
-        dotLp.rightMargin = dp(6);
+        LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(dp(6), dp(6));
+        dotLp.rightMargin = dp(5);
         pillPulseDot.setLayoutParams(dotLp);
         GradientDrawable dotBg = new GradientDrawable();
         dotBg.setShape(GradientDrawable.OVAL);
@@ -302,34 +315,21 @@ public class DynamicIslandOverlayManager {
 
         pillTextProgress = new TextView(context);
         pillTextProgress.setTextColor(Color.parseColor("#ffffff"));
-        pillTextProgress.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        pillTextProgress.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         pillTextProgress.setTypeface(null, android.graphics.Typeface.BOLD);
+        pillTextProgress.setSingleLine(true);
         pillLayout.addView(pillTextProgress);
-
-        pillTextName = new TextView(context);
-        pillTextName.setTextColor(Color.parseColor("#94a3b8"));
-        pillTextName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        pillTextName.setSingleLine(true);
-        pillTextName.setEllipsize(TextUtils.TruncateAt.END);
-        pillTextName.setMaxWidth(dp(110));
-        LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        nameLp.leftMargin = dp(5);
-        pillTextName.setLayoutParams(nameLp);
-        pillLayout.addView(pillTextName);
 
         TextView pillChevron = new TextView(context);
         pillChevron.setText(" ▼");
         pillChevron.setTextColor(Color.parseColor("#64748b"));
-        pillChevron.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9);
+        pillChevron.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8);
         pillLayout.addView(pillChevron);
 
         pillLayout.setOnClickListener(v -> expandIsland(true));
         root.addView(pillLayout);
 
-        // --- 2. Expanded Card View ---
+        // --- 2. Expanded Card View (Shown when user taps the pill) ---
         cardLayout = new LinearLayout(context);
         cardLayout.setOrientation(LinearLayout.VERTICAL);
         cardLayout.setPadding(dp(14), dp(12), dp(14), dp(12));
@@ -461,17 +461,17 @@ public class DynamicIslandOverlayManager {
         mainHandler.post(() -> {
             try {
                 if (expand) {
-                    pillLayout.setVisibility(View.GONE);
-                    cardLayout.setVisibility(View.VISIBLE);
+                    if (pillLayout != null) pillLayout.setVisibility(View.GONE);
+                    if (cardLayout != null) cardLayout.setVisibility(View.VISIBLE);
                 } else {
-                    cardLayout.setVisibility(View.GONE);
-                    pillLayout.setVisibility(View.VISIBLE);
+                    if (cardLayout != null) cardLayout.setVisibility(View.GONE);
+                    if (pillLayout != null) pillLayout.setVisibility(View.VISIBLE);
                 }
-                if (rootView.isAttachedToWindow()) {
+                if (rootView != null && rootView.isAttachedToWindow()) {
                     windowManager.updateViewLayout(rootView, createLayoutParams());
                 }
-            } catch (Exception e) {
-                e.printStackTrace();
+            } catch (Throwable t) {
+                t.printStackTrace();
             }
         });
     }
@@ -488,98 +488,112 @@ public class DynamicIslandOverlayManager {
                     autoDismissRunnable = null;
                 }
 
-                if (!isShowing) {
-                    buildViews();
-                    windowManager.addView(rootView, createLayoutParams());
-                    isShowing = true;
-                    isExpanded = false;
+                // If already attached, safely remove before adding fresh layout
+                if (rootView != null) {
+                    try {
+                        windowManager.removeView(rootView);
+                    } catch (Exception ignored) {}
+                    rootView = null;
+                    isShowing = false;
                 }
+
+                buildViews();
+                windowManager.addView(rootView, createLayoutParams());
+                isShowing = true;
+                isExpanded = false;
+
                 applyData(name, progress, speed, size, status);
-            } catch (Exception e) {
-                e.printStackTrace();
+            } catch (Throwable t) {
+                t.printStackTrace();
+                isShowing = false;
+                rootView = null;
             }
         });
     }
 
     public void update(int progress, String speed, String size, String status) {
-        if (!isShowing || rootView == null) return;
         mainHandler.post(() -> {
             try {
+                if (!isShowing || rootView == null || !rootView.isAttachedToWindow()) {
+                    show(null, progress, speed, size, status);
+                    return;
+                }
                 applyData(null, progress, speed, size, status);
-            } catch (Exception e) {
-                e.printStackTrace();
+            } catch (Throwable t) {
+                t.printStackTrace();
             }
         });
     }
 
     private void applyData(String name, int progress, String speed, String size, String status) {
-        this.currentProgress = Math.min(100, Math.max(0, progress));
-        this.currentStatus = status != null ? status : "running";
+        try {
+            this.currentProgress = Math.min(100, Math.max(0, progress));
+            this.currentStatus = status != null ? status : "running";
 
-        int themeColor = Color.parseColor("#3b82f6");
-        if ("success".equals(currentStatus)) {
-            themeColor = Color.parseColor("#10b981");
-        } else if ("error".equals(currentStatus)) {
-            themeColor = Color.parseColor("#ef4444");
-        } else if ("paused".equals(currentStatus)) {
-            themeColor = Color.parseColor("#f59e0b");
-        }
-
-        // Apply to pill
-        if (name != null && pillTextName != null) {
-            pillTextName.setText(name);
-        }
-        if (pillTextProgress != null) {
+            int themeColor = Color.parseColor("#3b82f6");
             if ("success".equals(currentStatus)) {
-                pillTextProgress.setText("已完成");
-            } else if ("paused".equals(currentStatus)) {
-                pillTextProgress.setText("已暂停");
+                themeColor = Color.parseColor("#10b981");
             } else if ("error".equals(currentStatus)) {
-                pillTextProgress.setText("异常");
-            } else {
-                pillTextProgress.setText(currentProgress + "%" + (TextUtils.isEmpty(speed) ? "" : " · " + speed));
+                themeColor = Color.parseColor("#ef4444");
+            } else if ("paused".equals(currentStatus)) {
+                themeColor = Color.parseColor("#f59e0b");
             }
-        }
-        if (pillPulseDot != null) {
-            GradientDrawable d = (GradientDrawable) pillPulseDot.getBackground();
-            if (d != null) d.setColor(themeColor);
-        }
-        if (pillLayout != null) {
-            GradientDrawable bg = (GradientDrawable) pillLayout.getBackground();
-            if (bg != null) bg.setStroke(dp(1), themeColor);
-        }
 
-        // Apply to card
-        if (name != null && cardTitle != null) {
-            cardTitle.setText(name);
-        }
-        if (cardBigPct != null) {
-            cardBigPct.setText(currentProgress + "%");
-            cardBigPct.setTextColor(themeColor);
-        }
-        if (cardSpeed != null) {
-            cardSpeed.setText("success".equals(currentStatus) ? "传输已顺利完成" : (TextUtils.isEmpty(speed) ? "" : speed));
-        }
-        if (cardSize != null && !TextUtils.isEmpty(size)) {
-            cardSize.setText(size);
-        }
-        if (cardProgressFill != null) {
-            int totalTrackWidth = dp(300);
-            int fillWidth = Math.max(dp(6), (totalTrackWidth * currentProgress) / 100);
-            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) cardProgressFill.getLayoutParams();
-            lp.width = fillWidth;
-            cardProgressFill.setLayoutParams(lp);
-            GradientDrawable fillBg = (GradientDrawable) cardProgressFill.getBackground();
-            if (fillBg != null) fillBg.setColor(themeColor);
-        }
-
-        // Auto dismiss celebration
-        if ("success".equals(currentStatus)) {
-            if (autoDismissRunnable != null) {
-                mainHandler.removeCallbacks(autoDismissRunnable);
+            // Apply to pill
+            if (pillTextProgress != null) {
+                if ("success".equals(currentStatus)) {
+                    pillTextProgress.setText("已完成");
+                } else if ("paused".equals(currentStatus)) {
+                    pillTextProgress.setText("已暂停");
+                } else if ("error".equals(currentStatus)) {
+                    pillTextProgress.setText("异常");
+                } else {
+                    pillTextProgress.setText(currentProgress + "%" + (TextUtils.isEmpty(speed) ? "" : " · " + speed));
+                }
             }
-            autoDismissRunnable = this::hide;
-            mainHandler.postDelayed(autoDismissRunnable, 3500);
+            if (pillPulseDot != null) {
+                GradientDrawable d = (GradientDrawable) pillPulseDot.getBackground();
+                if (d != null) d.setColor(themeColor);
+            }
+            if (pillLayout != null) {
+                GradientDrawable bg = (GradientDrawable) pillLayout.getBackground();
+                if (bg != null) bg.setStroke(dp(1), themeColor);
+            }
+
+            // Apply to card
+            if (name != null && cardTitle != null) {
+                cardTitle.setText(name);
+            }
+            if (cardBigPct != null) {
+                cardBigPct.setText(currentProgress + "%");
+                cardBigPct.setTextColor(themeColor);
+            }
+            if (cardSpeed != null) {
+                cardSpeed.setText("success".equals(currentStatus) ? "传输已顺利完成" : (TextUtils.isEmpty(speed) ? "" : speed));
+            }
+            if (cardSize != null && !TextUtils.isEmpty(size)) {
+                cardSize.setText(size);
+            }
+            if (cardProgressFill != null && cardProgressFill.getLayoutParams() instanceof FrameLayout.LayoutParams) {
+                int totalTrackWidth = dp(300);
+                int fillWidth = Math.max(dp(6), (totalTrackWidth * currentProgress) / 100);
+                FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) cardProgressFill.getLayoutParams();
+                lp.width = fillWidth;
+                cardProgressFill.setLayoutParams(lp);
+                GradientDrawable fillBg = (GradientDrawable) cardProgressFill.getBackground();
+                if (fillBg != null) fillBg.setColor(themeColor);
+            }
+
+            // Auto dismiss celebration
+            if ("success".equals(currentStatus)) {
+                if (autoDismissRunnable != null) {
+                    mainHandler.removeCallbacks(autoDismissRunnable);
+                }
+                autoDismissRunnable = this::hide;
+                mainHandler.postDelayed(autoDismissRunnable, 3500);
+            }
+        } catch (Throwable t) {
+            t.printStackTrace();
         }
     }
 
@@ -590,11 +604,14 @@ public class DynamicIslandOverlayManager {
                     mainHandler.removeCallbacks(autoDismissRunnable);
                     autoDismissRunnable = null;
                 }
-                if (isShowing && rootView != null && rootView.isAttachedToWindow()) {
-                    windowManager.removeView(rootView);
+                if (rootView != null) {
+                    try {
+                        windowManager.removeView(rootView);
+                    } catch (Exception ignored) {}
+                    rootView = null;
                 }
-            } catch (Exception e) {
-                e.printStackTrace();
+            } catch (Throwable t) {
+                t.printStackTrace();
             } finally {
                 isShowing = false;
                 isExpanded = false;

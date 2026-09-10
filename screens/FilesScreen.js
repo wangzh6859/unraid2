@@ -413,7 +413,7 @@ export default function FilesScreen({ navigation }) {
 
     // Register with Android Foreground Service for lockscreen background transfer
     try {
-      backgroundTransferManager.notifyTransferStarted(taskItem);
+      await backgroundTransferManager.notifyTransferStarted(taskItem);
     } catch (_) {}
 
     let tempLocalUri = null;
@@ -832,6 +832,12 @@ export default function FilesScreen({ navigation }) {
             }
             return t;
           }));
+          backgroundTransferManager.updateForegroundProgress({
+            name: taskItem.name,
+            progress: pct,
+            speedStr: microSpeedStr,
+            sizeText: `${formatBytesFixed(currentBytes)} / ${formatBytesFixed(totalSize)}`,
+          });
         }
       }
 
@@ -861,7 +867,7 @@ export default function FilesScreen({ navigation }) {
 
       // Refresh directory list
       loadDirectory(cleanBaseUrl, apiToken, currentPath);
-      backgroundTransferManager.notifyTransferEnded(taskId, 'success', {
+      await backgroundTransferManager.notifyTransferEnded(taskId, 'success', {
         name: taskItem.name,
         sizeText: formatBytesFixed(totalSize),
       });
@@ -879,7 +885,7 @@ export default function FilesScreen({ navigation }) {
       }
 
       const isCancelled = abortController.signal.aborted || err.name === 'AbortError' || (err.message && err.message.includes('abort'));
-      backgroundTransferManager.notifyTransferEnded(taskId, isCancelled ? 'paused' : 'error', {
+      await backgroundTransferManager.notifyTransferEnded(taskId, isCancelled ? 'paused' : 'error', {
         name: taskItem.name,
       });
       if (isCancelled) {
@@ -925,7 +931,7 @@ export default function FilesScreen({ navigation }) {
       }
     } catch (_) {}
     try {
-      backgroundTransferManager.notifyTransferEnded(taskId);
+      backgroundTransferManager.notifyTransferEnded(taskId, 'paused');
     } catch (_) {}
     setTransfers(prev => {
       const next = prev.map(t => {
@@ -1009,7 +1015,7 @@ export default function FilesScreen({ navigation }) {
         return next;
       });
       setIsTransferVisible(true);
-      backgroundTransferManager.notifyTransferStarted(newTask);
+      await backgroundTransferManager.notifyTransferStarted(newTask);
 
       const downloadUrl = getDirectUrl(item.path);
       const localUri = FileSystem.cacheDirectory + 'dl_' + Date.now() + '_' + encodeURIComponent(item.name);
@@ -1026,7 +1032,7 @@ export default function FilesScreen({ navigation }) {
       }
 
       await FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => {});
-      backgroundTransferManager.notifyTransferEnded(taskId, 'success', {
+      await backgroundTransferManager.notifyTransferEnded(taskId, 'success', {
         name: item.name,
         sizeText: formatBytesFixed(item.size || 0),
       });
@@ -1045,7 +1051,7 @@ export default function FilesScreen({ navigation }) {
       });
     } catch (e) {
       console.log('[FilesScreen] Download error:', e);
-      backgroundTransferManager.notifyTransferEnded(taskId, 'error', {
+      await backgroundTransferManager.notifyTransferEnded(taskId, 'error', {
         name: item.name,
       });
       showConfirm({
