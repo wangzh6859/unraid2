@@ -27,11 +27,14 @@
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
         "android.permission.POST_NOTIFICATIONS",
-        "android.permission.WAKE_LOCK"
+        "android.permission.WAKE_LOCK",
+        "android.permission.CHANGE_WIFI_MULTICAST_STATE",
+        "android.permission.ACCESS_WIFI_STATE"
       ]
     },
     "plugins": [
-      "./plugins/withForegroundService"
+      "./plugins/withForegroundService",
+      "./plugins/withWakeOnLan"
     ]
   }
 }

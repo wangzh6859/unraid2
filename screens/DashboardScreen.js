@@ -13,6 +13,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
+import { getWolConfig, sendWakeOnLanPacket, formatMacAddress } from '../utils/wolManager';
 
 export default function DashboardScreen({ navigation }) {
   const { colors } = useTheme();
@@ -20,6 +21,11 @@ export default function DashboardScreen({ navigation }) {
 
   // 核心状态：是否已配置 Unraid 信息
   const [isConfigured, setIsConfigured] = useState(true);
+
+  // WOL 网络唤醒状态
+  const [wolConfig, setWolConfig] = useState({ mac: '', broadcastIp: '255.255.255.255', port: 9 });
+  const [isWaking, setIsWaking] = useState(false);
+  const wolPollTimerRef = useRef(null);
 
   // 登录表单状态
   const [inputUrl, setInputUrl] = useState('');
@@ -92,6 +98,14 @@ export default function DashboardScreen({ navigation }) {
     });
   };
 
+  // 初始加载本地已缓存的 WOL 配置
+  useEffect(() => {
+    getWolConfig().then(cfg => setWolConfig(cfg));
+    return () => {
+      if (wolPollTimerRef.current) clearInterval(wolPollTimerRef.current);
+    };
+  }, []);
+
   // 核心拉取逻辑
   const fetchServerData = async () => {
     try {
@@ -111,6 +125,23 @@ export default function DashboardScreen({ navigation }) {
 
       const data = await response.json();
       setServerStatus('online');
+
+      // 若此前正处于唤醒轮询等待中，服务器已恢复上线，终止轮询并给予告警提示
+      if (isWaking) {
+        setIsWaking(false);
+        if (wolPollTimerRef.current) {
+          clearInterval(wolPollTimerRef.current);
+          wolPollTimerRef.current = null;
+        }
+        showConfirm({
+          type: 'success',
+          title: '服务器已上线',
+          message: 'Unraid 主机已成功启动并恢复通信！',
+          confirmText: '好的',
+          showCancel: false,
+        });
+      }
+
       if (data.stats) setStats(data.stats);
       if (data.gpu) setGpu(data.gpu);
       if (data.storage) setStorage(data.storage);
@@ -118,6 +149,11 @@ export default function DashboardScreen({ navigation }) {
       if (data.vms) setVms(data.vms);
       if (data.parity) setParity(data.parity);
       if (data.network) {
+        // 自动提取并持久化服务端物理 MAC 地址
+        if (data.network.mac) {
+          AsyncStorage.setItem('@server_mac_address', data.network.mac);
+          setWolConfig(prev => ({ ...prev, mac: data.network.mac }));
+        }
         const now = Date.now();
         if (prevNetwork.current.time > 0) {
           const timeDiff = (now - prevNetwork.current.time) / 1000;
@@ -131,6 +167,59 @@ export default function DashboardScreen({ navigation }) {
       }
     } catch (error) {
       setServerStatus('offline');
+    }
+  };
+
+  // 触发网络唤醒
+  const handleTriggerWol = async () => {
+    try {
+      const cfg = await getWolConfig();
+      if (!cfg.mac) {
+        showConfirm({
+          type: 'warning',
+          title: '未检测到 MAC 地址',
+          message: '尚未获取到 Unraid 物理网卡 MAC 地址。请先在【设置 -> 网络唤醒】中手动填写，或开机联网后自动抓取。',
+          confirmText: '去设置',
+          cancelText: '取消',
+          onConfirm: () => navigation.navigate('设置'),
+        });
+        return;
+      }
+
+      setIsWaking(true);
+      const res = await sendWakeOnLanPacket(cfg.mac, cfg.broadcastIp, cfg.port);
+
+      showConfirm({
+        type: 'success',
+        title: '唤醒魔术包已广播',
+        message: `已向局域网广播发送 ${res.packetsSent || 3} 次 WOL 唤醒数据包 (目标 MAC: ${formatMacAddress(cfg.mac)})。\n\n主机冷启动与系统引导通常需要 1~3 分钟，App 正在自动轮询重试连接...`,
+        confirmText: '好的，后台等待',
+        showCancel: false,
+      });
+
+      // 启动自动重连轮询 (每 5 秒探测一次)
+      if (wolPollTimerRef.current) clearInterval(wolPollTimerRef.current);
+      let attempts = 0;
+      wolPollTimerRef.current = setInterval(async () => {
+        attempts++;
+        try {
+          await fetchServerData();
+        } catch (_) {}
+        // 最多轮询 3 分钟 (36 次 * 5秒 = 180秒)
+        if (attempts >= 36) {
+          if (wolPollTimerRef.current) clearInterval(wolPollTimerRef.current);
+          setIsWaking(false);
+        }
+      }, 5000);
+    } catch (err) {
+      setIsWaking(false);
+      showConfirm({
+        type: 'warning',
+        title: '唤醒失败',
+        message: err.message || '发送 Wake-on-LAN 失败，请检查手机是否已连接局域网 Wi-Fi。',
+        confirmText: '知道了',
+        showCancel: false,
+      });
     }
   };
 
@@ -352,6 +441,41 @@ export default function DashboardScreen({ navigation }) {
           <Text style={[styles.syslogHeaderBtnText, { color: colors.textStrong }]}>系统日志</Text>
         </TouchableOpacity>
       </View>
+
+      {/* 离线网络唤醒开机卡片 (WOL Remote Wake Card) */}
+      {serverStatus === 'offline' && (
+        <View style={[styles.card, styles.wolCard]}>
+          <View style={styles.wolHeaderRow}>
+            <View style={styles.wolIconBadge}>
+              <Zap color="#ffffff" size={20} />
+            </View>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.wolCardTitle}>服务器处于离线状态</Text>
+              <Text style={styles.wolCardSub}>
+                {wolConfig.mac
+                  ? `物理 MAC: ${formatMacAddress(wolConfig.mac)}`
+                  : '未检测到物理 MAC 地址，请前往设置配置'}
+              </Text>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.wolActionBtn, isWaking && styles.wolActionBtnWaking]}
+            onPress={handleTriggerWol}
+            disabled={isWaking}
+            activeOpacity={0.8}
+          >
+            {isWaking ? (
+              <ActivityIndicator color="#ffffff" size="small" style={{ marginRight: 8 }} />
+            ) : (
+              <Zap color="#ffffff" size={18} style={{ marginRight: 6 }} />
+            )}
+            <Text style={styles.wolActionBtnText}>
+              {isWaking ? '已发送唤醒包，正在等待开机上线...' : '⚡ 网络唤醒开机 (Wake-on-LAN)'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Hardware Telemetry Grids */}
       <View style={styles.gridRow}>
@@ -616,6 +740,56 @@ const createStyles = (colors) => StyleSheet.create({
   },
   syslogHeaderBtnText: {
     fontSize: 12,
+    fontWeight: 'bold',
+  },
+
+  wolCard: {
+    backgroundColor: colors.mode === 'dark' ? 'rgba(30, 41, 59, 0.95)' : '#f8fafc',
+    borderWidth: 1,
+    borderColor: colors.mode === 'dark' ? 'rgba(239, 68, 68, 0.35)' : 'rgba(239, 68, 68, 0.25)',
+    borderRadius: 16,
+    marginBottom: 20,
+    padding: 16,
+  },
+  wolHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  wolIconBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: colors.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  wolCardTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+    marginBottom: 2,
+  },
+  wolCardSub: {
+    fontSize: 12,
+    color: colors.sub,
+  },
+  wolActionBtn: {
+    backgroundColor: colors.accent,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginTop: 4,
+  },
+  wolActionBtnWaking: {
+    backgroundColor: colors.amber,
+  },
+  wolActionBtnText: {
+    color: '#ffffff',
+    fontSize: 14,
     fontWeight: 'bold',
   },
 

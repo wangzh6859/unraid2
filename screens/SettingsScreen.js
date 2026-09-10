@@ -13,7 +13,7 @@ import {
   HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server,
   LogOut, Moon, Sun, FolderDown, RefreshCw, Trash2, Key, Power,
   RotateCw, AlertTriangle, CheckCircle, Fingerprint, ShieldAlert,
-  Sparkles, DownloadCloud, ExternalLink, Activity,
+  Sparkles, DownloadCloud, ExternalLink, Activity, Zap,
 } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import {
@@ -23,6 +23,10 @@ import {
 } from '../utils/cacheManager';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import backgroundTransferManager from '../utils/backgroundTransferManager';
+import {
+  getWolConfig, saveWolConfig, sendWakeOnLanPacket,
+  isValidMacAddress, formatMacAddress,
+} from '../utils/wolManager';
 
 export default function SettingsScreen({ navigation }) {
   // Modern squircle confirm & result dialog state
@@ -80,6 +84,12 @@ export default function SettingsScreen({ navigation }) {
 
   // Power action state
   const [powerLoading, setPowerLoading] = useState(false);
+
+  // Wake-on-LAN (WOL) state
+  const [wolMac, setWolMac] = useState('');
+  const [wolBroadcastIp, setWolBroadcastIp] = useState('255.255.255.255');
+  const [wolPort, setWolPort] = useState(9);
+  const [wolTesting, setWolTesting] = useState(false);
 
   // Security & Biometrics
   const [appLockEnabled, setAppLockEnabled] = useState(false);
@@ -259,6 +269,11 @@ export default function SettingsScreen({ navigation }) {
       const bytes = await getPreviewCacheSize();
       setCacheSizeBytes(bytes);
       setCacheSize(fmtBytes(bytes));
+
+      const wolCfg = await getWolConfig();
+      setWolMac(wolCfg.mac);
+      setWolBroadcastIp(wolCfg.broadcastIp);
+      setWolPort(wolCfg.port);
     } catch (e) {
       console.log(e);
     }
@@ -377,6 +392,59 @@ export default function SettingsScreen({ navigation }) {
     setServerEditVisible(true);
   };
 
+  const editWolMac = () => {
+    setServerInput(wolMac);
+    setServerEditField('wol_mac');
+    setServerEditVisible(true);
+  };
+
+  const editWolBroadcastIp = () => {
+    setServerInput(wolBroadcastIp || '255.255.255.255');
+    setServerEditField('wol_broadcast');
+    setServerEditVisible(true);
+  };
+
+  const editWolPort = () => {
+    setServerInput(String(wolPort || 9));
+    setServerEditField('wol_port');
+    setServerEditVisible(true);
+  };
+
+  const handleTestWol = async () => {
+    if (!wolMac) {
+      showConfirm({
+        type: 'warning',
+        title: '未设置 MAC 地址',
+        message: '请先填写服务器物理 MAC 地址，或连接 Unraid 后自动抓取。',
+        confirmText: '好的',
+        showCancel: false,
+      });
+      return;
+    }
+
+    setWolTesting(true);
+    try {
+      const res = await sendWakeOnLanPacket(wolMac, wolBroadcastIp, wolPort);
+      showConfirm({
+        type: 'success',
+        title: 'WOL 测试魔术包已广播',
+        message: `已向 ${res.broadcastIp || wolBroadcastIp}:${res.port || wolPort} 成功广播 ${res.packetsSent || 3} 次唤醒数据包！\n目标 MAC: ${formatMacAddress(wolMac)}`,
+        confirmText: '太棒了',
+        showCancel: false,
+      });
+    } catch (e) {
+      showConfirm({
+        type: 'warning',
+        title: '测试发送失败',
+        message: e.message || '发送 Wake-on-LAN 数据包异常，请检查网络权限。',
+        confirmText: '知道了',
+        showCancel: false,
+      });
+    } finally {
+      setWolTesting(false);
+    }
+  };
+
   const confirmServerEdit = async () => {
     const v = (serverInput || '').trim();
     if (serverEditField === 'url') {
@@ -388,12 +456,35 @@ export default function SettingsScreen({ navigation }) {
     } else if (serverEditField === 'token') {
       await AsyncStorage.setItem('@api_token', v);
       setApiToken(v);
+    } else if (serverEditField === 'wol_mac') {
+      if (v && !isValidMacAddress(v)) {
+        showConfirm({
+          type: 'warning',
+          title: 'MAC 地址格式错误',
+          message: '请输入正确的 12 位 16 进制物理 MAC 地址（例如 AA:BB:CC:DD:EE:FF）。',
+          confirmText: '重新输入',
+          showCancel: false,
+        });
+        return;
+      }
+      const formatted = formatMacAddress(v);
+      await saveWolConfig({ mac: formatted });
+      setWolMac(formatted);
+    } else if (serverEditField === 'wol_broadcast') {
+      const bIp = v || '255.255.255.255';
+      await saveWolConfig({ broadcastIp: bIp });
+      setWolBroadcastIp(bIp);
+    } else if (serverEditField === 'wol_port') {
+      const p = parseInt(v, 10) || 9;
+      await saveWolConfig({ port: p });
+      setWolPort(p);
     }
+
     setServerEditVisible(false);
     showConfirm({
       type: 'success',
       title: '配置已生效',
-      message: '服务器连接配置已实时保存并即时生效！',
+      message: '设置已实时保存并即时生效！',
       confirmText: '好的',
       showCancel: false,
     });
@@ -600,6 +691,68 @@ export default function SettingsScreen({ navigation }) {
           </View>
           <View style={[styles.powerActionTag, { borderColor: 'rgba(239, 68, 68, 0.3)', backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
             <Text style={[styles.powerActionTagText, { color: colors.red }]}>关机</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* Wake-on-LAN Remote Wake Card */}
+      <Text style={styles.sectionTitle}>网络唤醒 (Wake-on-LAN)</Text>
+      <View style={styles.card}>
+        <TouchableOpacity style={styles.row} onPress={editWolMac}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+            <Zap color={colors.accent} size={20} />
+          </View>
+          <View style={styles.infoBox}>
+            <Text style={styles.rowTitle}>服务器物理 MAC</Text>
+            <Text style={styles.rowSub} numberOfLines={1}>
+              {wolMac ? formatMacAddress(wolMac) : '未检测到 (联网刷新自动同步)'}
+            </Text>
+          </View>
+          <Text style={styles.editHint}>修改</Text>
+        </TouchableOpacity>
+
+        <View style={styles.divider} />
+
+        <TouchableOpacity style={styles.row} onPress={editWolBroadcastIp}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+            <Activity color={colors.green} size={20} />
+          </View>
+          <View style={styles.infoBox}>
+            <Text style={styles.rowTitle}>局域网广播 IP</Text>
+            <Text style={styles.rowSub} numberOfLines={1}>{wolBroadcastIp || '255.255.255.255'}</Text>
+          </View>
+          <Text style={styles.editHint}>修改</Text>
+        </TouchableOpacity>
+
+        <View style={styles.divider} />
+
+        <TouchableOpacity style={styles.row} onPress={editWolPort}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(139, 92, 246, 0.15)' }]}>
+            <Key color={colors.purple} size={20} />
+          </View>
+          <View style={styles.infoBox}>
+            <Text style={styles.rowTitle}>唤醒端口 (UDP)</Text>
+            <Text style={styles.rowSub} numberOfLines={1}>端口 {wolPort || 9}</Text>
+          </View>
+          <Text style={styles.editHint}>修改</Text>
+        </TouchableOpacity>
+
+        <View style={styles.divider} />
+
+        <TouchableOpacity style={styles.row} onPress={handleTestWol} disabled={wolTesting}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}>
+            <Zap color={colors.amber} size={20} />
+          </View>
+          <View style={styles.infoBox}>
+            <Text style={[styles.rowTitle, { color: colors.amber }]}>立即测试唤醒包</Text>
+            <Text style={styles.rowSub}>向局域网广播 UDP 魔术包测试路由连通</Text>
+          </View>
+          <View style={[styles.powerActionTag, { borderColor: 'rgba(245, 158, 11, 0.3)', backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}>
+            {wolTesting ? (
+              <ActivityIndicator color={colors.amber} size="small" />
+            ) : (
+              <Text style={[styles.powerActionTagText, { color: colors.amber }]}>测试</Text>
+            )}
           </View>
         </TouchableOpacity>
       </View>
@@ -816,22 +969,42 @@ export default function SettingsScreen({ navigation }) {
             <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
               {serverEditField === 'url' ? (
                 <Server color={colors.accent} size={28} />
+              ) : serverEditField === 'wol_mac' ? (
+                <Zap color={colors.accent} size={28} />
+              ) : serverEditField === 'wol_broadcast' ? (
+                <Activity color={colors.green} size={28} />
               ) : (
                 <Key color={colors.accent} size={28} />
               )}
             </View>
-            <Text style={styles.limitTitle}>{serverEditField === 'url' ? 'Unraid 服务器地址' : 'API 访问 Token'}</Text>
+            <Text style={styles.limitTitle}>
+              {serverEditField === 'url' ? 'Unraid 服务器地址' :
+               serverEditField === 'token' ? 'API 访问 Token' :
+               serverEditField === 'wol_mac' ? '服务器物理 MAC 地址' :
+               serverEditField === 'wol_broadcast' ? '局域网广播 IP 地址' :
+               'WOL 唤醒端口'}
+            </Text>
             <Text style={styles.dialogSub}>
-              {serverEditField === 'url' ? '输入 Unraid WebGUI 地址 (如 http://192.168.1.100)' : '输入由系统生成的 API 安全访问密钥'}
+              {serverEditField === 'url' ? '输入 Unraid WebGUI 地址 (如 http://192.168.1.100)' :
+               serverEditField === 'token' ? '输入由系统生成的 API 安全访问密钥' :
+               serverEditField === 'wol_mac' ? '输入 Unraid 网卡 12 位物理 MAC (如 AA:BB:CC:DD:EE:FF)' :
+               serverEditField === 'wol_broadcast' ? '默认 255.255.255.255 全局广播，支持子网定向广播' :
+               '标准唤醒协议通常使用 UDP 端口 9 或 7'}
             </Text>
             <TextInput
               style={styles.limitInput}
               value={serverInput}
               onChangeText={setServerInput}
               autoFocus
-              autoCapitalize="none"
+              autoCapitalize={serverEditField === 'wol_mac' ? 'characters' : 'none'}
               secureTextEntry={serverEditField === 'token'}
-              placeholder={serverEditField === 'url' ? 'http://192.168.1.100' : '输入密钥'}
+              placeholder={
+                serverEditField === 'url' ? 'http://192.168.1.100' :
+                serverEditField === 'token' ? '输入密钥' :
+                serverEditField === 'wol_mac' ? 'AA:BB:CC:DD:EE:FF' :
+                serverEditField === 'wol_broadcast' ? '255.255.255.255' :
+                '9'
+              }
               placeholderTextColor={colors.muted}
             />
             <View style={styles.renameBtns}>

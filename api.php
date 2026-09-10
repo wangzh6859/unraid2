@@ -473,6 +473,43 @@ function handle_poweroff() {
 // -------------------------------------------------------------
 // System Status & Telemetry
 // -------------------------------------------------------------
+function get_server_mac() {
+    // 1. Try physical network interfaces first (eth0, br0, bond0, etc.)
+    $candidateIfaces = ['eth0', 'br0', 'bond0', 'eth1', 'enp3s0', 'enp4s0', 'enp5s0', 'enp6s0'];
+    foreach ($candidateIfaces as $iface) {
+        $path = "/sys/class/net/{$iface}/address";
+        if (file_exists($path)) {
+            $mac = trim(@file_get_contents($path));
+            if (!empty($mac) && $mac !== '00:00:00:00:00:00' && preg_match('/^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/', $mac)) {
+                return strtoupper($mac);
+            }
+        }
+    }
+
+    // 2. Scan all sysfs net interfaces (excluding virtual/docker/loopback/veth/virbr)
+    $ifaces = @glob('/sys/class/net/*/address');
+    if ($ifaces) {
+        foreach ($ifaces as $addrFile) {
+            $ifName = basename(dirname($addrFile));
+            if ($ifName === 'lo' || strpos($ifName, 'docker') === 0 || strpos($ifName, 'veth') === 0 || strpos($ifName, 'virbr') === 0 || strpos($ifName, 'shim') === 0) {
+                continue;
+            }
+            $mac = trim(@file_get_contents($addrFile));
+            if (!empty($mac) && $mac !== '00:00:00:00:00:00' && preg_match('/^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/', $mac)) {
+                return strtoupper($mac);
+            }
+        }
+    }
+
+    // 3. Fallback via ip link / ifconfig
+    $ipLink = @shell_exec('ip link show 2>/dev/null');
+    if ($ipLink && preg_match('/link\/ether\s+([0-9a-fA-F:]{17})/i', $ipLink, $m)) {
+        return strtoupper(trim($m[1]));
+    }
+
+    return '';
+}
+
 function handle_status() {
     // 1. CPU Usage
     $cpuUsage = 0;
@@ -851,7 +888,8 @@ function handle_status() {
         ],
         'network' => [
             'rx_bytes' => $netRx,
-            'tx_bytes' => $netTx
+            'tx_bytes' => $netTx,
+            'mac' => get_server_mac()
         ],
         'parity' => $parityData,
         'csrf_token' => get_system_csrf_token()

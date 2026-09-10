@@ -43,6 +43,9 @@ jobs:
       - name: Prebuild
         run: npx expo prebuild --platform android --clean --no-install
 
+      - name: Setup Wake-on-LAN Native Module
+        run: node scripts/setup-wake-on-lan.js
+
       - name: Configure APK Signing
         run: |
           echo "KEY_ALIAS=${{ secrets.ANDROID_ALIAS }}" >> $GITHUB_ENV
@@ -88,11 +91,11 @@ jobs:
               '## 📱 Unraid Mobile Manager v1.3.${{ github.run_number }}',
               '',
               '### 🌟 本次版本核心更新与功能特性',
-              '- 🐛 **修复首次上传闪退**：深度适配 Android 14 前台服务规范，增加 FGS dataSync 显式类型保护与生命周期平滑过渡，底层 Throwable 兜底捕获，彻底根除应用首次上传闪退问题。',
-              '- 📦 **修复文件压缩与解压 JSON 解析异常**：优化请求体传输机制（切换为原生 JSON POST），服务端支持 CLI 工具与 PHP ZipArchive 双重打包解压引擎，消除 JSON parse error: unexpected end of input 异常。',
-              '- 🚀 **通知栏点击直达跳转修复**：修复点击通知栏上传进度时手机弹出“选择应用”的系统 Intent 冲突缺陷，显式包名与 singleTask 强锁定，点击通知栏秒速聚焦 Unraid 并直达传输管理。',
-              '- 🛡️ **生物识别安全锁 (防误触 & 3分钟超时)**：智能忽略下拉状态栏与快捷开关，仅在应用启动及切入后台超过 3 分钟后要求指纹验证。',
-              '- ⚡ **Android 前台服务持续传输**：全场景覆盖大文件分片上传与小文件直传，锁屏与切后台平稳保活。',
+              '- ⚡ **新增网络唤醒远程开机 (Wake-on-LAN / WOL)**：深度集成 Android 原生 UDP 广播底层，支持向局域网广播 Magic Packet 唤醒魔术包。',
+              '- 🔍 **物理 MAC 地址自动探测**：服务器端自动抓取物理网卡 MAC 地址并在 App 连接时静默同步缓存，彻底免去手动输入背诵繁琐。',
+              '- 🔌 **离线智能感知与一键唤醒**：首页检测到 Unraid 离线或关机时，自动弹出醒目的网络唤醒卡片；点击一键唤醒并自动轮询等待服务器上线。',
+              '- ⚙️ **设置页 WOL 深度配置与快速测试**：支持自定义或修改物理 MAC、局域网广播 IP（默认 255.255.255.255）及唤醒端口（默认 9），并支持一键测试广播。',
+              '- 🛡️ **远程电源管理全闭环**：与此前的安全锁远程关机、重启相配合，实现全生命周期无忧远程电源中控。',
               '',
               '### 📦 提交历史目录 (Changelog)',
               logText,
