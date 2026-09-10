@@ -1357,18 +1357,29 @@ export default function FilesScreen({ navigation }) {
     setIsCompressing(true);
     try {
       const sourcePaths = items.map(it => it.path);
-      const url = `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_compress`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json; charset=utf-8',
-        },
-        body: JSON.stringify({
-          sources: sourcePaths,
-          target_dir: currentPath,
-          zip_name: name,
-        }),
-      });
+      const cleanBaseUrl = (serverUrl || '').replace(/\/+$/, '');
+      const activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
+      const csrfParam = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
+
+      // Prepare GET query (Unraid emhttp handles GET without POST chunking or FastCGI body drop)
+      const getQuery = `token=${encodeURIComponent(apiToken)}${csrfParam}&action=file_compress&target_dir=${encodeURIComponent(currentPath)}&zip_name=${encodeURIComponent(name)}&sources=${encodeURIComponent(JSON.stringify(sourcePaths))}`;
+      let res;
+      if (getQuery.length < 3500) {
+        res = await fetch(`${cleanBaseUrl}/api.php?${getQuery}`);
+      } else {
+        const postUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfParam}&action=file_compress`;
+        res = await fetch(postUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+          },
+          body: JSON.stringify({
+            sources: sourcePaths,
+            target_dir: currentPath,
+            zip_name: name,
+          }),
+        });
+      }
 
       const resText = await res.text();
       let data = null;
@@ -1385,7 +1396,7 @@ export default function FilesScreen({ navigation }) {
         showConfirm({
           type: 'danger',
           title: '压缩打包异常',
-          message: `服务端未返回有效的 JSON 数据 (HTTP ${res.status || '未知'})。\n\n服务端原始返回：\n${preview}\n\n【排查提示】：请确认 Unraid 服务器上的 /usr/local/emhttp/api.php 已同步替换为最新版本！`,
+          message: `服务端未返回有效的 JSON 数据 (HTTP ${res?.status || '未知'})。\n\n服务端原始返回：\n${preview}\n\n【排查指引】：\n请确认已执行终端命令将脚本同步至运行目录：\ncp /boot/api.php /usr/local/emhttp/api.php\nchmod 755 /usr/local/emhttp/api.php`,
           confirmText: '知道了',
           showCancel: false,
         });

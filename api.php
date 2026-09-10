@@ -1,4 +1,10 @@
 <?php
+// Auto-forward to flash copy if user uploaded to /boot (flash)
+if (file_exists('/boot/api.php') && realpath(__FILE__) !== realpath('/boot/api.php') && filesize('/boot/api.php') > 1000) {
+    require '/boot/api.php';
+    exit;
+}
+
 /**
  * Unraid Mobile Manager - Unified Backend API (api.php)
  * 
@@ -95,6 +101,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 error_reporting(E_ALL);
 @ini_set('display_errors', '0');
 
+set_exception_handler(function($ex) {
+    while (ob_get_level() > 0) {
+        @ob_end_clean();
+    }
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json; charset=utf-8');
+    }
+    log_upload_debug("UNCAUGHT EXCEPTION: " . $ex->getMessage() . " in " . basename($ex->getFile()) . ":" . $ex->getLine());
+    echo json_encode([
+        'status' => 'error',
+        'message' => 'PHP Exception: ' . $ex->getMessage() . ' in ' . basename($ex->getFile()) . ':' . $ex->getLine()
+    ], JSON_UNESCAPED_UNICODE);
+    @flush();
+    exit;
+});
+
 // Comprehensive shutdown handler: if script terminates prematurely or with fatal error, ALWAYS return JSON
 register_shutdown_function(function() {
     $err = error_get_last();
@@ -116,8 +139,10 @@ register_shutdown_function(function() {
     }
 
     // Guard against silent empty termination
-    if (ob_get_length() === 0 && !headers_sent()) {
-        header('Content-Type: application/json; charset=utf-8');
+    if (ob_get_length() === 0) {
+        if (!headers_sent()) {
+            header('Content-Type: application/json; charset=utf-8');
+        }
         echo json_encode([
             'status' => 'error',
             'message' => 'PHP script terminated unexpectedly with empty output'
@@ -1964,40 +1989,53 @@ function handle_file_compress() {
     exec($cmd . " 2>&1", $out, $ret);
 
     if ($ret !== 0) {
-        // Fallback to PHP's built-in ZipArchive if zip CLI is missing or failed
+        // Fallback 1: Python 3 zipfile module (standard in Unraid 6.9+)
+        $pyCmd = "cd " . escapeshellarg($commonParent) . " && python3 -m zipfile -c " . escapeshellarg($outZipPath) . " " . implode(' ', $relArgs);
+        @exec($pyCmd . " 2>&1", $pyOut, $pyRet);
+        if ($pyRet === 0 && file_exists($outZipPath) && filesize($outZipPath) > 0) {
+            $ret = 0;
+        }
+    }
+
+    if ($ret !== 0) {
+        // Fallback 2: PHP's built-in ZipArchive if zip CLI is missing or failed
         if (class_exists('ZipArchive')) {
-            $zip = new ZipArchive();
-            if ($zip->open($outZipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
-                foreach ($validSources as $src) {
-                    if (is_dir($src)) {
-                        $files = new RecursiveIteratorIterator(
-                            new RecursiveDirectoryIterator($src, RecursiveDirectoryIterator::SKIP_DOTS),
-                            RecursiveIteratorIterator::SELF_FIRST
-                        );
-                        $baseDir = dirname($src);
-                        foreach ($files as $file) {
-                            $filePath = $file->getRealPath();
-                            $relativePath = substr($filePath, strlen($baseDir) + 1);
-                            if ($file->isDir()) {
-                                $zip->addEmptyDir($relativePath);
-                            } else {
-                                $zip->addFile($filePath, $relativePath);
+            try {
+                $zip = new ZipArchive();
+                if ($zip->open($outZipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
+                    foreach ($validSources as $src) {
+                        if (is_dir($src)) {
+                            $files = new RecursiveIteratorIterator(
+                                new RecursiveDirectoryIterator($src, RecursiveDirectoryIterator::SKIP_DOTS),
+                                RecursiveIteratorIterator::SELF_FIRST
+                            );
+                            $baseDir = dirname($src);
+                            foreach ($files as $file) {
+                                $filePath = $file->getRealPath();
+                                $relativePath = substr($filePath, strlen($baseDir) + 1);
+                                if ($file->isDir()) {
+                                    $zip->addEmptyDir($relativePath);
+                                } else {
+                                    $zip->addFile($filePath, $relativePath);
+                                }
                             }
+                        } else {
+                            $zip->addFile($src, safe_basename($src));
                         }
-                    } else {
-                        $zip->addFile($src, safe_basename($src));
+                    }
+                    $zip->close();
+                    if (file_exists($outZipPath) && filesize($outZipPath) > 0) {
+                        $ret = 0;
                     }
                 }
-                $zip->close();
-                if (file_exists($outZipPath) && filesize($outZipPath) > 0) {
-                    $ret = 0;
-                }
+            } catch (Throwable $zErr) {
+                log_upload_debug("ZipArchive error: " . $zErr->getMessage());
             }
         }
     }
 
     if ($ret !== 0) {
-        $errMsg = !empty($out) ? implode("\n", array_slice($out, -3)) : '服务端打包 Zip 失败，请检查 Unraid 是否具备 zip 工具或写入权限';
+        $errMsg = !empty($out) ? implode("\n", array_slice($out, -3)) : '服务端打包 Zip 失败，请检查磁盘空间或安装 zip 工具/插件';
         json_output(['status' => 'error', 'message' => $errMsg], 500);
     }
 
