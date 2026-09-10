@@ -26,13 +26,11 @@
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
         "android.permission.POST_NOTIFICATIONS",
-        "android.permission.WAKE_LOCK",
-        "android.permission.SYSTEM_ALERT_WINDOW"
+        "android.permission.WAKE_LOCK"
       ]
     },
     "plugins": [
-      "./plugins/withForegroundService",
-      "./plugins/withDynamicIslandOverlay"
+      "./plugins/withForegroundService"
     ]
   }
 }

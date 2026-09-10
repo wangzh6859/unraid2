@@ -86,7 +86,6 @@ export default function SettingsScreen({ navigation }) {
   const [highRiskAuthEnabled, setHighRiskAuthEnabled] = useState(false);
   const [biometricSupported, setBiometricSupported] = useState(false);
   const [bgTransferEnabled, setBgTransferEnabled] = useState(true);
-  const [systemIslandEnabled, setSystemIslandEnabled] = useState(true);
 
   // In-App Software Update
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
@@ -229,35 +228,6 @@ export default function SettingsScreen({ navigation }) {
     });
   };
 
-  const toggleSystemIsland = async (value) => {
-    setSystemIslandEnabled(value);
-    await backgroundTransferManager.setSystemIslandEnabled(value);
-    if (value) {
-      const hasPermission = await backgroundTransferManager.canDrawOverlays();
-      if (!hasPermission) {
-        showConfirm({
-          type: 'warning',
-          title: '需要开启悬浮窗权限',
-          message: '系统级灵动岛需要在屏幕物理顶端（前置摄像头周围）全局展示。请在即将打开的系统设置中开启【显示在其他应用上层】权限。',
-          confirmText: '前往开启',
-          cancelText: '暂不需要',
-          showCancel: true,
-          onConfirm: () => {
-            backgroundTransferManager.requestOverlayPermission();
-          },
-        });
-      } else {
-        showConfirm({
-          type: 'success',
-          title: '系统级灵动岛已就绪',
-          message: '文件传输时，将在手机屏幕顶端前置摄像头处展示流体云灵动胶囊，切到桌面或锁屏依然常驻。',
-          confirmText: '好的',
-          showCancel: false,
-        });
-      }
-    }
-  };
-
   const loadSettings = async () => {
     try {
       const savedUrl = await AsyncStorage.getItem('@server_url');
@@ -273,9 +243,6 @@ export default function SettingsScreen({ navigation }) {
 
       const bgVal = await backgroundTransferManager.getEnabled();
       setBgTransferEnabled(bgVal);
-
-      const islandVal = await backgroundTransferManager.getSystemIslandEnabled();
-      setSystemIslandEnabled(islandVal);
 
       const hasHw = await LocalAuthentication.hasHardwareAsync();
       if (hasHw) {
@@ -696,26 +663,6 @@ export default function SettingsScreen({ navigation }) {
             value={bgTransferEnabled}
             onValueChange={toggleBgTransfer}
             trackColor={{ false: colors.input, true: colors.green || '#10b981' }}
-            thumbColor={'#ffffff'}
-          />
-        </View>
-
-        <View style={[styles.row, { borderTopWidth: 1, borderTopColor: colors.divider }]}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
-            <Sparkles color={colors.accent} size={20} />
-          </View>
-          <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>系统级灵动岛 (支持切后台与桌面)</Text>
-            <Text style={styles.rowSub}>
-              {systemIslandEnabled
-                ? '开启中：在屏幕顶端前置摄像头处常驻流体云胶囊，切到桌面依然实时显示速率'
-                : '关闭：仅使用标准系统通知栏进度条'}
-            </Text>
-          </View>
-          <Switch
-            value={systemIslandEnabled}
-            onValueChange={toggleSystemIsland}
-            trackColor={{ false: colors.input, true: colors.accent }}
             thumbColor={'#ffffff'}
           />
         </View>

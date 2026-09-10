@@ -560,7 +560,7 @@ export default function FilesScreen({ navigation }) {
       const initialBytes = startChunk * CHUNK_SIZE;
       const initialPct = totalSize > 0 ? Math.min(99, Math.round((initialBytes / totalSize) * 100)) : 0;
 
-      // Immediately notify Dynamic Island and Foreground Service
+      // Immediately update Foreground Service notification
       backgroundTransferManager.updateForegroundProgress({
         name: taskItem.name,
         progress: initialPct,
