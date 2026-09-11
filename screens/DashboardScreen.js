@@ -598,6 +598,17 @@ export default function DashboardScreen({ navigation }) {
   // 运行中的 Docker 容器前 5 个供快捷矩阵展示
   const runningDockerList = (dockers.list || []).filter(d => d.status === 'running').slice(0, 6);
 
+  // 通知筛选备忘录
+  const filteredNotifications = useMemo(() => {
+    if (notifFilter === 'alert') {
+      return (notifications || []).filter(n => n.importance === 'alert' || n.importance === 'warning');
+    }
+    if (notifFilter === 'normal') {
+      return (notifications || []).filter(n => n.importance === 'normal');
+    }
+    return notifications || [];
+  }, [notifications, notifFilter]);
+
   // -------------------------------------------------------------
   // 渲染主结构
   // -------------------------------------------------------------
