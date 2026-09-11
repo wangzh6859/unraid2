@@ -144,16 +144,15 @@ export function formatProxyUrl(template, name, port = '') {
  */
 export function resolveDockerWebUiUrl(docker, proxyConfig = {}, aliases = {}, serverHost = '') {
   if (!docker || !docker.name) {
-    return { targetUrl: '', rawInternalUrl: '', isCustom: false, isProxy: false, isFullUrl: false, alias: '' };
+    return { targetUrl: '', proxyUrl: '', rawInternalUrl: '', isCustom: false, isProxy: false, isFullUrl: false, alias: '' };
   }
 
   const name = docker.name;
   const primaryPort = docker.port || '';
 
-  // 1. 计算原始内网地址
+  // 1. 计算原始内网地址 (域名加端口)
   let rawInternalUrl = docker.webui || '';
   if (!rawInternalUrl && primaryPort && serverHost) {
-    // 若 serverHost 包含协议头先剥离
     const cleanHost = serverHost.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/:.*$/, '');
     rawInternalUrl = `http://${cleanHost}:${primaryPort}`;
   }
@@ -166,20 +165,21 @@ export function resolveDockerWebUiUrl(docker, proxyConfig = {}, aliases = {}, se
     if (custom.startsWith('http://') || custom.startsWith('https://')) {
       return {
         targetUrl: custom,
+        proxyUrl: custom,
         rawInternalUrl,
         isCustom: true,
-        isProxy: false,
+        isProxy: true,
         isFullUrl: true,
         alias: custom,
       };
     }
 
-    // 2.2 用户填了简称（如 "qb"、"tr"、"emby"）
-    // 如果配置了全局反代模板，将该简称代入模板生成 URL
+    // 2.2 用户填了简称（如 "qb"、"webdav"、"emby"）
     if (proxyConfig && proxyConfig.template) {
-      const targetUrl = formatProxyUrl(proxyConfig.template, custom, primaryPort);
+      const proxyUrl = formatProxyUrl(proxyConfig.template, custom, primaryPort);
       return {
-        targetUrl,
+        targetUrl: proxyUrl,
+        proxyUrl,
         rawInternalUrl,
         isCustom: true,
         isProxy: true,
@@ -188,9 +188,9 @@ export function resolveDockerWebUiUrl(docker, proxyConfig = {}, aliases = {}, se
       };
     }
 
-    // 没有全局模板时，简称无处代入，回退内网地址
     return {
       targetUrl: rawInternalUrl,
+      proxyUrl: '',
       rawInternalUrl,
       isCustom: true,
       isProxy: false,
@@ -201,9 +201,10 @@ export function resolveDockerWebUiUrl(docker, proxyConfig = {}, aliases = {}, se
 
   // 3. 未设置个性化别名，检查是否开启了全局反向代理模板
   if (proxyConfig && proxyConfig.enabled && proxyConfig.template) {
-    const targetUrl = formatProxyUrl(proxyConfig.template, name, primaryPort);
+    const proxyUrl = formatProxyUrl(proxyConfig.template, name, primaryPort);
     return {
-      targetUrl,
+      targetUrl: proxyUrl,
+      proxyUrl,
       rawInternalUrl,
       isCustom: false,
       isProxy: true,
@@ -215,10 +216,96 @@ export function resolveDockerWebUiUrl(docker, proxyConfig = {}, aliases = {}, se
   // 4. 未开启反代模板，回退使用内网直连地址
   return {
     targetUrl: rawInternalUrl,
+    proxyUrl: '',
     rawInternalUrl,
     isCustom: false,
     isProxy: false,
     isFullUrl: false,
     alias: '',
   };
+}
+
+// -------------------------------------------------------------
+// 内网环境智能感知与自动分流器
+// -------------------------------------------------------------
+let cachedLanStatus = {
+  isLan: null,
+  timestamp: 0,
+};
+
+/**
+ * 获取最近探测缓存（45 秒内有效）
+ */
+export function getCachedLanStatus() {
+  const now = Date.now();
+  if (cachedLanStatus.isLan !== null && (now - cachedLanStatus.timestamp < 45000)) {
+    return cachedLanStatus.isLan;
+  }
+  return null;
+}
+
+/**
+ * 手动更新内网状态缓存
+ */
+export function setCachedLanStatus(isLan) {
+  cachedLanStatus = {
+    isLan: !!isLan,
+    timestamp: Date.now(),
+  };
+}
+
+/**
+ * 快速探测指定内网地址是否可直连（轻量超时，不阻断主线程）
+ */
+export async function probeLanReachable(probeUrl, timeoutMs = 600) {
+  if (!probeUrl) return false;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      try { controller.abort(); } catch (e) {}
+    }, timeoutMs);
+
+    await fetch(probeUrl, {
+      method: 'GET',
+      signal: controller.signal,
+      mode: 'no-cors',
+      cache: 'no-store',
+    });
+
+    clearTimeout(timer);
+    setCachedLanStatus(true);
+    return true;
+  } catch (err) {
+    setCachedLanStatus(false);
+    return false;
+  }
+}
+
+/**
+ * 自动识别网络环境并返回目标 WebUI 访问链接：
+ * - 内网环境：自动打开「域名加端口」
+ * - 非内网环境：自动打开「反代地址」
+ */
+export async function resolveAutoWebUiUrl(webUiInfo) {
+  if (!webUiInfo) return '';
+  const internalUrl = webUiInfo.rawInternalUrl;
+  const proxyUrl = webUiInfo.proxyUrl || (webUiInfo.isProxy || webUiInfo.isFullUrl ? webUiInfo.targetUrl : '');
+
+  // 1. 若只存在其中一种地址，直接返回该地址
+  if (!proxyUrl && internalUrl) return internalUrl;
+  if (proxyUrl && !internalUrl) return proxyUrl;
+  if (!proxyUrl && !internalUrl) return webUiInfo.targetUrl || '';
+
+  // 2. 检查 45 秒内缓存状态，秒级响应
+  const cached = getCachedLanStatus();
+  if (cached === true) {
+    return internalUrl;
+  }
+  if (cached === false) {
+    return proxyUrl;
+  }
+
+  // 3. 发起 600ms 快速内网探测
+  const isLan = await probeLanReachable(internalUrl, 600);
+  return isLan ? internalUrl : proxyUrl;
 }

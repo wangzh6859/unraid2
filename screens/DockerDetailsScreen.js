@@ -15,6 +15,7 @@ import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import {
   getProxyConfig, getDockerAliases, saveDockerAlias,
   removeDockerAlias, resolveDockerWebUiUrl, formatProxyUrl,
+  resolveAutoWebUiUrl, probeLanReachable, getCachedLanStatus,
 } from '../utils/dockerWebUiManager';
 
 export default function DockerDetailsScreen() {
@@ -24,6 +25,7 @@ export default function DockerDetailsScreen() {
   const [dockers, setDockers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [sortRule, setSortRule] = useState('name');
+  const [openingDocker, setOpeningDocker] = useState(null);
 
   // Modern Confirm Dialog State
   const [confirmDialog, setConfirmDialog] = useState({
@@ -138,17 +140,41 @@ export default function DockerDetailsScreen() {
     }
   };
 
-  const handleOpenWebUi = async (url) => {
-    if (!url) return;
+  // Pre-warm LAN detection cache in background when containers load
+  useEffect(() => {
+    if (dockers.length > 0 && serverHost && getCachedLanStatus() === null) {
+      const candidate = dockers.find(d => d.port);
+      if (candidate) {
+        const cleanHost = serverHost.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/:.*$/, '');
+        const probeUrl = `http://${cleanHost}:${candidate.port}`;
+        probeLanReachable(probeUrl, 700).catch(() => {});
+      }
+    }
+  }, [dockers, serverHost]);
+
+  const handleOpenWebUi = async (docker, webUiInfo) => {
+    if (!docker || !webUiInfo) return;
+    setOpeningDocker(docker.name);
     try {
-      const canOpen = await Linking.canOpenURL(url);
-      if (canOpen) {
-        await Linking.openURL(url);
+      // 自动识别是否为内网环境，非内网直接打开反代地址，内网则打开域名加端口
+      const finalUrl = await resolveAutoWebUiUrl(webUiInfo);
+      if (finalUrl) {
+        const canOpen = await Linking.canOpenURL(finalUrl);
+        if (canOpen) {
+          await Linking.openURL(finalUrl);
+        } else {
+          showConfirm({
+            type: 'warning',
+            title: '无法打开网页',
+            message: `系统未能识别或处理该 URL：\n${finalUrl}`,
+            showCancel: false,
+          });
+        }
       } else {
         showConfirm({
-          type: 'warning',
-          title: '无法打开网页',
-          message: `系统未能识别或处理该 URL：\n${url}`,
+          type: 'info',
+          title: '未配置访问地址',
+          message: '当前容器未检测到映射端口或反代地址。请点击「定制」为其配置专属网址或简称。',
           showCancel: false,
         });
       }
@@ -159,19 +185,42 @@ export default function DockerDetailsScreen() {
         message: err.message || '系统未能拉起浏览器',
         showCancel: false,
       });
+    } finally {
+      setOpeningDocker(null);
     }
   };
 
   const handleShowWebUiOptions = (docker, webUiInfo) => {
     const hasInternal = !!webUiInfo.rawInternalUrl;
+    const proxy = webUiInfo.proxyUrl || (webUiInfo.isProxy || webUiInfo.isFullUrl ? webUiInfo.targetUrl : '');
     showConfirm({
       type: 'info',
       title: `${docker.name} · Web 访问选项`,
-      message: `目标反代地址:\n${webUiInfo.targetUrl || '未配置'}\n\n内网直连地址:\n${webUiInfo.rawInternalUrl || '未检测到主机端口'}\n\n请选择访问方式：`,
-      confirmText: '打开反代网址',
-      cancelText: hasInternal ? '打开内网地址' : '修改简称',
-      onConfirm: () => {
-        if (webUiInfo.targetUrl) handleOpenWebUi(webUiInfo.targetUrl);
+      message: `内网环境 (域名加端口):\n${webUiInfo.rawInternalUrl || '未检测到端口'}\n\n非内网环境 (反代地址):\n${proxy || '未配置全局反代或简称'}\n\n请选择访问方式：`,
+      confirmText: '打开内网 (域名加端口)',
+      cancelText: proxy ? '打开反代地址' : '配置反代',
+      showCancel: true,
+      onConfirm: async () => {
+        if (webUiInfo.rawInternalUrl) {
+          try {
+            await Linking.openURL(webUiInfo.rawInternalUrl);
+          } catch (e) {
+            showConfirm({ type: 'warning', title: '打开异常', message: e.message, showCancel: false });
+          }
+        } else {
+          showConfirm({ type: 'warning', title: '提示', message: '未检测到内网端口直连地址', showCancel: false });
+        }
+      },
+      onCancel: async () => {
+        if (proxy) {
+          try {
+            await Linking.openURL(proxy);
+          } catch (e) {
+            showConfirm({ type: 'warning', title: '打开异常', message: e.message, showCancel: false });
+          }
+        } else {
+          handleOpenAliasModal(docker, webUiInfo);
+        }
       },
     });
   };
@@ -457,38 +506,38 @@ export default function DockerDetailsScreen() {
               {/* Bottom Section: WebUI Shortcut (Left) + Actions (Right) */}
               <View style={styles.cardFooter}>
                 <View style={styles.footerLeft}>
-                  {webUiInfo.targetUrl ? (
+                  {webUiInfo.targetUrl || webUiInfo.rawInternalUrl ? (
                     <TouchableOpacity
                       style={[
                         styles.webUiBtn,
-                        webUiInfo.isCustom && styles.webUiBtnCustom,
                         !isRunning && { opacity: 0.6 }
                       ]}
-                      onPress={() => handleOpenWebUi(webUiInfo.targetUrl)}
+                      onPress={() => handleOpenWebUi(docker, webUiInfo)}
                       onLongPress={() => handleShowWebUiOptions(docker, webUiInfo)}
                       activeOpacity={0.75}
+                      disabled={openingDocker === docker.name}
                     >
-                      <Globe size={13} color="#ffffff" style={{ marginRight: 4 }} />
-                      <Text style={styles.webUiBtnText} numberOfLines={1}>
-                        {webUiInfo.isCustom
-                          ? (webUiInfo.isFullUrl ? '专属网址' : `简称: ${webUiInfo.alias}`)
-                          : (webUiInfo.isProxy ? '反代Web' : 'WebUI')}
-                      </Text>
-                      <ExternalLink size={10} color="rgba(255, 255, 255, 0.85)" style={{ marginLeft: 3 }} />
+                      {openingDocker === docker.name ? (
+                        <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 4 }} />
+                      ) : (
+                        <Globe size={13} color="#ffffff" style={{ marginRight: 4 }} />
+                      )}
+                      <Text style={styles.webUiBtnText}>Web</Text>
+                      <ExternalLink size={10} color="rgba(255, 255, 255, 0.85)" style={{ marginLeft: 4 }} />
                     </TouchableOpacity>
                   ) : null}
 
                   <TouchableOpacity
                     style={[
                       styles.aliasEditBtn,
-                      !webUiInfo.targetUrl && styles.aliasEditBtnDashed
+                      !(webUiInfo.targetUrl || webUiInfo.rawInternalUrl) && styles.aliasEditBtnDashed
                     ]}
                     onPress={() => handleOpenAliasModal(docker, webUiInfo)}
                     activeOpacity={0.7}
                   >
-                    <Sliders size={12} color={colors.sub} style={{ marginRight: 4 }} />
-                    <Text style={[styles.aliasEditBtnText, { color: colors.sub }]}>
-                      {webUiInfo.isCustom ? '修改' : (webUiInfo.targetUrl ? '定制' : '+ 配置WebUI')}
+                    <Sliders size={12} color={webUiInfo.isCustom ? colors.accent : colors.sub} style={{ marginRight: 4 }} />
+                    <Text style={[styles.aliasEditBtnText, { color: webUiInfo.isCustom ? colors.accent : colors.sub }]}>
+                      {!(webUiInfo.targetUrl || webUiInfo.rawInternalUrl) ? '+ 配置Web' : '定制'}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -865,19 +914,14 @@ const createStyles = (colors) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.accent,
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     height: 32,
     borderRadius: 8,
-    maxWidth: 160,
-  },
-  webUiBtnCustom: {
-    backgroundColor: colors.purple,
   },
   webUiBtnText: {
     color: '#ffffff',
     fontSize: 12,
     fontWeight: 'bold',
-    flexShrink: 1,
   },
   aliasEditBtn: {
     flexDirection: 'row',
