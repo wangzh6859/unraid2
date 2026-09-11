@@ -594,6 +594,8 @@ export default function DockerDetailsScreen() {
             )}
           </ScrollView>
         </View>
+      </Modal>
+
       {/* Container Custom Alias / URL Edit Modal */}
       <Modal
         visible={aliasModalVisible}
