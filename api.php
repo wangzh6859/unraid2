@@ -867,8 +867,38 @@ function handle_status() {
         }
     }
 
+    // 8. Hostname, Uptime and CPU temperature
+    $hostname = @gethostname() ?: 'Unraid Server';
+    $uptimeStr = '';
+    $upSecs = @file_get_contents('/proc/uptime');
+    if ($upSecs) {
+        $sec = (int)explode(' ', trim($upSecs))[0];
+        $days = floor($sec / 86400);
+        $hours = floor(($sec % 86400) / 3600);
+        $uptimeStr = $days > 0 ? "已开机 {$days}天 {$hours}小时" : "已开机 {$hours}小时";
+    }
+
+    $cpuTemp = null;
+    $zones = @glob('/sys/class/thermal/thermal_zone*/temp');
+    if ($zones) {
+        foreach ($zones as $z) {
+            $t = (int)trim(@file_get_contents($z));
+            if ($t > 1000) $t = round($t / 1000);
+            if ($t >= 20 && $t <= 110) {
+                $cpuTemp = $t;
+                break;
+            }
+        }
+    }
+
     json_output([
-        'stats' => ['cpu' => $cpuUsage, 'memory' => $memUsage],
+        'stats' => [
+            'cpu' => $cpuUsage,
+            'memory' => $memUsage,
+            'cpu_temp' => $cpuTemp,
+            'uptime' => $uptimeStr,
+            'hostname' => $hostname
+        ],
         'gpu' => $gpuData,
         'storage' => [
             'percentage' => $storagePercentage,

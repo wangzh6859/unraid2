@@ -10,43 +10,59 @@ export const themes = {
   dark: {
     mode: 'dark',
     // 背景
-    bg: '#111827',            // 主背景
+    bg: '#0B0F19',            // 深空黑曜石黑
     bgElevated: '#000000',    // 全沉浸背景（预览等）
-    card: '#1f2937',          // 卡片背景
-    input: '#374151',         // 输入框背景
-    divider: '#374151',       // 分隔线
-    bar: '#1f2937',           // 导航栏 / 顶部条
+    card: '#151D2E',          // 卡片背景
+    cardSecondary: 'rgba(255, 255, 255, 0.05)', // 次级小胶囊背景
+    cardBorder: 'rgba(255, 255, 255, 0.08)',    // 卡片精致微光描边
+    input: '#1E293B',         // 输入框背景
+    divider: 'rgba(255, 255, 255, 0.08)',       // 分隔线
+    bar: '#0D1424',           // 导航栏 / 顶部条
     // 文字
-    text: '#e5e7eb',          // 主文字
-    textStrong: '#ffffff',    // 强调文字 / 标题
-    sub: '#9ca3af',           // 次要文字
-    muted: '#6b7280',         // 弱化文字
+    text: '#E2E8F0',          // 主文字
+    textStrong: '#FFFFFF',    // 强调文字 / 标题
+    sub: '#94A3B8',           // 次要文字
+    muted: '#64748B',         // 弱化文字
     // 图标与高亮
-    accent: '#3b82f6',        // 主色（蓝）
-    green: '#10b981',
-    red: '#ef4444',
-    amber: '#f59e0b',
-    purple: '#8b5cf6',
-    pink: '#ec4899',
+    accent: '#38BDF8',        // 主色（天青微光蓝）
+    green: '#10B981',
+    red: '#EF4444',
+    amber: '#F59E0B',
+    purple: '#8B5CF6',
+    pink: '#EC4899',
+    // 仪表盘高阶色
+    networkDown: '#06B6D4',   // 霓虹青
+    networkUp: '#8B5CF6',     // 霓虹紫
+    tempWarm: '#F97316',      // 珊瑚橙
+    tempCool: '#06B6D4',      // 冷态青
+    ringBg: 'rgba(255, 255, 255, 0.08)',
   },
   light: {
     mode: 'light',
-    bg: '#f3f4f6',
-    bgElevated: '#ffffff',
-    card: '#ffffff',
-    input: '#e5e7eb',
-    divider: '#e5e7eb',
-    bar: '#ffffff',
-    text: '#1f2937',
-    textStrong: '#111827',
-    sub: '#6b7280',
-    muted: '#9ca3af',
-    accent: '#2563eb',
+    bg: '#F8FAFC',            // 柔白瓷石板浅灰
+    bgElevated: '#FFFFFF',    // 全沉浸背景（预览等）
+    card: '#FFFFFF',          // 卡片背景
+    cardSecondary: '#F1F5F9', // 次级小胶囊背景
+    cardBorder: '#E2E8F0',    // 卡片精致浅灰描边
+    input: '#F1F5F9',         // 输入框背景
+    divider: '#E2E8F0',       // 分隔线
+    bar: '#FFFFFF',           // 导航栏 / 顶部条
+    text: '#334155',          // 主文字
+    textStrong: '#0F172A',    // 强调文字 / 标题
+    sub: '#64748B',           // 次要文字
+    muted: '#94A3B8',         // 弱化文字
+    accent: '#0284C7',        // 主色（深海天蓝）
     green: '#059669',
-    red: '#dc2626',
-    amber: '#d97706',
-    purple: '#7c3aed',
-    pink: '#db2777',
+    red: '#DC2626',
+    amber: '#D97706',
+    purple: '#7C3AED',
+    pink: '#DB2777',
+    // 仪表盘高阶色
+    networkDown: '#0891B2',   // 深青
+    networkUp: '#7C3AED',     // 紫罗兰
+    tempWarm: '#EA580C',      // 活力橙
+    tempCool: '#0891B2',      // 冷态青
+    ringBg: '#E2E8F0',
   },
 };
 

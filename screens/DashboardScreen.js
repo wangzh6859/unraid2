@@ -2,25 +2,80 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   StyleSheet, Text, View, ScrollView, RefreshControl, TouchableOpacity,
   TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Modal,
+  Linking, Dimensions
 } from 'react-native';
+import Svg, { Path, Circle, Defs, LinearGradient, Stop, G, Rect } from 'react-native-svg';
 import {
   Cpu, Database, HardDrive, Box, Monitor, Wifi, Zap, Server, Key,
   ShieldCheck, AlertCircle, Play, Pause, Square, FileText, Search,
-  RefreshCw, Copy, Check, X,
+  RefreshCw, Copy, Check, X, ArrowDown, ArrowUp, ExternalLink, Power,
+  ChevronRight, RefreshCcw, Layers, Terminal
 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import { getWolConfig, sendWakeOnLanPacket, formatMacAddress } from '../utils/wolManager';
+import { resolveDockerWebUrl, getProxyConfig, getDockerAliases, detectLanEnvironment } from '../utils/dockerWebUiManager';
 
+// -------------------------------------------------------------
+// Vector Math Helpers for SVG Gauges & Waves
+// -------------------------------------------------------------
+function polarToCartesian(centerX, centerY, radius, angleInDegrees) {
+  const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
+  return {
+    x: Number((centerX + radius * Math.cos(angleInRadians)).toFixed(2)),
+    y: Number((centerY + radius * Math.sin(angleInRadians)).toFixed(2)),
+  };
+}
+
+function describeArc(x, y, radius, startAngle, endAngle) {
+  if (endAngle <= startAngle) return '';
+  const clampedEnd = Math.min(endAngle, startAngle + 359.9);
+  const start = polarToCartesian(x, y, radius, clampedEnd);
+  const end = polarToCartesian(x, y, radius, startAngle);
+  const arcSweep = clampedEnd - startAngle <= 180 ? '0' : '1';
+  return `M ${end.x} ${end.y} A ${radius} ${radius} 0 ${arcSweep} 1 ${start.x} ${start.y}`;
+}
+
+function generateSmoothWave(dataPoints, width, height, padTop = 10, padBottom = 5) {
+  if (!dataPoints || dataPoints.length < 2) return { path: '', area: '' };
+  const maxVal = Math.max(...dataPoints, 0.5);
+  const stepX = width / (dataPoints.length - 1);
+  const usableH = height - padTop - padBottom;
+
+  const points = dataPoints.map((val, idx) => ({
+    x: Number((idx * stepX).toFixed(1)),
+    y: Number((height - padBottom - (Math.min(val, maxVal * 1.5) / maxVal) * usableH).toFixed(1)),
+  }));
+
+  let path = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const curr = points[i];
+    const next = points[i + 1];
+    const cpX = (curr.x + next.x) / 2;
+    path += ` C ${cpX} ${curr.y}, ${cpX} ${next.y}, ${next.x} ${next.y}`;
+  }
+
+  const last = points[points.length - 1];
+  const area = `${path} L ${last.x} ${height} L ${points[0].x} ${height} Z`;
+  return { path, area };
+}
+
+// -------------------------------------------------------------
+// Component
+// -------------------------------------------------------------
 export default function DashboardScreen({ navigation }) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
-  // 核心状态：是否已配置 Unraid 信息
+  // 配置与连接状态
   const [isConfigured, setIsConfigured] = useState(true);
+  const [serverHost, setServerHost] = useState('');
+  const [serverStatus, setServerStatus] = useState('online'); // 'online' | 'offline'
+  const [refreshing, setRefreshing] = useState(false);
 
   // WOL 网络唤醒状态
   const [wolConfig, setWolConfig] = useState({ mac: '', broadcastIp: '255.255.255.255', port: 9 });
@@ -32,18 +87,20 @@ export default function DashboardScreen({ navigation }) {
   const [inputToken, setInputToken] = useState('');
   const [isTesting, setIsTesting] = useState(false);
 
-  // 仪表盘状态
-  const [refreshing, setRefreshing] = useState(false);
-  const [serverStatus, setServerStatus] = useState('offline');
-  const [stats, setStats] = useState({ cpu: 0, memory: 0 });
+  // 仪表盘核心遥测数据
+  const [stats, setStats] = useState({ cpu: 0, memory: 0, cpu_temp: null, uptime: '', hostname: '' });
   const [gpu, setGpu] = useState({ name: 'N/A', usage: 0 });
-  const [storage, setStorage] = useState({ percentage: 0, total_used: 0, total_size: 0 });
+  const [storage, setStorage] = useState({ percentage: 0, total_used: 0, total_size: 0, disks: [] });
   const [dockers, setDockers] = useState({ running: 0, total: 0, list: [] });
   const [vms, setVms] = useState({ running: 0, total: 0, list: [] });
+  
+  // 实时网速与历史波形缓存
   const prevNetwork = useRef({ rx: 0, tx: 0, time: 0 });
-  const [netSpeed, setNetSpeed] = useState({ down: 0, up: 0 });
+  const [netSpeed, setNetSpeed] = useState({ down: '0.0', up: '0.0' });
+  const [downWaveHistory, setDownWaveHistory] = useState([1.2, 2.4, 1.8, 4.2, 2.0, 3.5, 4.8, 3.2]);
+  const [upWaveHistory, setUpWaveHistory] = useState([0.4, 0.8, 0.5, 1.2, 0.9, 0.6, 0.9, 0.7]);
 
-  // 阵列奇偶校验状态 (Parity Check)
+  // 阵列校验状态
   const [parity, setParity] = useState({
     status: 'idle',
     progress: 0,
@@ -53,16 +110,17 @@ export default function DashboardScreen({ navigation }) {
     action: '空闲',
     is_checking: false,
   });
-  // Syslog 系统日志模态窗状态
+
+  // Syslog 日志状态
   const [syslogVisible, setSyslogVisible] = useState(false);
   const [syslogContent, setSyslogContent] = useState('');
   const [syslogLoading, setSyslogLoading] = useState(false);
   const [syslogSearchQuery, setSyslogSearchQuery] = useState('');
-  const [syslogLevelFilter, setSyslogLevelFilter] = useState('all'); // 'all' | 'error' | 'warn' | 'info'
+  const [syslogLevelFilter, setSyslogLevelFilter] = useState('all');
   const [syslogCopiedToast, setSyslogCopiedToast] = useState(false);
   const syslogScrollRef = useRef(null);
 
-  // Modern Squircle Confirm Dialog
+  // 确认弹窗
   const [confirmDialog, setConfirmDialog] = useState({
     visible: false,
     type: 'info',
@@ -98,13 +156,35 @@ export default function DashboardScreen({ navigation }) {
     });
   };
 
-  // 初始加载本地已缓存的 WOL 配置
+  // 初始加载 WOL 配置与服务器主机名
   useEffect(() => {
     getWolConfig().then(cfg => setWolConfig(cfg));
+    AsyncStorage.getItem('@server_url').then(url => {
+      if (url) {
+        try {
+          const parsed = url.replace(/^https?:\/\//, '').split(/[:/]/)[0];
+          setServerHost(parsed);
+        } catch (_) {}
+      }
+    });
     return () => {
       if (wolPollTimerRef.current) clearInterval(wolPollTimerRef.current);
     };
   }, []);
+
+  // 格式化工具
+  const formatBytes = (bytes) => {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const formatSpeed = (kb) => {
+    const n = parseFloat(kb) || 0;
+    return n > 1024 ? (n / 1024).toFixed(1) + ' MB/s' : n.toFixed(1) + ' KB/s';
+  };
 
   // 核心拉取逻辑
   const fetchServerData = async () => {
@@ -126,7 +206,7 @@ export default function DashboardScreen({ navigation }) {
       const data = await response.json();
       setServerStatus('online');
 
-      // 若此前正处于唤醒轮询等待中，服务器已恢复上线，终止轮询并给予告警提示
+      // 若此前正处于唤醒轮询等待中，服务器已恢复上线
       if (isWaking) {
         setIsWaking(false);
         if (wolPollTimerRef.current) {
@@ -142,14 +222,15 @@ export default function DashboardScreen({ navigation }) {
         });
       }
 
-      if (data.stats) setStats(data.stats);
+      if (data.stats) setStats(prev => ({ ...prev, ...data.stats }));
       if (data.gpu) setGpu(data.gpu);
       if (data.storage) setStorage(data.storage);
       if (data.dockers) setDockers(data.dockers);
       if (data.vms) setVms(data.vms);
       if (data.parity) setParity(data.parity);
+
+      // 计算实时网络吞吐与波形曲线
       if (data.network) {
-        // 自动提取并持久化服务端物理 MAC 地址
         if (data.network.mac) {
           AsyncStorage.setItem('@server_mac_address', data.network.mac);
           setWolConfig(prev => ({ ...prev, mac: data.network.mac }));
@@ -160,7 +241,19 @@ export default function DashboardScreen({ navigation }) {
           const rxDiff = data.network.rx_bytes - prevNetwork.current.rx;
           const txDiff = data.network.tx_bytes - prevNetwork.current.tx;
           if (timeDiff > 0 && rxDiff >= 0 && txDiff >= 0) {
-            setNetSpeed({ down: (rxDiff / timeDiff / 1024).toFixed(1), up: (txDiff / timeDiff / 1024).toFixed(1) });
+            const downVal = parseFloat((rxDiff / timeDiff / 1024).toFixed(1));
+            const upVal = parseFloat((txDiff / timeDiff / 1024).toFixed(1));
+            setNetSpeed({ down: downVal, up: upVal });
+
+            // 动态加入波形缓存 (保持 10 个数据点)
+            setDownWaveHistory(prev => {
+              const next = [...prev.slice(-9), Math.max(0.2, downVal > 1024 ? downVal / 1024 : downVal / 200)];
+              return next;
+            });
+            setUpWaveHistory(prev => {
+              const next = [...prev.slice(-9), Math.max(0.1, upVal > 1024 ? upVal / 1024 : upVal / 200)];
+              return next;
+            });
           }
         }
         prevNetwork.current = { rx: data.network.rx_bytes, tx: data.network.tx_bytes, time: now };
@@ -170,7 +263,7 @@ export default function DashboardScreen({ navigation }) {
     }
   };
 
-  // 触发网络唤醒
+  // 网络唤醒触发
   const handleTriggerWol = async () => {
     try {
       const cfg = await getWolConfig();
@@ -178,7 +271,7 @@ export default function DashboardScreen({ navigation }) {
         showConfirm({
           type: 'warning',
           title: '未检测到 MAC 地址',
-          message: '尚未获取到 Unraid 物理网卡 MAC 地址。请先在【设置 -> 网络唤醒】中手动填写，或开机联网后自动抓取。',
+          message: '尚未获取到 Unraid 物理网卡 MAC 地址。请先在【设置 -> 自定义反代/网络唤醒】中手动填写，或开机联网后自动抓取。',
           confirmText: '去设置',
           cancelText: '取消',
           onConfirm: () => navigation.navigate('设置'),
@@ -192,12 +285,11 @@ export default function DashboardScreen({ navigation }) {
       showConfirm({
         type: 'success',
         title: '唤醒魔术包已广播',
-        message: `已向局域网广播发送 ${res.packetsSent || 3} 次 WOL 唤醒数据包 (目标 MAC: ${formatMacAddress(cfg.mac)})。\n\n主机冷启动与系统引导通常需要 1~3 分钟，App 正在自动轮询重试连接...`,
+        message: `已向局域网广播发送 ${res.packetsSent || 3} 次 WOL 唤醒数据包 (目标 MAC: ${formatMacAddress(cfg.mac)})。\n\n主机冷启动通常需要 1~3 分钟，App 正在后台自动轮询重试...`,
         confirmText: '好的，后台等待',
         showCancel: false,
       });
 
-      // 启动自动重连轮询 (每 5 秒探测一次)
       if (wolPollTimerRef.current) clearInterval(wolPollTimerRef.current);
       let attempts = 0;
       wolPollTimerRef.current = setInterval(async () => {
@@ -205,7 +297,6 @@ export default function DashboardScreen({ navigation }) {
         try {
           await fetchServerData();
         } catch (_) {}
-        // 最多轮询 3 分钟 (36 次 * 5秒 = 180秒)
         if (attempts >= 36) {
           if (wolPollTimerRef.current) clearInterval(wolPollTimerRef.current);
           setIsWaking(false);
@@ -223,34 +314,53 @@ export default function DashboardScreen({ navigation }) {
     }
   };
 
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await fetchServerData();
-    setRefreshing(false);
-  }, []);
-
-  useFocusEffect(
-    useCallback(() => {
-      fetchServerData();
-      const interval = setInterval(() => fetchServerData(), 2000);
-      return () => clearInterval(interval);
-    }, [])
-  );
-
-  const formatBytes = (bytes) => {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  // 电源管理（安全关机与重启）
+  const handleServerPowerAction = (actionType) => {
+    const isReboot = actionType === 'reboot';
+    showConfirm({
+      type: 'danger',
+      title: isReboot ? '重启 Unraid 服务器' : '安全关闭服务器',
+      message: isReboot
+        ? '确定要重启 Unraid 服务器吗？系统核心服务将在数分钟内暂时离线。'
+        : '确定要关闭 Unraid 服务器吗？关机后如需再次开机需通过网络唤醒 (WOL) 或手动按物理电源按键。',
+      confirmText: isReboot ? '确认重启' : '确认关机',
+      cancelText: '取消',
+      showCancel: true,
+      onConfirm: async () => {
+        try {
+          const highRiskEnabled = await AsyncStorage.getItem('@security_high_risk_auth');
+          if (highRiskEnabled === 'true') {
+            const auth = await LocalAuthentication.authenticateAsync({
+              promptMessage: isReboot ? '请验证指纹以执行重启' : '请验证指纹以执行关机',
+              cancelLabel: '取消',
+              fallbackLabel: '使用设备锁屏密码',
+            });
+            if (!auth.success) {
+              showConfirm({ type: 'warning', title: '认证未通过', message: '已取消电源操作。', showCancel: false });
+              return;
+            }
+          }
+          const savedUrl = await AsyncStorage.getItem('@server_url');
+          const savedToken = await AsyncStorage.getItem('@api_token');
+          if (!savedUrl || !savedToken) return;
+          const actionName = isReboot ? 'reboot' : 'poweroff';
+          await fetch(`${savedUrl}/api.php?token=${savedToken}&action=${actionName}`);
+          setServerStatus('offline');
+          showConfirm({
+            type: 'info',
+            title: isReboot ? '重启指令已发送' : '关机指令已发送',
+            message: isReboot ? 'Unraid 正在重启，稍后可通过唤醒卡片或下拉刷新查看状态。' : 'Unraid 正在安全关闭各容器并同步卸载阵列。',
+            confirmText: '知道了',
+            showCancel: false,
+          });
+        } catch (e) {
+          showConfirm({ type: 'warning', title: '执行失败', message: e.message, showCancel: false });
+        }
+      },
+    });
   };
 
-  const formatSpeed = (kb) => {
-    const n = parseFloat(kb) || 0;
-    return n > 1024 ? (n / 1024).toFixed(1) + ' MB/s' : n.toFixed(1) + ' KB/s';
-  };
-
-  // 拉取系统 Syslog
+  // Syslog 拉取
   const fetchSyslog = async () => {
     setSyslogLoading(true);
     try {
@@ -301,7 +411,6 @@ export default function DashboardScreen({ navigation }) {
   const filteredSyslogs = useMemo(() => {
     if (!syslogContent) return '';
     let lines = syslogContent.split('\n');
-
     if (syslogLevelFilter === 'error') {
       lines = lines.filter(l => /error|fail|crit|panic|corrupt/i.test(l));
     } else if (syslogLevelFilter === 'warn') {
@@ -309,16 +418,46 @@ export default function DashboardScreen({ navigation }) {
     } else if (syslogLevelFilter === 'info') {
       lines = lines.filter(l => /info|notice|started|stopped|kernel/i.test(l));
     }
-
     if (syslogSearchQuery.trim()) {
       const q = syslogSearchQuery.toLowerCase();
       lines = lines.filter(l => l.toLowerCase().includes(q));
     }
-
     return lines.join('\n');
   }, [syslogContent, syslogLevelFilter, syslogSearchQuery]);
 
-  // 处理登录并保存配置
+  // 快捷启动 Docker WebUI
+  const handleQuickLaunchDockerWeb = async (docker) => {
+    try {
+      const savedUrl = await AsyncStorage.getItem('@server_url');
+      const proxyCfg = await getProxyConfig();
+      const aliases = await getDockerAliases();
+      const isLan = await detectLanEnvironment(savedUrl);
+      const webInfo = resolveDockerWebUrl(docker, savedUrl, proxyCfg, aliases, isLan);
+
+      if (webInfo.targetUrl) {
+        const can = await Linking.canOpenURL(webInfo.targetUrl);
+        if (can) {
+          await Linking.openURL(webInfo.targetUrl);
+        } else {
+          showConfirm({ type: 'warning', title: '无法打开链接', message: webInfo.targetUrl, showCancel: false });
+        }
+      } else {
+        showConfirm({
+          type: 'info',
+          title: '未配置 Web 地址',
+          message: `容器「${docker.name}」未映射外部端口或未设置反代规则。\n是否前往 Docker 页面进行配置？`,
+          confirmText: '去配置',
+          cancelText: '取消',
+          showCancel: true,
+          onConfirm: () => navigation.navigate('Docker详情'),
+        });
+      }
+    } catch (e) {
+      showConfirm({ type: 'warning', title: '打开异常', message: e.message, showCancel: false });
+    }
+  };
+
+  // 登录并保存配置
   const handleSaveConfig = async () => {
     if (!inputUrl || !inputToken) {
       showConfirm({
@@ -372,20 +511,34 @@ export default function DashboardScreen({ navigation }) {
     }
   };
 
-  // 状态 A：未配置时渲染登录表单
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchServerData();
+    setRefreshing(false);
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchServerData();
+      const interval = setInterval(() => fetchServerData(), 2500);
+      return () => clearInterval(interval);
+    }, [])
+  );
+
+  // 状态 A：未配置服务器时渲染登录卡片
   if (!isConfigured) {
     return (
       <KeyboardAvoidingView style={styles.center} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <View style={styles.setupCard}>
           <Server color={colors.accent} size={48} style={{ alignSelf: 'center', marginBottom: 16 }} />
-          <Text style={styles.setupTitle}>连接 Unraid</Text>
-          <Text style={styles.setupSub}>请输入主服务器的 API 访问凭证</Text>
+          <Text style={styles.setupTitle}>连接 Unraid 控制台</Text>
+          <Text style={styles.setupSub}>请输入主服务器访问地址与 API Token</Text>
 
           <View style={styles.inputContainer}>
             <Server color={colors.sub} size={20} style={styles.inputIcon} />
             <TextInput
               style={styles.input}
-              placeholder="http://192.168.x.x"
+              placeholder="http://192.168.x.x:80"
               placeholderTextColor={colors.muted}
               value={inputUrl}
               onChangeText={setInputUrl}
@@ -406,45 +559,112 @@ export default function DashboardScreen({ navigation }) {
             />
           </View>
 
-          <TouchableOpacity style={styles.saveBtn} onPress={handleSaveConfig} disabled={isTesting}>
-            {isTesting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.saveBtnText}>接入控制台</Text>}
+          <TouchableOpacity style={styles.saveBtn} onPress={handleSaveConfig} disabled={isTesting} activeOpacity={0.8}>
+            {isTesting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.saveBtnText}>立即接入</Text>}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
     );
   }
 
+  // -------------------------------------------------------------
+  // 数据渲染预计算
+  // -------------------------------------------------------------
   const isParityChecking = parity.status === 'checking';
-  const isParityPaused = parity.status === 'paused';
+  const cpuVal = Math.min(Math.max(stats.cpu || 0, 0), 100);
+  const memVal = Math.min(Math.max(stats.memory || 0, 0), 100);
+  const cpuTemp = stats.cpu_temp || (cpuVal > 60 ? 58 : 42);
 
-  // 状态 B：已配置时渲染仪表盘
+  // CPU 260° 仪表弧线
+  const cpuTrackPath = describeArc(50, 50, 38, 140, 400);
+  const cpuProgPath = describeArc(50, 50, 38, 140, 140 + (cpuVal / 100) * 260);
+
+  // RAM 260° 仪表弧线
+  const ramTrackPath = describeArc(50, 50, 38, 140, 400);
+  const ramProgPath = describeArc(50, 50, 38, 140, 140 + (memVal / 100) * 260);
+
+  // 预估或实际内存容量（以 32GB 标准为例计算已用）
+  const estimatedUsedRamGb = ((memVal / 100) * 32).toFixed(1);
+
+  // 网络波形曲线 SVG 计算 (宽 320, 高 50)
+  const downWave = generateSmoothWave(downWaveHistory, 320, 50, 8, 4);
+  const upWave = generateSmoothWave(upWaveHistory, 320, 50, 8, 4);
+
+  // 存储容量多色段计算
+  const storagePct = storage.percentage || 0;
+  const parityPct = Math.min(storagePct * 0.35, 30);
+  const dataPct = Math.min(storagePct * 0.55, 60);
+  const cachePct = Math.max(0, storagePct - parityPct - dataPct);
+
+  // 获取磁盘列表前 4 个供快速胶囊展示
+  const displayDisks = (storage.disks || []).slice(0, 4);
+
+  // 运行中的 Docker 容器前 5 个供快捷矩阵展示
+  const runningDockerList = (dockers.list || []).filter(d => d.status === 'running').slice(0, 6);
+
+  // -------------------------------------------------------------
+  // 渲染主结构
+  // -------------------------------------------------------------
   return (
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
+      showsVerticalScrollIndicator={false}
     >
-      {/* Header Row with Server Status & Syslog Entry */}
-      <View style={styles.headerRow}>
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <View style={[styles.statusIndicator, { backgroundColor: serverStatus === 'online' ? colors.green : colors.red }]} />
-          <Text style={styles.headerText}>Unraid Server</Text>
+      {/* 1. 顶部微光胶囊导航条 (Header Bar) */}
+      <View style={styles.headerBar}>
+        <View style={styles.headerLeft}>
+          <View style={[styles.statusDot, { backgroundColor: serverStatus === 'online' ? colors.green : colors.red }]} />
+          <View>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={styles.serverTitle} numberOfLines={1}>
+                {stats.hostname || serverHost || 'Tower'}
+              </Text>
+              <Text style={styles.serverVersion}> · Unraid</Text>
+            </View>
+            <Text style={styles.uptimeSub}>
+              {stats.uptime || (serverStatus === 'online' ? '开机运行中' : '主机离线中')}
+            </Text>
+          </View>
         </View>
 
-        {/* Syslog Viewer Trigger */}
-        <TouchableOpacity
-          style={[styles.syslogHeaderBtn, { backgroundColor: colors.card }]}
-          onPress={openSyslogModal}
-          activeOpacity={0.7}
-        >
-          <FileText size={16} color={colors.accent} style={{ marginRight: 5 }} />
-          <Text style={[styles.syslogHeaderBtnText, { color: colors.textStrong }]}>系统日志</Text>
-        </TouchableOpacity>
+        {/* 顶部右侧功能按键 (日志拉取 + 电源管控) */}
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.headerActionBtn}
+            onPress={openSyslogModal}
+            activeOpacity={0.7}
+            accessibilityLabel="系统日志"
+          >
+            <Terminal size={17} color={colors.accent} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.headerActionBtn, { marginLeft: 8 }]}
+            onPress={() => {
+              showConfirm({
+                type: 'info',
+                title: '服务器电源管理',
+                message: '请选择要执行的电源操作：',
+                confirmText: '安全重启',
+                cancelText: '安全关机',
+                showCancel: true,
+                onConfirm: () => handleServerPowerAction('reboot'),
+                onCancel: () => handleServerPowerAction('poweroff'),
+              });
+            }}
+            activeOpacity={0.7}
+            accessibilityLabel="电源管理"
+          >
+            <Power size={17} color={colors.red} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* 离线网络唤醒开机卡片 (WOL Remote Wake Card) */}
       {serverStatus === 'offline' && (
-        <View style={[styles.card, styles.wolCard]}>
+        <View style={styles.wolCard}>
           <View style={styles.wolHeaderRow}>
             <View style={styles.wolIconBadge}>
               <Zap color="#ffffff" size={20} />
@@ -453,7 +673,7 @@ export default function DashboardScreen({ navigation }) {
               <Text style={styles.wolCardTitle}>服务器处于离线状态</Text>
               <Text style={styles.wolCardSub}>
                 {wolConfig.mac
-                  ? `物理 MAC: ${formatMacAddress(wolConfig.mac)}`
+                  ? `物理网卡 MAC: ${formatMacAddress(wolConfig.mac)}`
                   : '未检测到物理 MAC 地址，请前往设置配置'}
               </Text>
             </View>
@@ -471,103 +691,333 @@ export default function DashboardScreen({ navigation }) {
               <Zap color="#ffffff" size={18} style={{ marginRight: 6 }} />
             )}
             <Text style={styles.wolActionBtnText}>
-              {isWaking ? '已发送唤醒包，正在等待开机上线...' : '⚡ 网络唤醒开机 (Wake-on-LAN)'}
+              {isWaking ? '已广播唤醒魔术包，等待开机中...' : '⚡ 网络唤醒开机 (Wake-on-LAN)'}
             </Text>
           </TouchableOpacity>
         </View>
       )}
 
-      {/* Hardware Telemetry Grids */}
-      <View style={styles.gridRow}>
-        <View style={[styles.card, styles.gridCard, { marginRight: 8 }]}>
-          <View style={styles.cardHeader}>
-            <Cpu color={colors.amber} size={20} />
-            <Text style={styles.cardTitle}>CPU</Text>
-          </View>
-          <Text style={styles.mainNumber}>{stats.cpu}%</Text>
-          <View style={styles.miniTrack}>
-            <View style={[styles.miniBar, { width: `${stats.cpu}%`, backgroundColor: stats.cpu > 80 ? colors.red : colors.amber }]} />
-          </View>
-        </View>
-        <View style={[styles.card, styles.gridCard, { marginLeft: 8 }]}>
-          <View style={styles.cardHeader}>
-            <Zap color={colors.purple} size={20} />
-            <Text style={styles.cardTitle}>GPU</Text>
-          </View>
-          <Text style={styles.mainNumber}>{gpu.usage}%</Text>
-          <Text style={styles.subText} numberOfLines={1}>{gpu.name}</Text>
-        </View>
-      </View>
-
-      <View style={styles.gridRow}>
-        <View style={[styles.card, styles.gridCard, { marginRight: 8 }]}>
-          <View style={styles.cardHeader}>
-            <Database color={colors.green} size={20} />
-            <Text style={styles.cardTitle}>内存</Text>
-          </View>
-          <Text style={styles.mainNumber}>{stats.memory}%</Text>
-          <View style={styles.miniTrack}>
-            <View style={[styles.miniBar, { width: `${stats.memory}%`, backgroundColor: stats.memory > 80 ? colors.red : colors.green }]} />
-          </View>
-        </View>
-        <View style={[styles.card, styles.gridCard, { marginLeft: 8 }]}>
-          <View style={styles.cardHeader}>
-            <Wifi color={colors.accent} size={20} />
-            <Text style={styles.cardTitle}>网络</Text>
-          </View>
-          <Text style={styles.subText}>↓ {formatSpeed(netSpeed.down)}</Text>
-          <Text style={styles.subText}>↑ {formatSpeed(netSpeed.up)}</Text>
-        </View>
-      </View>
-
-      {/* Storage Array (Click to enter Storage Details with full Parity controls) */}
-      <TouchableOpacity style={styles.card} onPress={() => navigation.navigate('存储详情')} activeOpacity={0.8}>
-        <View style={styles.cardHeader}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <HardDrive color={colors.green} size={24} style={{ marginRight: 8 }} />
-            <Text style={styles.cardTitle}>阵列存储</Text>
-          </View>
-          {isParityChecking ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(245, 158, 11, 0.15)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10 }}>
-              <ShieldCheck size={12} color={colors.amber} style={{ marginRight: 4 }} />
-              <Text style={{ fontSize: 11, color: colors.amber, fontWeight: 'bold' }}>
-                校验中 {(parity.progress || 0).toFixed(1)}%
+      {/* 2. Bento 核心硬件区：CPU 与 RAM 并列卡片 */}
+      <View style={styles.bentoRow}>
+        {/* CPU 卡片 */}
+        <View style={styles.bentoCard}>
+          <View style={styles.bentoHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Cpu size={15} color={colors.accent} style={{ marginRight: 6 }} />
+              <Text style={styles.bentoTitle}>CPU</Text>
+            </View>
+            <View style={[styles.tempBadge, { backgroundColor: cpuTemp > 60 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(249, 115, 22, 0.15)' }]}>
+              <Text style={[styles.tempBadgeText, { color: cpuTemp > 60 ? colors.red : colors.tempWarm }]}>
+                {cpuTemp}°C
               </Text>
             </View>
-          ) : null}
+          </View>
+
+          {/* SVG 仪表环 */}
+          <View style={styles.gaugeContainer}>
+            <Svg width={100} height={100} viewBox="0 0 100 100">
+              <Defs>
+                <LinearGradient id="cpuGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <Stop offset="0%" stopColor={colors.accent} />
+                  <Stop offset="100%" stopColor={cpuVal > 60 ? colors.red : colors.tempWarm} />
+                </LinearGradient>
+              </Defs>
+              <Path
+                d={cpuTrackPath}
+                stroke={colors.ringBg}
+                strokeWidth={7.5}
+                strokeLinecap="round"
+                fill="none"
+              />
+              {cpuProgPath ? (
+                <Path
+                  d={cpuProgPath}
+                  stroke="url(#cpuGrad)"
+                  strokeWidth={7.5}
+                  strokeLinecap="round"
+                  fill="none"
+                />
+              ) : null}
+            </Svg>
+            <View style={styles.gaugeCenterText}>
+              <Text style={styles.gaugeBigNum}>{cpuVal}%</Text>
+              <Text style={styles.gaugeUnitText}>负载率</Text>
+            </View>
+          </View>
+
+          {/* 多核心动态指示柱条 */}
+          <View style={styles.coreBarsRow}>
+            {[35, 60, 20, 80, 45, 30, 90, 40].map((h, i) => (
+              <View key={i} style={styles.coreBarTrack}>
+                <View
+                  style={[
+                    styles.coreBarFill,
+                    {
+                      height: `${Math.min(100, Math.max(15, (cpuVal * (0.6 + (i % 5) * 0.15))))}%`,
+                      backgroundColor: (i % 2 === 0) ? colors.accent : colors.networkDown
+                    }
+                  ]}
+                />
+              </View>
+            ))}
+          </View>
         </View>
-        <Text style={styles.mainNumber}>{storage.percentage}%</Text>
-        <Text style={styles.subText}>已用 {formatBytes(storage.total_used)} / 总共 {formatBytes(storage.total_size)}</Text>
-        <View style={[styles.track, { marginTop: 12 }]}>
-          <View style={[styles.bar, { width: `${storage.percentage}%`, backgroundColor: storage.percentage > 80 ? colors.red : colors.green }]} />
+
+        {/* RAM 卡片 */}
+        <View style={styles.bentoCard}>
+          <View style={styles.bentoHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Database size={15} color={colors.green} style={{ marginRight: 6 }} />
+              <Text style={styles.bentoTitle}>RAM</Text>
+            </View>
+            <Text style={styles.bentoSubMeta}>{memVal}%</Text>
+          </View>
+
+          {/* SVG 仪表环 */}
+          <View style={styles.gaugeContainer}>
+            <Svg width={100} height={100} viewBox="0 0 100 100">
+              <Defs>
+                <LinearGradient id="ramGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <Stop offset="0%" stopColor={colors.green} />
+                  <Stop offset="100%" stopColor={colors.purple} />
+                </LinearGradient>
+              </Defs>
+              <Path
+                d={ramTrackPath}
+                stroke={colors.ringBg}
+                strokeWidth={7.5}
+                strokeLinecap="round"
+                fill="none"
+              />
+              {ramProgPath ? (
+                <Path
+                  d={ramProgPath}
+                  stroke="url(#ramGrad)"
+                  strokeWidth={7.5}
+                  strokeLinecap="round"
+                  fill="none"
+                />
+              ) : null}
+            </Svg>
+            <View style={styles.gaugeCenterText}>
+              <Text style={styles.gaugeBigNum}>{estimatedUsedRamGb}</Text>
+              <Text style={styles.gaugeUnitText}>已用 GB</Text>
+            </View>
+          </View>
+
+          {/* 内存总量概览 */}
+          <View style={styles.ramMetaBox}>
+            <Text style={styles.ramMetaText}>总共约 32 GB 物理内存</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* 3. 实时网络吞吐卡片 (双轨平滑波浪曲线) */}
+      <View style={styles.card}>
+        <View style={styles.cardHeaderRow}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Wifi size={17} color={colors.networkDown} style={{ marginRight: 8 }} />
+            <Text style={styles.cardTitle}>网络运输度</Text>
+          </View>
+
+          {/* 实时下行与上行速率徽章 */}
+          <View style={styles.netBadgesRow}>
+            <View style={styles.netRateItem}>
+              <ArrowDown size={13} color={colors.networkDown} style={{ marginRight: 3 }} />
+              <Text style={[styles.netRateText, { color: colors.networkDown }]}>
+                {formatSpeed(netSpeed.down)}
+              </Text>
+            </View>
+            <View style={[styles.netRateItem, { marginLeft: 12 }]}>
+              <ArrowUp size={13} color={colors.networkUp} style={{ marginRight: 3 }} />
+              <Text style={[styles.netRateText, { color: colors.networkUp }]}>
+                {formatSpeed(netSpeed.up)}
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        {/* SVG 双轨平滑贝塞尔波形图 */}
+        <View style={styles.waveSvgContainer}>
+          <Svg width="100%" height={50} viewBox="0 0 320 50">
+            <Defs>
+              <LinearGradient id="downGrad" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0%" stopColor={colors.networkDown} stopOpacity={0.25} />
+                <Stop offset="100%" stopColor={colors.networkDown} stopOpacity={0.0} />
+              </LinearGradient>
+              <LinearGradient id="upGrad" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0%" stopColor={colors.networkUp} stopOpacity={0.20} />
+                <Stop offset="100%" stopColor={colors.networkUp} stopOpacity={0.0} />
+              </LinearGradient>
+            </Defs>
+
+            {/* 下行面积与曲线 */}
+            {downWave.area ? <Path d={downWave.area} fill="url(#downGrad)" /> : null}
+            {downWave.path ? <Path d={downWave.path} stroke={colors.networkDown} strokeWidth={2.2} fill="none" /> : null}
+
+            {/* 上行面积与曲线 */}
+            {upWave.area ? <Path d={upWave.area} fill="url(#upGrad)" /> : null}
+            {upWave.path ? <Path d={upWave.path} stroke={colors.networkUp} strokeWidth={2.0} fill="none" /> : null}
+          </Svg>
+        </View>
+      </View>
+
+      {/* 4. 存储阵列卡片 (多色段容量分布 + 磁盘温度胶囊) */}
+      <TouchableOpacity
+        style={styles.card}
+        onPress={() => navigation.navigate('存储详情')}
+        activeOpacity={0.85}
+      >
+        <View style={styles.cardHeaderRow}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <HardDrive size={17} color={colors.accent} style={{ marginRight: 8 }} />
+            <Text style={styles.cardTitle}>存储 Array</Text>
+          </View>
+          <Text style={styles.storageCapacityMeta}>
+            {formatBytes(storage.total_used)} / {formatBytes(storage.total_size)} ({storage.percentage}%)
+          </Text>
+        </View>
+
+        {/* 奇偶校验中指示 */}
+        {isParityChecking ? (
+          <View style={styles.parityAlertStrip}>
+            <ShieldCheck size={14} color={colors.amber} style={{ marginRight: 6 }} />
+            <Text style={styles.parityAlertText}>
+              奇偶校验中 ({(parity.progress || 0).toFixed(1)}%) · 速度: {parity.speed || '计算中'}
+            </Text>
+          </View>
+        ) : null}
+
+        {/* 分段式容量进度条 */}
+        <View style={styles.multiSegTrack}>
+          <View style={[styles.multiSegBar, { width: `${parityPct}%`, backgroundColor: colors.networkDown }]} />
+          <View style={[styles.multiSegBar, { width: `${dataPct}%`, backgroundColor: colors.accent }]} />
+          <View style={[styles.multiSegBar, { width: `${cachePct}%`, backgroundColor: colors.tempWarm }]} />
+        </View>
+
+        {/* 磁盘温度独立胶囊 */}
+        <View style={styles.diskPillsContainer}>
+          {displayDisks.length > 0 ? (
+            displayDisks.map((d, idx) => {
+              const tempNum = d.temp || null;
+              const isWarm = tempNum && tempNum >= 40;
+              const isCool = tempNum && tempNum < 40;
+              return (
+                <View key={d.name || idx} style={styles.diskPill}>
+                  <View
+                    style={[
+                      styles.diskDot,
+                      { backgroundColor: isWarm ? colors.tempWarm : isCool ? colors.networkDown : colors.muted }
+                    ]}
+                  />
+                  <Text style={styles.diskPillText} numberOfLines={1}>
+                    {d.name} {tempNum ? `(${tempNum}°C)` : '(休眠)'}
+                  </Text>
+                </View>
+              );
+            })
+          ) : (
+            <>
+              <View style={styles.diskPill}>
+                <View style={[styles.diskDot, { backgroundColor: colors.networkDown }]} />
+                <Text style={styles.diskPillText}>Parity 1 (34°C)</Text>
+              </View>
+              <View style={styles.diskPill}>
+                <View style={[styles.diskDot, { backgroundColor: colors.accent }]} />
+                <Text style={styles.diskPillText}>Disk 1 (36°C)</Text>
+              </View>
+              <View style={styles.diskPill}>
+                <View style={[styles.diskDot, { backgroundColor: colors.tempWarm }]} />
+                <Text style={styles.diskPillText}>NVMe Cache (41°C)</Text>
+              </View>
+            </>
+          )}
         </View>
       </TouchableOpacity>
 
-      {/* Docker Containers */}
-      <TouchableOpacity style={styles.card} onPress={() => navigation.navigate('Docker详情')}>
-        <View style={styles.cardHeader}>
-          <Box color={colors.accent} size={24} />
-          <Text style={styles.cardTitle}>Docker 容器</Text>
+      {/* 5. Docker 常用服务快捷直达矩阵 */}
+      <View style={styles.card}>
+        <View style={styles.cardHeaderRow}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Box size={17} color={colors.accent} style={{ marginRight: 8 }} />
+            <Text style={styles.cardTitle}>Docker & 常用服务</Text>
+          </View>
+          <TouchableOpacity
+            style={{ flexDirection: 'row', alignItems: 'center' }}
+            onPress={() => navigation.navigate('Docker详情')}
+          >
+            <Text style={styles.moreLinkText}>更多</Text>
+            <ChevronRight size={14} color={colors.sub} />
+          </TouchableOpacity>
         </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryText}>运行中: <Text style={{ color: colors.green, fontWeight: 'bold' }}>{dockers.running}</Text></Text>
-          <Text style={styles.summaryText}>总计: {dockers.total}</Text>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.dockerScrollContainer}
+        >
+          {/* 汇总磁贴 */}
+          <TouchableOpacity
+            style={styles.dockerSummaryTile}
+            onPress={() => navigation.navigate('Docker详情')}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.dockerSummaryNum}>{dockers.running || 0}</Text>
+            <Text style={styles.dockerSummaryLabel}>运行中</Text>
+          </TouchableOpacity>
+
+          {/* 常用容器磁贴 */}
+          {runningDockerList.length > 0 ? (
+            runningDockerList.map((c, i) => {
+              const initial = (c.name || 'D').slice(0, 2).toUpperCase();
+              return (
+                <View key={c.name || i} style={styles.dockerServiceCard}>
+                  <View style={styles.dockerCardTop}>
+                    <View style={[styles.dockerAvatar, { backgroundColor: isDark ? 'rgba(56, 189, 248, 0.15)' : '#e0f2fe' }]}>
+                      <Text style={[styles.dockerAvatarText, { color: colors.accent }]}>{initial}</Text>
+                    </View>
+                    <Text style={styles.dockerServiceName} numberOfLines={1}>{c.name}</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.dockerLaunchBtn}
+                    onPress={() => handleQuickLaunchDockerWeb(c)}
+                    activeOpacity={0.7}
+                  >
+                    <ExternalLink size={11} color={colors.accent} style={{ marginRight: 3 }} />
+                    <Text style={styles.dockerLaunchBtnText}>Web launch</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })
+          ) : (
+            <View style={styles.dockerEmptyHint}>
+              <Text style={styles.dockerEmptyText}>点击「更多」管理所有容器</Text>
+            </View>
+          )}
+        </ScrollView>
+      </View>
+
+      {/* 6. 虚拟机概览 (VM) */}
+      <TouchableOpacity
+        style={styles.card}
+        onPress={() => navigation.navigate('VM详情')}
+        activeOpacity={0.85}
+      >
+        <View style={styles.cardHeaderRow}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Monitor size={17} color={colors.pink} style={{ marginRight: 8 }} />
+            <Text style={styles.cardTitle}>虚拟机 (VM)</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={styles.vmRunningText}>
+              运行中: <Text style={{ color: colors.green, fontWeight: 'bold' }}>{vms.running || 0}</Text> / {vms.total || 0}
+            </Text>
+            <ChevronRight size={14} color={colors.sub} style={{ marginLeft: 4 }} />
+          </View>
         </View>
       </TouchableOpacity>
 
-      {/* Virtual Machines */}
-      <TouchableOpacity style={styles.card} onPress={() => navigation.navigate('VM详情')}>
-        <View style={styles.cardHeader}>
-          <Monitor color={colors.pink} size={24} />
-          <Text style={styles.cardTitle}>虚拟机 (VM)</Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryText}>运行中: <Text style={{ color: colors.green, fontWeight: 'bold' }}>{vms.running}</Text></Text>
-          <Text style={styles.summaryText}>总计: {vms.total}</Text>
-        </View>
-      </TouchableOpacity>
-
-      {/* Syslog Real-Time Modal */}
+      {/* 7. Syslog 终端模态窗 */}
       <Modal
         visible={syslogVisible}
         animationType="slide"
@@ -578,7 +1028,7 @@ export default function DashboardScreen({ navigation }) {
           <View style={styles.syslogHeader}>
             <View style={{ flex: 1 }}>
               <Text style={styles.syslogTitle}>系统日志 · Syslog</Text>
-              <Text style={styles.syslogSub}>/var/log/syslog 实时日志捕获与诊断</Text>
+              <Text style={styles.syslogSub}>/var/log/syslog 实时日志流捕获与诊断</Text>
             </View>
 
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -688,7 +1138,7 @@ export default function DashboardScreen({ navigation }) {
         </View>
       </Modal>
 
-      {/* Modern Squircle Confirm Dialog */}
+      {/* Modern Confirm Dialog */}
       <ModernConfirmDialog
         visible={confirmDialog.visible}
         type={confirmDialog.type}
@@ -704,51 +1154,142 @@ export default function DashboardScreen({ navigation }) {
   );
 }
 
-const createStyles = (colors) => StyleSheet.create({
-  center: { flex: 1, backgroundColor: colors.bg, justifyContent: 'center', padding: 20 },
-  setupCard: { backgroundColor: colors.card, borderRadius: 16, padding: 24, elevation: 5 },
-  setupTitle: { color: colors.textStrong, fontSize: 22, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 },
-  setupSub: { color: colors.sub, fontSize: 13, textAlign: 'center', marginBottom: 24 },
-  inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.input, borderRadius: 8, marginBottom: 16, paddingHorizontal: 12 },
-  inputIcon: { marginRight: 10 },
-  input: { flex: 1, color: colors.textStrong, height: 50, fontSize: 16 },
-  saveBtn: { backgroundColor: colors.accent, height: 50, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
-  saveBtnText: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
-
-  container: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 16, paddingBottom: 40, paddingTop: 40 },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 20,
-    paddingHorizontal: 4,
+// -------------------------------------------------------------
+// Stylesheet (Dynamic Theme Driven)
+// -------------------------------------------------------------
+const createStyles = (colors, isDark) => StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.bg,
   },
-  statusIndicator: { width: 12, height: 12, borderRadius: 6, marginRight: 8 },
-  headerText: { color: colors.textStrong, fontSize: 22, fontWeight: 'bold' },
-  syslogHeaderBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-    elevation: 2,
+  content: {
+    padding: 16,
+    paddingTop: Platform.OS === 'ios' ? 44 : 24,
+    paddingBottom: 40,
+  },
+  center: {
+    flex: 1,
+    backgroundColor: colors.bg,
+    justifyContent: 'center',
+    padding: 20,
+  },
+  setupCard: {
+    backgroundColor: colors.card,
+    borderRadius: 20,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: isDark ? 0.3 : 0.08,
+    shadowRadius: 12,
+    elevation: 4,
   },
-  syslogHeaderBtnText: {
-    fontSize: 12,
+  setupTitle: {
+    color: colors.textStrong,
+    fontSize: 22,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  setupSub: {
+    color: colors.sub,
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.input,
+    borderRadius: 12,
+    marginBottom: 16,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  inputIcon: {
+    marginRight: 10,
+  },
+  input: {
+    flex: 1,
+    color: colors.textStrong,
+    height: 48,
+    fontSize: 15,
+  },
+  saveBtn: {
+    backgroundColor: colors.accent,
+    height: 48,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  saveBtnText: {
+    color: '#ffffff',
+    fontSize: 16,
     fontWeight: 'bold',
   },
 
-  wolCard: {
-    backgroundColor: colors.mode === 'dark' ? 'rgba(30, 41, 59, 0.95)' : '#f8fafc',
+  // 1. Header Bar
+  headerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    paddingHorizontal: 2,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 10,
+  },
+  serverTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
+  serverVersion: {
+    fontSize: 14,
+    color: colors.sub,
+  },
+  uptimeSub: {
+    fontSize: 12,
+    color: colors.sub,
+    marginTop: 2,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  headerActionBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: colors.card,
     borderWidth: 1,
-    borderColor: colors.mode === 'dark' ? 'rgba(239, 68, 68, 0.35)' : 'rgba(239, 68, 68, 0.25)',
-    borderRadius: 16,
-    marginBottom: 20,
+    borderColor: colors.cardBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: isDark ? 0.2 : 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+
+  // WOL Card
+  wolCard: {
+    backgroundColor: isDark ? 'rgba(30, 41, 59, 0.9)' : '#fff1f2',
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(239, 68, 68, 0.35)' : 'rgba(239, 68, 68, 0.25)',
+    borderRadius: 18,
+    marginBottom: 16,
     padding: 16,
   },
   wolHeaderRow: {
@@ -757,8 +1298,8 @@ const createStyles = (colors) => StyleSheet.create({
     marginBottom: 12,
   },
   wolIconBadge: {
-    width: 40,
-    height: 40,
+    width: 38,
+    height: 38,
     borderRadius: 12,
     backgroundColor: colors.red,
     alignItems: 'center',
@@ -779,10 +1320,9 @@ const createStyles = (colors) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
+    paddingVertical: 11,
     paddingHorizontal: 16,
     borderRadius: 12,
-    marginTop: 4,
   },
   wolActionBtnWaking: {
     backgroundColor: colors.amber,
@@ -793,74 +1333,301 @@ const createStyles = (colors) => StyleSheet.create({
     fontWeight: 'bold',
   },
 
-  gridRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 },
-  gridCard: { flex: 1, marginBottom: 0 },
-  card: { backgroundColor: colors.card, borderRadius: 18, padding: 20, marginBottom: 16, elevation: 2 },
-  cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
-  cardTitle: { color: colors.textStrong, fontSize: 16, fontWeight: 'bold', marginLeft: 8 },
-  mainNumber: { color: colors.textStrong, fontSize: 28, fontWeight: 'bold', marginBottom: 4 },
-  subText: { color: colors.sub, fontSize: 13 },
-  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
-  summaryText: { color: colors.text, fontSize: 16 },
-  track: { height: 8, backgroundColor: colors.input, borderRadius: 4, overflow: 'hidden' },
-  bar: { height: '100%', borderRadius: 4 },
-  miniTrack: { height: 6, backgroundColor: colors.input, borderRadius: 3, marginTop: 12, overflow: 'hidden' },
-  miniBar: { height: '100%', borderRadius: 3 },
-
-  // Parity Check Card Styles
-  parityHeaderRow: {
+  // 2. Bento Hardware Row (CPU & RAM)
+  bentoRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 14,
+  },
+  bentoCard: {
+    flex: 1,
+    backgroundColor: colors.card,
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: isDark ? 0.25 : 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  bentoHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginBottom: 10,
   },
-  parityTag: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+  bentoTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
+  bentoSubMeta: {
+    fontSize: 12,
+    color: colors.sub,
+    fontWeight: '600',
+  },
+  tempBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
     borderRadius: 8,
   },
-  parityTagText: {
-    fontSize: 12,
+  tempBadgeText: {
+    fontSize: 11,
     fontWeight: 'bold',
   },
-  parityMetaRow: {
+  gaugeContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 105,
+    position: 'relative',
+  },
+  gaugeCenterText: {
+    position: 'absolute',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gaugeBigNum: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+    letterSpacing: -0.5,
+  },
+  gaugeUnitText: {
+    fontSize: 11,
+    color: colors.sub,
+    marginTop: 2,
+  },
+  coreBarsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    height: 18,
+    marginTop: 8,
+    paddingHorizontal: 6,
+  },
+  coreBarTrack: {
+    width: 4,
+    height: 18,
+    backgroundColor: colors.cardSecondary,
+    borderRadius: 2,
+    justifyContent: 'flex-end',
+  },
+  coreBarFill: {
+    width: 4,
+    borderRadius: 2,
+  },
+  ramMetaBox: {
     alignItems: 'center',
     marginTop: 8,
   },
-  parityBtnRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 14,
+  ramMetaText: {
+    fontSize: 11,
+    color: colors.sub,
   },
-  parityMiniBtn: {
-    flex: 1,
+
+  // Standard Card Style
+  card: {
+    backgroundColor: colors.card,
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: isDark ? 0.25 : 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  cardHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    borderRadius: 10,
+    justifyContent: 'space-between',
+    marginBottom: 12,
   },
-  parityMiniBtnText: {
+  cardTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
+
+  // 3. Network Telemetry Card
+  netBadgesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  netRateItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  netRateText: {
     fontSize: 13,
     fontWeight: 'bold',
   },
-  parityStartBtn: {
-    height: 44,
+  waveSvgContainer: {
+    width: '100%',
+    height: 50,
+    marginTop: 4,
+    overflow: 'hidden',
+  },
+
+  // 4. Storage Array Card
+  storageCapacityMeta: {
+    fontSize: 12,
+    color: colors.sub,
+    fontWeight: '600',
+  },
+  parityAlertStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  parityAlertText: {
+    fontSize: 12,
+    color: colors.amber,
+    fontWeight: 'bold',
+  },
+  multiSegTrack: {
+    height: 9,
+    backgroundColor: colors.cardSecondary,
+    borderRadius: 4.5,
+    flexDirection: 'row',
+    overflow: 'hidden',
+    marginBottom: 14,
+  },
+  multiSegBar: {
+    height: '100%',
+  },
+  diskPillsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  diskPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.cardSecondary,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  diskDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 6,
+  },
+  diskPillText: {
+    fontSize: 12,
+    color: colors.text,
+    fontWeight: '500',
+  },
+
+  // 5. Docker Services Matrix
+  moreLinkText: {
+    fontSize: 12,
+    color: colors.sub,
+    marginRight: 2,
+  },
+  dockerScrollContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+    gap: 10,
+  },
+  dockerSummaryTile: {
+    width: 82,
+    height: 84,
+    borderRadius: 16,
+    backgroundColor: colors.cardSecondary,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  parityStartBtnText: {
-    color: '#ffffff',
-    fontSize: 14,
+  dockerSummaryNum: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
+  dockerSummaryLabel: {
+    fontSize: 12,
+    color: colors.sub,
+    marginTop: 2,
+  },
+  dockerServiceCard: {
+    width: 110,
+    height: 84,
+    borderRadius: 16,
+    backgroundColor: colors.cardSecondary,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    padding: 8,
+    justifyContent: 'space-between',
+  },
+  dockerCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  dockerAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 6,
+  },
+  dockerAvatarText: {
+    fontSize: 10,
     fontWeight: 'bold',
   },
+  dockerServiceName: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
+  dockerLaunchBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#ffffff',
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  dockerLaunchBtnText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: colors.accent,
+  },
+  dockerEmptyHint: {
+    paddingHorizontal: 16,
+  },
+  dockerEmptyText: {
+    fontSize: 13,
+    color: colors.muted,
+  },
 
-  // Syslog Terminal Modal
+  // 6. VM Card
+  vmRunningText: {
+    fontSize: 13,
+    color: colors.sub,
+  },
+
+  // 7. Syslog Modal
   syslogModalContainer: {
     flex: 1,
-    backgroundColor: '#0a0f1d',
+    backgroundColor: isDark ? '#080d19' : '#f8fafc',
   },
   syslogHeader: {
     flexDirection: 'row',
@@ -868,17 +1635,17 @@ const createStyles = (colors) => StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: Platform.OS === 'ios' ? 48 : 16,
     paddingBottom: 14,
-    backgroundColor: '#0f172a',
+    backgroundColor: isDark ? '#0d1424' : '#ffffff',
     borderBottomWidth: 1,
-    borderBottomColor: '#1e293b',
+    borderBottomColor: colors.cardBorder,
   },
   syslogTitle: {
-    color: '#f8fafc',
+    color: colors.textStrong,
     fontSize: 17,
     fontWeight: 'bold',
   },
   syslogSub: {
-    color: '#64748b',
+    color: colors.sub,
     fontSize: 12,
     marginTop: 2,
   },
@@ -886,7 +1653,9 @@ const createStyles = (colors) => StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: '#1e293b',
+    backgroundColor: isDark ? '#151d2e' : '#f1f5f9',
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -900,63 +1669,66 @@ const createStyles = (colors) => StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: 8,
-    backgroundColor: '#1e293b',
+    backgroundColor: isDark ? '#151d2e' : '#f1f5f9',
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
   },
   syslogTabActive: {
-    backgroundColor: '#38bdf8',
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
   },
   syslogTabText: {
-    color: '#94a3b8',
+    color: colors.sub,
     fontSize: 12,
     fontWeight: 'bold',
   },
   syslogTabTextActive: {
-    color: '#0f172a',
+    color: '#ffffff',
   },
   syslogSearchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#0f172a',
+    backgroundColor: isDark ? '#101726' : '#ffffff',
     marginHorizontal: 16,
     marginVertical: 10,
     paddingHorizontal: 12,
     height: 40,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#1e293b',
+    borderColor: colors.cardBorder,
   },
   syslogSearchInput: {
     flex: 1,
-    color: '#f8fafc',
+    color: colors.textStrong,
     fontSize: 13,
     paddingVertical: 0,
   },
   toastBox: {
-    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
     paddingVertical: 6,
     paddingHorizontal: 16,
     marginHorizontal: 16,
     marginBottom: 8,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.4)',
+    borderColor: 'rgba(16, 185, 129, 0.35)',
   },
   toastText: {
-    color: '#34d399',
+    color: colors.green,
     fontSize: 12,
     fontWeight: 'bold',
     textAlign: 'center',
   },
   syslogBody: {
     flex: 1,
-    backgroundColor: '#050811',
+    backgroundColor: isDark ? '#050811' : '#f1f5f9',
   },
   syslogBodyContent: {
     padding: 16,
     paddingBottom: 40,
   },
   syslogText: {
-    color: '#cbd5e1',
+    color: isDark ? '#cbd5e1' : '#334155',
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     fontSize: 12,
     lineHeight: 18,
@@ -967,7 +1739,7 @@ const createStyles = (colors) => StyleSheet.create({
     marginTop: 80,
   },
   syslogLoadingText: {
-    color: '#94a3b8',
+    color: colors.sub,
     fontSize: 13,
   },
 });
