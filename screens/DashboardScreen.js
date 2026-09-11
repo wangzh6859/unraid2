@@ -9,8 +9,7 @@ import {
   Cpu, Database, HardDrive, Box, Monitor, Wifi, Zap, Server, Key,
   ShieldCheck, AlertCircle, Play, Pause, Square, FileText, Search,
   RefreshCw, Copy, Check, X, ArrowDown, ArrowUp, ExternalLink, Power,
-  ChevronRight, RefreshCcw, Layers, Terminal
-} from 'lucide-react-native';
+  ChevronRight, RefreshCcw, Layers, Terminal, Bell, Clock, AlertTriangle, Info, CheckCircle2 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
@@ -119,6 +118,13 @@ export default function DashboardScreen({ navigation }) {
   const [syslogLevelFilter, setSyslogLevelFilter] = useState('all');
   const [syslogCopiedToast, setSyslogCopiedToast] = useState(false);
   const syslogScrollRef = useRef(null);
+
+  // 通知中心与系统时钟状态
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [timeStatus, setTimeStatus] = useState({ warning: null, synced: true, server_time: '', drift_seconds: 0 });
+  const [notificationModalVisible, setNotificationModalVisible] = useState(false);
+  const [notifFilter, setNotifFilter] = useState('all'); // 'all' | 'alert' | 'normal'
 
   // 确认弹窗
   const [confirmDialog, setConfirmDialog] = useState({
@@ -295,7 +301,7 @@ export default function DashboardScreen({ navigation }) {
       wolPollTimerRef.current = setInterval(async () => {
         attempts++;
         try {
-          await fetchServerData();
+          await Promise.all([fetchServerData(), fetchNotifications()]);
         } catch (_) {}
         if (attempts >= 36) {
           if (wolPollTimerRef.current) clearInterval(wolPollTimerRef.current);
@@ -314,50 +320,39 @@ export default function DashboardScreen({ navigation }) {
     }
   };
 
-  // 电源管理（安全关机与重启）
-  const handleServerPowerAction = (actionType) => {
-    const isReboot = actionType === 'reboot';
-    showConfirm({
-      type: 'danger',
-      title: isReboot ? '重启 Unraid 服务器' : '安全关闭服务器',
-      message: isReboot
-        ? '确定要重启 Unraid 服务器吗？系统核心服务将在数分钟内暂时离线。'
-        : '确定要关闭 Unraid 服务器吗？关机后如需再次开机需通过网络唤醒 (WOL) 或手动按物理电源按键。',
-      confirmText: isReboot ? '确认重启' : '确认关机',
-      cancelText: '取消',
-      showCancel: true,
-      onConfirm: async () => {
-        try {
-          const highRiskEnabled = await AsyncStorage.getItem('@security_high_risk_auth');
-          if (highRiskEnabled === 'true') {
-            const auth = await LocalAuthentication.authenticateAsync({
-              promptMessage: isReboot ? '请验证指纹以执行重启' : '请验证指纹以执行关机',
-              cancelLabel: '取消',
-              fallbackLabel: '使用设备锁屏密码',
-            });
-            if (!auth.success) {
-              showConfirm({ type: 'warning', title: '认证未通过', message: '已取消电源操作。', showCancel: false });
-              return;
-            }
-          }
-          const savedUrl = await AsyncStorage.getItem('@server_url');
-          const savedToken = await AsyncStorage.getItem('@api_token');
-          if (!savedUrl || !savedToken) return;
-          const actionName = isReboot ? 'reboot' : 'poweroff';
-          await fetch(`${savedUrl}/api.php?token=${savedToken}&action=${actionName}`);
-          setServerStatus('offline');
-          showConfirm({
-            type: 'info',
-            title: isReboot ? '重启指令已发送' : '关机指令已发送',
-            message: isReboot ? 'Unraid 正在重启，稍后可通过唤醒卡片或下拉刷新查看状态。' : 'Unraid 正在安全关闭各容器并同步卸载阵列。',
-            confirmText: '知道了',
-            showCancel: false,
-          });
-        } catch (e) {
-          showConfirm({ type: 'warning', title: '执行失败', message: e.message, showCancel: false });
+  
+  // 通知中心与系统时间校验
+  const fetchNotifications = async () => {
+    try {
+      const savedUrl = await AsyncStorage.getItem('@server_url');
+      const savedToken = await AsyncStorage.getItem('@api_token');
+      if (!savedUrl || !savedToken) return;
+      const clientTime = Math.floor(Date.now() / 1000);
+      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=notifications&client_time=${clientTime}`);
+      const data = await res.json();
+      if (data.status === 'success') {
+        setNotifications(data.notifications || []);
+        setUnreadCount(data.unread_count || 0);
+        if (data.time_status) {
+          setTimeStatus(data.time_status);
         }
-      },
-    });
+      }
+    } catch (e) {
+      console.log('Error fetching notifications:', e);
+    }
+  };
+
+  const handleDismissNotification = async (item) => {
+    try {
+      const savedUrl = await AsyncStorage.getItem('@server_url');
+      const savedToken = await AsyncStorage.getItem('@api_token');
+      if (!savedUrl || !savedToken) return;
+      await fetch(`${savedUrl}/api.php?token=${savedToken}&action=dismiss_notification&id=${encodeURIComponent(item.id)}`);
+      setNotifications(prev => prev.filter(n => n.id !== item.id));
+      setUnreadCount(prev => Math.max(0, prev - 1));
+    } catch (e) {
+      console.log('Dismiss error:', e);
+    }
   };
 
   // Syslog 拉取
@@ -514,7 +509,7 @@ export default function DashboardScreen({ navigation }) {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await fetchServerData();
+    await Promise.all([fetchServerData(), fetchNotifications()]);
     setRefreshing(false);
   }, []);
 
@@ -644,24 +639,40 @@ export default function DashboardScreen({ navigation }) {
           <TouchableOpacity
             style={[styles.headerActionBtn, { marginLeft: 8 }]}
             onPress={() => {
-              showConfirm({
-                type: 'info',
-                title: '服务器电源管理',
-                message: '请选择要执行的电源操作：',
-                confirmText: '安全重启',
-                cancelText: '安全关机',
-                showCancel: true,
-                onConfirm: () => handleServerPowerAction('reboot'),
-                onCancel: () => handleServerPowerAction('poweroff'),
-              });
+              setNotificationModalVisible(true);
+              fetchNotifications();
             }}
             activeOpacity={0.7}
-            accessibilityLabel="电源管理"
+            accessibilityLabel="通知中心"
           >
-            <Power size={17} color={colors.red} />
+            <Bell size={17} color={unreadCount > 0 ? colors.accent : colors.sub} />
+            {unreadCount > 0 ? (
+              <View style={styles.notifBadge}>
+                <Text style={styles.notifBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+              </View>
+            ) : null}
           </TouchableOpacity>
         </View>
       </View>
+      {/* 系统时钟异常或告警横幅 */}
+      {timeStatus?.warning ? (
+        <TouchableOpacity
+          style={styles.timeWarningBanner}
+          onPress={() => setNotificationModalVisible(true)}
+          activeOpacity={0.8}
+        >
+          <View style={styles.timeWarningIconBox}>
+            <Clock size={16} color="#f59e0b" />
+          </View>
+          <View style={{ flex: 1, marginLeft: 10 }}>
+            <Text style={styles.timeWarningTitle}>系统时钟同步异常警告</Text>
+            <Text style={styles.timeWarningText} numberOfLines={2}>
+              {timeStatus.warning}
+            </Text>
+          </View>
+          <ChevronRight size={16} color="#f59e0b" style={{ marginLeft: 4 }} />
+        </TouchableOpacity>
+      ) : null}
 
       {/* 离线网络唤醒开机卡片 (WOL Remote Wake Card) */}
       {serverStatus === 'offline' && (
@@ -1140,6 +1151,141 @@ export default function DashboardScreen({ navigation }) {
       </Modal>
 
       {/* Modern Confirm Dialog */}
+      
+      {/* 8. 通知与健康中心模态窗 */}
+      <Modal
+        visible={notificationModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setNotificationModalVisible(false)}
+      >
+        <View style={styles.notifModalContainer}>
+          {/* Header */}
+          <View style={styles.notifHeader}>
+            <View>
+              <Text style={styles.notifTitle}>通知与健康中心</Text>
+              <Text style={styles.notifSub}>
+                {timeStatus?.synced ? '时钟已校准 · 阵列健康监控' : '注意：检测到时间偏差或潜在异常'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.notifCloseBtn}
+              onPress={() => setNotificationModalVisible(false)}
+            >
+              <X size={18} color={colors.sub} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Time Drift Status Card */}
+          <View style={[styles.timeStatusCard, timeStatus?.warning ? styles.timeStatusCardWarning : styles.timeStatusCardOk]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              {timeStatus?.warning ? (
+                <Clock size={18} color="#f59e0b" />
+              ) : (
+                <CheckCircle2 size={18} color={colors.green} />
+              )}
+              <View style={{ marginLeft: 10, flex: 1 }}>
+                <Text style={[styles.timeStatusCardTitle, { color: timeStatus?.warning ? '#f59e0b' : colors.green }]}>
+                  {timeStatus?.warning ? '时钟同步警告 (NTP Drift)' : '系统时钟状态正常'}
+                </Text>
+                <Text style={styles.timeStatusCardSub}>
+                  服务器时间: {timeStatus?.server_time || '获取中...'}
+                </Text>
+                {timeStatus?.warning ? (
+                  <Text style={styles.timeStatusExplain}>
+                    {timeStatus.warning}
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+          </View>
+
+          {/* Filter Tabs */}
+          <View style={styles.notifFilterTabs}>
+            <TouchableOpacity
+              style={[styles.notifTab, notifFilter === 'all' && styles.notifTabActive]}
+              onPress={() => setNotifFilter('all')}
+            >
+              <Text style={[styles.notifTabText, notifFilter === 'all' && styles.notifTabTextActive]}>
+                全部 ({notifications.length})
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.notifTab, notifFilter === 'alert' && { backgroundColor: 'rgba(239, 68, 68, 0.2)' }]}
+              onPress={() => setNotifFilter('alert')}
+            >
+              <Text style={[styles.notifTabText, notifFilter === 'alert' && { color: '#f87171', fontWeight: 'bold' }]}>
+                异常警告 ({notifications.filter(n => n.importance === 'alert' || n.importance === 'warning').length})
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.notifTab, notifFilter === 'normal' && { backgroundColor: 'rgba(59, 130, 246, 0.2)' }]}
+              onPress={() => setNotifFilter('normal')}
+            >
+              <Text style={[styles.notifTabText, notifFilter === 'normal' && { color: '#60a5fa', fontWeight: 'bold' }]}>
+                常规通知 ({notifications.filter(n => n.importance === 'normal').length})
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Notifications List */}
+          <ScrollView
+            style={styles.notifBody}
+            contentContainerStyle={styles.notifBodyContent}
+            showsVerticalScrollIndicator={false}
+          >
+            {filteredNotifications.map((item, idx) => {
+              const isAlert = item.importance === 'alert';
+              const isWarning = item.importance === 'warning';
+              return (
+                <View key={item.id || idx} style={[styles.notifItemCard, isAlert && styles.notifItemAlert]}>
+                  <View style={styles.notifItemHeader}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                      {isAlert ? (
+                        <AlertCircle size={16} color={colors.red} style={{ marginRight: 8 }} />
+                      ) : isWarning ? (
+                        <AlertTriangle size={16} color={colors.amber} style={{ marginRight: 8 }} />
+                      ) : (
+                        <Info size={16} color={colors.accent} style={{ marginRight: 8 }} />
+                      )}
+                      <Text style={styles.notifItemSubject} numberOfLines={1}>
+                        {item.subject || '系统事件通知'}
+                      </Text>
+                    </View>
+                    <Text style={styles.notifItemTime}>{item.timestamp || ''}</Text>
+                  </View>
+
+                  {item.description ? (
+                    <Text style={styles.notifItemDesc}>{item.description}</Text>
+                  ) : null}
+
+                  {!item.is_read && (
+                    <View style={styles.notifItemFooter}>
+                      <TouchableOpacity
+                        style={styles.dismissBtn}
+                        onPress={() => handleDismissNotification(item)}
+                        activeOpacity={0.7}
+                      >
+                        <Check size={12} color={colors.sub} style={{ marginRight: 4 }} />
+                        <Text style={styles.dismissBtnText}>标记已读</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+
+            {filteredNotifications.length === 0 && (
+              <View style={styles.notifEmptyBox}>
+                <CheckCircle2 size={44} color={colors.green} style={{ marginBottom: 12, opacity: 0.8 }} />
+                <Text style={styles.notifEmptyTitle}>暂无未处理的系统通知</Text>
+                <Text style={styles.notifEmptySub}>所有磁盘、容器与核心服务运行状态良好。</Text>
+              </View>
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
+
       <ModernConfirmDialog
         visible={confirmDialog.visible}
         type={confirmDialog.type}
@@ -1743,4 +1889,221 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     color: colors.sub,
     fontSize: 13,
   },
+
+  notifBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: colors.red,
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+    borderWidth: 1.5,
+    borderColor: colors.card,
+  },
+  notifBadgeText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: 'bold',
+  },
+  timeWarningBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: isDark ? 'rgba(245, 158, 11, 0.12)' : 'rgba(254, 243, 199, 0.85)',
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.3)',
+  },
+  timeWarningIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timeWarningTitle: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: isDark ? '#fbbf24' : '#b45309',
+    marginBottom: 2,
+  },
+  timeWarningText: {
+    fontSize: 11,
+    color: isDark ? '#d1d5db' : '#475569',
+    lineHeight: 15,
+  },
+  notifModalContainer: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  notifHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'ios' ? 24 : 16,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  notifTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
+  notifSub: {
+    fontSize: 11,
+    color: colors.sub,
+    marginTop: 2,
+  },
+  notifCloseBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.cardSecondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timeStatusCard: {
+    margin: 16,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  timeStatusCardOk: {
+    backgroundColor: isDark ? 'rgba(16, 185, 129, 0.08)' : 'rgba(240, 253, 244, 0.9)',
+    borderColor: 'rgba(16, 185, 129, 0.25)',
+  },
+  timeStatusCardWarning: {
+    backgroundColor: isDark ? 'rgba(245, 158, 11, 0.1)' : 'rgba(254, 243, 199, 0.9)',
+    borderColor: 'rgba(245, 158, 11, 0.35)',
+  },
+  timeStatusCardTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    marginBottom: 2,
+  },
+  timeStatusCardSub: {
+    fontSize: 11,
+    color: colors.sub,
+  },
+  timeStatusExplain: {
+    fontSize: 11,
+    color: colors.textStrong,
+    marginTop: 6,
+    lineHeight: 16,
+  },
+  notifFilterTabs: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    marginBottom: 10,
+    gap: 8,
+  },
+  notifTab: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: colors.cardSecondary,
+  },
+  notifTabActive: {
+    backgroundColor: colors.accent,
+  },
+  notifTabText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.sub,
+  },
+  notifTabTextActive: {
+    color: '#ffffff',
+  },
+  notifBody: {
+    flex: 1,
+  },
+  notifBodyContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 40,
+    gap: 10,
+  },
+  notifItemCard: {
+    backgroundColor: colors.card,
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  notifItemAlert: {
+    borderColor: 'rgba(239, 68, 68, 0.4)',
+    backgroundColor: isDark ? 'rgba(239, 68, 68, 0.04)' : 'rgba(254, 242, 242, 0.6)',
+  },
+  notifItemHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  notifItemSubject: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+    flex: 1,
+  },
+  notifItemTime: {
+    fontSize: 10,
+    color: colors.sub,
+    marginLeft: 8,
+  },
+  notifItemDesc: {
+    fontSize: 12,
+    color: colors.sub,
+    lineHeight: 17,
+  },
+  notifItemFooter: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  dismissBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: colors.cardSecondary,
+  },
+  dismissBtnText: {
+    fontSize: 11,
+    color: colors.sub,
+    fontWeight: '600',
+  },
+  notifEmptyBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 60,
+    paddingHorizontal: 30,
+  },
+  notifEmptyTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+    marginBottom: 6,
+  },
+  notifEmptySub: {
+    fontSize: 12,
+    color: colors.sub,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+
 });

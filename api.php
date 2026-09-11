@@ -313,6 +313,38 @@ switch ($action) {
         handle_docker_logs();
         break;
 
+    case 'update_docker':
+        handle_update_docker();
+        break;
+
+    case 'compose_list':
+        handle_compose_list();
+        break;
+
+    case 'compose_action':
+        handle_compose_action();
+        break;
+
+    case 'compose_file':
+        handle_compose_file();
+        break;
+
+    case 'compose_save':
+        handle_compose_save();
+        break;
+
+    case 'compose_logs':
+        handle_compose_logs();
+        break;
+
+    case 'notifications':
+        handle_notifications();
+        break;
+
+    case 'dismiss_notification':
+        handle_dismiss_notification();
+        break;
+
     case 'start_vm':
     case 'stop_vm':
     case 'restart_vm':
@@ -599,6 +631,9 @@ function handle_status() {
                         'temp' => $temp,
                         'status' => $isSpunDown ? 'standby' : 'active',
                         'smart_status' => $smartStatus,
+                        'num_errors' => isset($d['numErrors']) ? (int)$d['numErrors'] : 0,
+                        'fs_type' => isset($d['fsType']) ? $d['fsType'] : '',
+                        'free' => 0,
                         'is_parity' => true
                     ];
                 }
@@ -654,13 +689,18 @@ function handle_status() {
                     $disks[] = [
                         'name' => $name,
                         'device' => $dev,
+                        'mount' => $mount,
                         'size' => $size,
                         'total' => $size,
                         'used' => $used,
+                        'free' => max(0, $size - $used),
                         'percentage' => $pct,
                         'temp' => $temp,
                         'status' => $status,
-                        'smart_status' => $smartStatus
+                        'smart_status' => $smartStatus,
+                        'num_errors' => ($uInfo && isset($uInfo['numErrors'])) ? (int)$uInfo['numErrors'] : 0,
+                        'fs_type' => ($uInfo && isset($uInfo['fsType'])) ? $uInfo['fsType'] : '',
+                        'is_parity' => false
                     ];
                 }
             }
@@ -715,6 +755,20 @@ function handle_status() {
         }
     }
 
+    $dockerUpdatesMap = [];
+    if (file_exists('/var/local/emhttp/docker.ini')) {
+        $ini = @parse_ini_file('/var/local/emhttp/docker.ini', true);
+        if (is_array($ini)) {
+            foreach ($ini as $cName => $sec) {
+                if (isset($sec['updated']) && ($sec['updated'] === 'false' || $sec['updated'] === 0 || $sec['updated'] === '0')) {
+                    $dockerUpdatesMap[$cName] = true;
+                } elseif (isset($sec['update']) && ($sec['update'] === 'true' || $sec['update'] === 1 || $sec['update'] === '1')) {
+                    $dockerUpdatesMap[$cName] = true;
+                }
+            }
+        }
+    }
+
     $serverHost = !empty($_SERVER['HTTP_HOST']) ? preg_replace('/:.*$/', '', $_SERVER['HTTP_HOST']) : '192.168.1.1';
     $dockerPs = @shell_exec('docker ps -a --format "{{.Names}}\t{{.Status}}\t{{.ID}}\t{{.Ports}}" 2>/dev/null');
     if ($dockerPs) {
@@ -757,7 +811,8 @@ function handle_status() {
                     'mem' => $memStr,
                     'ports' => $cPortsRaw,
                     'port' => $primaryPort,
-                    'webui' => $webuiUrl
+                    'webui' => $webuiUrl,
+                    'update_available' => !empty($dockerUpdatesMap[$cleanName]) || !empty($dockerUpdatesMap[$cName]),
                 ];
             }
         }
@@ -963,6 +1018,538 @@ function handle_docker_logs() {
         'lines' => $lines,
         'logs' => $out
     ]);
+}
+
+// -------------------------------------------------------------
+// Docker Container Update / Upgrade
+// -------------------------------------------------------------
+function handle_update_docker() {
+    $target = isset($_GET['target']) ? trim($_GET['target']) : '';
+    if (empty($target)) {
+        json_output(['status' => 'error', 'message' => 'Missing target docker container'], 400);
+    }
+    
+    // 1. If Unraid official updater is available
+    $unraidUpdater = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate';
+    if (file_exists($unraidUpdater)) {
+        $cmd = $unraidUpdater . ' apply ' . escapeshellarg($target);
+        $out = @shell_exec($cmd . ' 2>&1');
+        json_output([
+            'status' => 'success',
+            'message' => "已触发容器 [{$target}] 原生升级任务",
+            'output' => trim($out)
+        ]);
+    }
+
+    // 2. Fallback: inspect image and recreate/restart
+    $escaped = escapeshellarg($target);
+    $imgRaw = @shell_exec("docker inspect --format '{{.Config.Image}}' {$escaped} 2>/dev/null");
+    $image = trim($imgRaw);
+    if (!empty($image)) {
+        $pullOut = @shell_exec("docker pull " . escapeshellarg($image) . " 2>&1");
+        $restartOut = @shell_exec("docker restart {$escaped} 2>&1");
+        json_output([
+            'status' => 'success',
+            'message' => "已拉取镜像 [{$image}] 并重启容器 [{$target}]",
+            'output' => trim($pullOut . "\n" . $restartOut)
+        ]);
+    }
+
+    json_output(['status' => 'error', 'message' => "未找到容器 [{$target}] 镜像信息"], 404);
+}
+
+// -------------------------------------------------------------
+// Docker Compose Stack Management
+// -------------------------------------------------------------
+function get_compose_cmd() {
+    static $cmd = null;
+    if ($cmd !== null) return $cmd;
+    $check = @shell_exec('docker compose version 2>/dev/null');
+    if ($check && strpos($check, 'Docker Compose') !== false) {
+        $cmd = 'docker compose';
+        return $cmd;
+    }
+    $check2 = @shell_exec('docker-compose version 2>/dev/null');
+    if ($check2 && strpos($check2, 'docker-compose') !== false) {
+        $cmd = 'docker-compose';
+        return $cmd;
+    }
+    $cmd = 'docker compose';
+    return $cmd;
+}
+
+function handle_compose_list() {
+    $searchDirs = [
+        '/boot/config/plugins/compose.manager/projects',
+        '/boot/config/plugins/docker.compose/projects',
+        '/mnt/user/appdata/compose',
+        '/mnt/user/appdata/docker-compose'
+    ];
+    
+    if (!empty($_GET['root_dir']) && is_dir($_GET['root_dir'])) {
+        array_unshift($searchDirs, rtrim($_GET['root_dir'], '/'));
+    }
+
+    $projects = [];
+    $seenNames = [];
+
+    // Pre-query all compose-labeled containers
+    $composeContainers = [];
+    $psOut = @shell_exec('docker ps -a --filter "label=com.docker.compose.project" --format "{{.Label \"com.docker.compose.project\"}}\t{{.Label \"com.docker.compose.service\"}}\t{{.Names}}\t{{.Status}}\t{{.State}}" 2>/dev/null');
+    if ($psOut) {
+        foreach (explode("\n", trim($psOut)) as $line) {
+            $cols = explode("\t", $line);
+            if (count($cols) >= 4) {
+                $proj = trim($cols[0]);
+                $srv = trim($cols[1]);
+                $cName = trim($cols[2]);
+                $state = trim(isset($cols[4]) ? $cols[4] : '');
+                $isRunning = (strpos(trim($cols[3]), 'Up') === 0) || ($state === 'running');
+                if (!isset($composeContainers[$proj])) $composeContainers[$proj] = [];
+                $composeContainers[$proj][] = [
+                    'service' => $srv,
+                    'name' => $cName,
+                    'is_running' => $isRunning
+                ];
+            }
+        }
+    }
+
+    foreach ($searchDirs as $dir) {
+        if (!is_dir($dir)) continue;
+        $items = @scandir($dir);
+        if (!$items) continue;
+
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') continue;
+            $projDir = "{$dir}/{$item}";
+            if (!is_dir($projDir)) continue;
+
+            $projName = $item;
+            if (isset($seenNames[$projName])) continue;
+
+            // Find compose file
+            $yamlFile = '';
+            $candidates = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
+            foreach ($candidates as $c) {
+                if (file_exists("{$projDir}/{$c}")) {
+                    $yamlFile = "{$projDir}/{$c}";
+                    break;
+                }
+            }
+            if (!$yamlFile) continue;
+
+            $seenNames[$projName] = true;
+
+            // Extract service names from YAML
+            $services = [];
+            $yamlContent = @file_get_contents($yamlFile);
+            if ($yamlContent) {
+                if (preg_match('/^services:\s*(.*?)(?=\n[a-zA-Z0-9_-]+:|$)/ms', $yamlContent, $sm)) {
+                    if (preg_match_all('/^[ \t]{2,4}([a-zA-Z0-9_-]+):/m', $sm[1], $srvMatches)) {
+                        $services = array_values(array_unique($srvMatches[1]));
+                    }
+                }
+            }
+
+            // Calculate status
+            $containers = isset($composeContainers[$projName]) ? $composeContainers[$projName] : (isset($composeContainers[strtolower($projName)]) ? $composeContainers[strtolower($projName)] : []);
+            $runningCount = 0;
+            $totalCount = count($containers);
+            foreach ($containers as $c) {
+                if ($c['is_running']) $runningCount++;
+            }
+
+            $status = 'stopped';
+            if ($totalCount > 0) {
+                if ($runningCount === $totalCount) $status = 'running';
+                elseif ($runningCount > 0) $status = 'partial';
+                else $status = 'stopped';
+            }
+
+            $projects[] = [
+                'name' => $projName,
+                'path' => $projDir,
+                'yaml_file' => $yamlFile,
+                'status' => $status,
+                'services' => $services,
+                'running_count' => $runningCount,
+                'total_count' => $totalCount > 0 ? $totalCount : count($services),
+                'containers' => $containers,
+                'updated_at' => filemtime($yamlFile)
+            ];
+        }
+    }
+
+    json_output([
+        'status' => 'success',
+        'total' => count($projects),
+        'projects' => $projects
+    ]);
+}
+
+function handle_compose_action() {
+    $target = isset($_GET['target']) ? trim($_GET['target']) : '';
+    $cmd = isset($_GET['compose_cmd']) ? trim($_GET['compose_cmd']) : (isset($_GET['cmd']) ? trim($_GET['cmd']) : 'up');
+    $path = isset($_GET['path']) ? trim($_GET['path']) : '';
+
+    if (empty($target) && empty($path)) {
+        json_output(['status' => 'error', 'message' => 'Missing target project name or path'], 400);
+    }
+
+    // Locate yaml file
+    $yamlFile = '';
+    if (!empty($path) && file_exists($path)) {
+        $yamlFile = is_dir($path) ? "{$path}/docker-compose.yml" : $path;
+    } else {
+        $searchDirs = [
+            '/boot/config/plugins/compose.manager/projects',
+            '/boot/config/plugins/docker.compose/projects',
+            '/mnt/user/appdata/compose',
+            '/mnt/user/appdata/docker-compose'
+        ];
+        foreach ($searchDirs as $d) {
+            $candidates = [
+                "{$d}/{$target}/docker-compose.yml",
+                "{$d}/{$target}/docker-compose.yaml",
+                "{$d}/{$target}/compose.yml",
+                "{$d}/{$target}/compose.yaml"
+            ];
+            foreach ($candidates as $c) {
+                if (file_exists($c)) {
+                    $yamlFile = $c;
+                    break 2;
+                }
+            }
+        }
+    }
+
+    if (!file_exists($yamlFile)) {
+        json_output(['status' => 'error', 'message' => "Compose file not found for project [{$target}]"], 404);
+    }
+
+    $composeBin = get_compose_cmd();
+    $escapedFile = escapeshellarg($yamlFile);
+    $dir = dirname($yamlFile);
+    $escapedDir = escapeshellarg($dir);
+
+    $execCmd = '';
+    switch ($cmd) {
+        case 'up':
+        case 'start':
+            $execCmd = "cd {$escapedDir} && {$composeBin} -f {$escapedFile} up -d 2>&1";
+            break;
+        case 'down':
+        case 'stop':
+            $execCmd = "cd {$escapedDir} && {$composeBin} -f {$escapedFile} down 2>&1";
+            break;
+        case 'restart':
+            $execCmd = "cd {$escapedDir} && {$composeBin} -f {$escapedFile} restart 2>&1";
+            break;
+        case 'pull':
+            $execCmd = "cd {$escapedDir} && {$composeBin} -f {$escapedFile} pull 2>&1";
+            break;
+        default:
+            json_output(['status' => 'error', 'message' => "Unsupported compose command: {$cmd}"], 400);
+    }
+
+    $out = @shell_exec($execCmd);
+    json_output([
+        'status' => 'success',
+        'project' => $target,
+        'action' => $cmd,
+        'output' => trim($out)
+    ]);
+}
+
+function handle_compose_file() {
+    $target = isset($_GET['target']) ? trim($_GET['target']) : '';
+    $path = isset($_GET['path']) ? trim($_GET['path']) : '';
+    
+    $yamlFile = '';
+    if (!empty($path) && file_exists($path)) {
+        $yamlFile = $path;
+    } else {
+        $searchDirs = [
+            '/boot/config/plugins/compose.manager/projects',
+            '/boot/config/plugins/docker.compose/projects',
+            '/mnt/user/appdata/compose',
+            '/mnt/user/appdata/docker-compose'
+        ];
+        foreach ($searchDirs as $d) {
+            $candidates = ["{$d}/{$target}/docker-compose.yml", "{$d}/{$target}/compose.yml"];
+            foreach ($candidates as $c) {
+                if (file_exists($c)) { $yamlFile = $c; break 2; }
+            }
+        }
+    }
+
+    if (!file_exists($yamlFile)) {
+        json_output(['status' => 'error', 'message' => "Compose file not found"], 404);
+    }
+
+    $content = @file_get_contents($yamlFile);
+    json_output([
+        'status' => 'success',
+        'file' => $yamlFile,
+        'content' => $content
+    ]);
+}
+
+function handle_compose_save() {
+    $input = file_get_contents('php://input');
+    $data = @json_decode($input, true);
+    if (!$data) $data = $_POST;
+
+    $target = isset($data['target']) ? trim($data['target']) : '';
+    $content = isset($data['content']) ? $data['content'] : '';
+    $path = isset($data['path']) ? trim($data['path']) : '';
+
+    if (empty($target) && empty($path)) {
+        json_output(['status' => 'error', 'message' => 'Missing project name or path'], 400);
+    }
+
+    $yamlFile = $path;
+    if (empty($yamlFile)) {
+        $baseDir = '/boot/config/plugins/compose.manager/projects';
+        if (!is_dir($baseDir)) {
+            $baseDir = '/mnt/user/appdata/compose';
+            if (!is_dir($baseDir)) @mkdir($baseDir, 0777, true);
+        }
+        $projDir = "{$baseDir}/{$target}";
+        if (!is_dir($projDir)) @mkdir($projDir, 0777, true);
+        $yamlFile = "{$projDir}/docker-compose.yml";
+    }
+
+    $ok = @file_put_contents($yamlFile, $content);
+    if ($ok === false) {
+        json_output(['status' => 'error', 'message' => "Failed to write compose file to {$yamlFile}"], 500);
+    }
+
+    json_output([
+        'status' => 'success',
+        'message' => "Compose 文件已成功保存",
+        'file' => $yamlFile
+    ]);
+}
+
+function handle_compose_logs() {
+    $target = isset($_GET['target']) ? trim($_GET['target']) : '';
+    $path = isset($_GET['path']) ? trim($_GET['path']) : '';
+    $lines = isset($_GET['lines']) ? (int)$_GET['lines'] : 150;
+
+    $yamlFile = $path;
+    if (empty($yamlFile)) {
+        $searchDirs = [
+            '/boot/config/plugins/compose.manager/projects',
+            '/boot/config/plugins/docker.compose/projects',
+            '/mnt/user/appdata/compose'
+        ];
+        foreach ($searchDirs as $d) {
+            if (file_exists("{$d}/{$target}/docker-compose.yml")) {
+                $yamlFile = "{$d}/{$target}/docker-compose.yml";
+                break;
+            }
+        }
+    }
+
+    if (!file_exists($yamlFile)) {
+        json_output(['status' => 'error', 'message' => 'Compose file not found'], 404);
+    }
+
+    $composeBin = get_compose_cmd();
+    $escapedFile = escapeshellarg($yamlFile);
+    $out = @shell_exec("{$composeBin} -f {$escapedFile} logs --tail={$lines} --timestamps 2>&1");
+    json_output([
+        'status' => 'success',
+        'project' => $target,
+        'logs' => $out ? trim($out) : '暂无日志输出'
+    ]);
+}
+
+// -------------------------------------------------------------
+// System Event Alerts & Notification Center
+// -------------------------------------------------------------
+function handle_notifications() {
+    // 1. Check System Time & NTP Drift
+    $clientTime = isset($_GET['client_time']) ? (int)$_GET['client_time'] : 0;
+    $serverNow = time();
+    $serverTimeStr = date('Y-m-d H:i:s T');
+    $timezone = @date_default_timezone_get();
+    $driftSeconds = ($clientTime > 0) ? abs($serverNow - $clientTime) : 0;
+    
+    $timeWarning = null;
+    $isNtpSynced = true;
+
+    // Check NTP status if possible
+    $timedate = @shell_exec('timedatectl status 2>/dev/null');
+    if ($timedate) {
+        if (preg_match('/System clock synchronized:\s*(no|false)/i', $timedate) || preg_match('/NTP service:\s*(inactive|disabled)/i', $timedate)) {
+            $isNtpSynced = false;
+        }
+    }
+
+    if ($driftSeconds > 30) {
+        $isNtpSynced = false;
+        $timeWarning = "系统时钟与手机相差 {$driftSeconds} 秒，可能未同步 NTP，将导致 Docker 镜像拉取与 SSL 证书异常！";
+    } elseif (!$isNtpSynced) {
+        $timeWarning = "系统 NTP 服务未同步或时钟未校准，建议检查系统时间与 NTP 配置。";
+    }
+
+    // 2. Read Unraid notifications from /tmp/notifications/
+    $notifList = [];
+    $unreadCount = 0;
+    $unreadDir = '/tmp/notifications/unread';
+    $archiveDir = '/tmp/notifications/archive';
+
+    // Scan unread notifications
+    if (is_dir($unreadDir)) {
+        $files = @scandir($unreadDir);
+        if ($files) {
+            foreach ($files as $f) {
+                if ($f === '.' || $f === '..') continue;
+                $p = "{$unreadDir}/{$f}";
+                $parsed = parse_notification_file($p, false);
+                if ($parsed) {
+                    $notifList[] = $parsed;
+                    $unreadCount++;
+                }
+            }
+        }
+    }
+
+    // Also scan archive (up to 20 recent)
+    if (is_dir($archiveDir)) {
+        $files = @scandir($archiveDir);
+        if ($files) {
+            rsort($files);
+            $cnt = 0;
+            foreach ($files as $f) {
+                if ($f === '.' || $f === '..') continue;
+                if ($cnt++ > 20) break;
+                $p = "{$archiveDir}/{$f}";
+                $parsed = parse_notification_file($p, true);
+                if ($parsed) {
+                    $notifList[] = $parsed;
+                }
+            }
+        }
+    }
+
+    // If Unraid notifications are empty, synthesize hardware status from disks.ini
+    if (empty($notifList) && file_exists('/var/local/emhttp/disks.ini')) {
+        $ini = @parse_ini_file('/var/local/emhttp/disks.ini', true);
+        if ($ini) {
+            foreach ($ini as $name => $d) {
+                $numErrors = isset($d['numErrors']) ? (int)$d['numErrors'] : 0;
+                $temp = isset($d['temp']) ? (int)$d['temp'] : 0;
+                if ($numErrors > 0) {
+                    $notifList[] = [
+                        'id' => 'disk_err_' . $name,
+                        'importance' => 'alert',
+                        'subject' => "磁盘 [{$name}] 存在读写/校验错误",
+                        'description' => "检测到磁盘 {$name} 累计错误计数: {$numErrors}，请及时查看 S.M.A.R.T. 诊断并复查数据完整性。",
+                        'timestamp' => date('Y-m-d H:i:s'),
+                        'is_read' => false,
+                    ];
+                    $unreadCount++;
+                } elseif ($temp >= 50) {
+                    $notifList[] = [
+                        'id' => 'disk_temp_' . $name,
+                        'importance' => 'warning',
+                        'subject' => "磁盘 [{$name}] 温度偏高 ({$temp}°C)",
+                        'description' => "磁盘当前工作温度达到 {$temp}°C，超过推荐安全阈值，请检查机箱散热与风扇状态。",
+                        'timestamp' => date('Y-m-d H:i:s'),
+                        'is_read' => false,
+                    ];
+                    $unreadCount++;
+                }
+            }
+        }
+    }
+
+    // Sort by timestamp desc
+    usort($notifList, function($a, $b) {
+        return strcmp($b['timestamp'], $a['timestamp']);
+    });
+
+    json_output([
+        'status' => 'success',
+        'time_status' => [
+            'server_time' => $serverTimeStr,
+            'timezone' => $timezone,
+            'drift_seconds' => $driftSeconds,
+            'synced' => $isNtpSynced,
+            'warning' => $timeWarning,
+        ],
+        'unread_count' => $unreadCount,
+        'total' => count($notifList),
+        'notifications' => $notifList
+    ]);
+}
+
+function parse_notification_file($filepath, $isArchive = false) {
+    if (!file_exists($filepath)) return null;
+    $raw = @file_get_contents($filepath);
+    if (!$raw) return null;
+
+    $id = basename($filepath);
+    $importance = 'normal'; // normal, warning, alert
+    $subject = '';
+    $description = '';
+    $timestamp = date('Y-m-d H:i:s', filemtime($filepath));
+
+    $lines = explode("\n", $raw);
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if (empty($line) || $line[0] === '#' || $line[0] === '[') continue;
+        $kv = explode('=', $line, 2);
+        if (count($kv) === 2) {
+            $k = strtolower(trim($kv[0]));
+            $v = trim($kv[1], " \t\n\r\0\x0B\"'");
+            if ($k === 'importance' || $k === 'type') {
+                $importance = strtolower($v);
+            } elseif ($k === 'subject' || $k === 'title') {
+                $subject = $v;
+            } elseif ($k === 'description' || $k === 'message') {
+                $description = $v;
+            } elseif ($k === 'timestamp' || $k === 'time') {
+                $timestamp = is_numeric($v) ? date('Y-m-d H:i:s', (int)$v) : $v;
+            }
+        }
+    }
+
+    if (empty($subject)) {
+        $subject = basename($filepath, '.txt');
+    }
+    if (empty($description)) {
+        $description = trim($raw);
+    }
+
+    return [
+        'id' => $id,
+        'importance' => in_array($importance, ['alert', 'warning', 'normal']) ? $importance : 'normal',
+        'subject' => $subject,
+        'description' => $description,
+        'timestamp' => $timestamp,
+        'is_read' => $isArchive,
+    ];
+}
+
+function handle_dismiss_notification() {
+    $id = isset($_GET['id']) ? trim($_GET['id']) : (isset($_POST['id']) ? trim($_POST['id']) : '');
+    if (empty($id)) {
+        json_output(['status' => 'error', 'message' => 'Missing notification ID'], 400);
+    }
+
+    $unreadFile = "/tmp/notifications/unread/{$id}";
+    $archiveDir = "/tmp/notifications/archive";
+    if (file_exists($unreadFile)) {
+        if (!is_dir($archiveDir)) @mkdir($archiveDir, 0777, true);
+        @rename($unreadFile, "{$archiveDir}/{$id}");
+    }
+
+    json_output(['status' => 'success', 'message' => '已标记为已读', 'id' => $id]);
 }
 
 function handle_vm_action($action) {

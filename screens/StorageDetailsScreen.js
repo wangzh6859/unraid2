@@ -146,6 +146,7 @@ export default function StorageDetailsScreen({ navigation }) {
   const parityDisks = useMemo(() => disks.filter(d => d.is_parity || (d.name || '').toLowerCase().includes('parity')), [disks]);
   const dataDisks = useMemo(() => disks.filter(d => !d.is_parity && !(d.name || '').toLowerCase().includes('parity') && !(d.name || '').toLowerCase().includes('cache') && !(d.name || '').toLowerCase().includes('pool')), [disks]);
   const cacheDisks = useMemo(() => disks.filter(d => (d.name || '').toLowerCase().includes('cache') || (d.name || '').toLowerCase().includes('pool')), [disks]);
+  const otherDisks = useMemo(() => disks.filter(d => !parityDisks.includes(d) && !dataDisks.includes(d) && !cacheDisks.includes(d)), [disks, parityDisks, dataDisks, cacheDisks]);
 
   // 总容量汇总计算
   const totalArraySize = useMemo(() => dataDisks.reduce((acc, d) => acc + (d.size || d.total || 0), 0), [dataDisks]);
@@ -325,6 +326,22 @@ export default function StorageDetailsScreen({ navigation }) {
         </View>
       )}
 
+      {/* 3.4 其他存储设备 */}
+      {otherDisks.length > 0 && (
+        <View style={styles.diskGroupSection}>
+          <Text style={styles.diskGroupTitle}>其他存储设备 (Other Drives)</Text>
+          {otherDisks.map((d, idx) => renderDiskItem(d, idx))}
+        </View>
+      )}
+
+      {/* 兜底：如果都没有分组，直接展示全部磁盘 */}
+      {parityDisks.length === 0 && dataDisks.length === 0 && cacheDisks.length === 0 && otherDisks.length === 0 && disks.length > 0 && (
+        <View style={styles.diskGroupSection}>
+          <Text style={styles.diskGroupTitle}>所有存储设备 (All Disks)</Text>
+          {disks.map((d, idx) => renderDiskItem(d, idx))}
+        </View>
+      )}
+
       {/* Modern Squircle Confirm Dialog */}
       <ModernConfirmDialog
         visible={confirmDialog.visible}
@@ -342,77 +359,132 @@ export default function StorageDetailsScreen({ navigation }) {
 
   function renderDiskItem(disk, index) {
     const isParity = disk.is_parity || (disk.name || '').toLowerCase().includes('parity');
+    const isCache = (disk.name || '').toLowerCase().includes('cache') || (disk.name || '').toLowerCase().includes('pool');
     const isStandby = disk.status === 'standby';
     const tempVal = disk.temp !== null && disk.temp !== undefined && !isNaN(disk.temp) ? parseInt(disk.temp, 10) : null;
-    const isWarm = tempVal && tempVal >= 40;
-    const isCool = tempVal && tempVal < 40;
-    const pct = disk.percentage || 0;
+    const isWarm = tempVal && tempVal >= 45;
+    const pct = disk.percentage !== undefined ? disk.percentage : 0;
     const isNormalSmart = (disk.smart_status || 'Normal').toLowerCase() === 'normal';
+    const totalSize = disk.size || disk.total || 0;
+    const usedSize = disk.used || 0;
+    const freeSize = disk.free !== undefined ? disk.free : Math.max(0, totalSize - usedSize);
+    const numErrors = disk.num_errors || 0;
+    const fsType = disk.fs_type ? String(disk.fs_type).toUpperCase() : '';
 
     return (
       <TouchableOpacity
         key={disk.device || disk.name || index}
-        style={styles.diskCard}
+        style={[styles.diskCard, numErrors > 0 && styles.diskCardError]}
         onPress={() => navigation.navigate('SMART详情', { disk })}
         activeOpacity={0.7}
       >
+        {/* 第一行：图标 + 名称 + 物理设备名 + 文件系统 + 校验徽章 + 箭头 */}
         <View style={styles.diskCardHeader}>
           <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-            <View style={[styles.diskIconBox, { backgroundColor: isParity ? 'rgba(56, 189, 248, 0.12)' : 'rgba(16, 185, 129, 0.12)' }]}>
-              <HardDrive size={18} color={isParity ? colors.accent : colors.green} />
+            <View style={[styles.diskIconBox, { backgroundColor: isParity ? 'rgba(56, 189, 248, 0.12)' : isCache ? 'rgba(168, 85, 247, 0.12)' : 'rgba(16, 185, 129, 0.12)' }]}>
+              {isParity ? (
+                <ShieldCheck size={18} color={colors.accent} />
+              ) : isCache ? (
+                <Server size={18} color="#a855f7" />
+              ) : (
+                <HardDrive size={18} color={isNormalSmart ? colors.green : colors.red} />
+              )}
             </View>
 
             <View style={{ marginLeft: 10, flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
                 <Text style={styles.diskNameText} numberOfLines={1}>{disk.name}</Text>
                 {disk.device ? (
                   <View style={styles.deviceTag}>
                     <Text style={styles.deviceTagText}>{disk.device}</Text>
                   </View>
                 ) : null}
+                {fsType ? (
+                  <View style={[styles.deviceTag, { backgroundColor: 'rgba(56, 189, 248, 0.1)' }]}>
+                    <Text style={[styles.deviceTagText, { color: colors.accent }]}>{fsType}</Text>
+                  </View>
+                ) : null}
+                {isParity ? (
+                  <View style={[styles.deviceTag, { backgroundColor: 'rgba(16, 185, 129, 0.12)' }]}>
+                    <Text style={[styles.deviceTagText, { color: colors.green }]}>校验保护</Text>
+                  </View>
+                ) : null}
               </View>
+            </View>
+          </View>
 
-              <Text style={styles.diskCapacitySub}>
-                {isParity
-                  ? `校验容量: ${formatBytes(disk.size || disk.total)}`
-                  : `已用: ${formatBytes(disk.used)} / ${formatBytes(disk.size || disk.total)} (${pct}%)`}
+          <ChevronRight size={16} color={colors.sub} style={{ marginLeft: 6 }} />
+        </View>
+
+        {/* 第二行：核心硬件参数详细数据网格 (4 列 Bento 块) */}
+        <View style={styles.metricGridRow}>
+          {/* 运行状态 */}
+          <View style={styles.metricGridItem}>
+            <Text style={styles.metricGridLabel}>运行状态</Text>
+            <View style={styles.metricValueRow}>
+              <View style={[styles.statusDotSmall, { backgroundColor: isStandby ? colors.sub : colors.green }]} />
+              <Text style={styles.metricGridValue}>{isStandby ? '休眠' : '活动'}</Text>
+            </View>
+          </View>
+
+          {/* 盘体温度 */}
+          <View style={styles.metricGridItem}>
+            <Text style={styles.metricGridLabel}>盘体温度</Text>
+            <View style={styles.metricValueRow}>
+              <Thermometer size={12} color={isStandby ? colors.sub : isWarm ? colors.tempWarm : colors.networkDown} style={{ marginRight: 2 }} />
+              <Text style={[styles.metricGridValue, { color: isStandby ? colors.sub : isWarm ? colors.tempWarm : colors.networkDown }]}>
+                {isStandby ? '休眠' : tempVal ? `${tempVal}°C` : '--'}
               </Text>
             </View>
           </View>
 
-          {/* 温度与状态标签 */}
-          <View style={styles.diskStatusCol}>
-            <View style={[styles.tempPill, {
-              backgroundColor: isStandby ? colors.cardSecondary : isWarm ? 'rgba(249, 115, 22, 0.15)' : 'rgba(6, 182, 212, 0.15)'
-            }]}>
-              <Thermometer size={11} color={isStandby ? colors.sub : isWarm ? colors.tempWarm : colors.networkDown} style={{ marginRight: 2 }} />
-              <Text style={[styles.tempPillText, {
-                color: isStandby ? colors.sub : isWarm ? colors.tempWarm : colors.networkDown
-              }]}>
-                {isStandby ? '休眠' : tempVal ? `${tempVal}°C` : '待机'}
-              </Text>
-            </View>
-
-            <View style={styles.smartIndicatorRow}>
+          {/* S.M.A.R.T. */}
+          <View style={styles.metricGridItem}>
+            <Text style={styles.metricGridLabel}>S.M.A.R.T.</Text>
+            <View style={styles.metricValueRow}>
               {isNormalSmart ? (
-                <CheckCircle2 size={11} color={colors.green} style={{ marginRight: 3 }} />
+                <CheckCircle2 size={12} color={colors.green} style={{ marginRight: 2 }} />
               ) : (
-                <AlertTriangle size={11} color={colors.red} style={{ marginRight: 3 }} />
+                <AlertTriangle size={12} color={colors.red} style={{ marginRight: 2 }} />
               )}
-              <Text style={[styles.smartIndicatorText, { color: isNormalSmart ? colors.green : colors.red }]}>
+              <Text style={[styles.metricGridValue, { color: isNormalSmart ? colors.green : colors.red }]}>
                 {isNormalSmart ? '健康' : '异常'}
               </Text>
-              <ChevronRight size={13} color={colors.sub} style={{ marginLeft: 2 }} />
+            </View>
+          </View>
+
+          {/* 读写错误计数 */}
+          <View style={styles.metricGridItem}>
+            <Text style={styles.metricGridLabel}>读写错误</Text>
+            <View style={styles.metricValueRow}>
+              <Text style={[styles.metricGridValue, { color: numErrors > 0 ? colors.red : colors.sub }]}>
+                {numErrors} 次
+              </Text>
             </View>
           </View>
         </View>
 
-        {/* 数据盘进度条 */}
-        {!isParity && (
-          <View style={styles.diskTrack}>
-            <View style={[styles.diskFill, { width: `${Math.min(pct, 100)}%`, backgroundColor: pct > 85 ? colors.red : colors.accent }]} />
-          </View>
-        )}
+        {/* 第三行：容量详细分布条与数值 */}
+        <View style={styles.diskUsageBlock}>
+          {isParity ? (
+            <View style={styles.diskCapacityRow}>
+              <Text style={styles.diskUsageSubText}>保护阵列数据一致性</Text>
+              <Text style={styles.diskUsageTotalText}>总容量: {formatBytes(totalSize)}</Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.diskCapacityRow}>
+                <Text style={styles.diskUsagePctText}>利用率: {pct}%</Text>
+                <Text style={styles.diskUsageDetailText}>
+                  已用 {formatBytes(usedSize)} / {formatBytes(totalSize)} {freeSize > 0 ? `(余 ${formatBytes(freeSize)})` : ''}
+                </Text>
+              </View>
+              <View style={styles.diskTrack}>
+                <View style={[styles.diskFill, { width: `${Math.min(pct, 100)}%`, backgroundColor: pct > 85 ? colors.red : (isCache ? '#a855f7' : colors.accent) }]} />
+              </View>
+            </>
+          )}
+        </View>
       </TouchableOpacity>
     );
   }
@@ -668,6 +740,10 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     shadowRadius: 6,
     elevation: 2,
   },
+  diskCardError: {
+    borderColor: 'rgba(239, 68, 68, 0.4)',
+    backgroundColor: isDark ? 'rgba(239, 68, 68, 0.05)' : 'rgba(254, 242, 242, 0.7)',
+  },
   diskCardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -725,12 +801,72 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
   },
+  metricGridRow: {
+    flexDirection: 'row',
+    backgroundColor: colors.cardSecondary,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    marginTop: 10,
+    justifyContent: 'space-between',
+  },
+  metricGridItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  metricGridLabel: {
+    fontSize: 10,
+    color: colors.sub,
+    marginBottom: 3,
+  },
+  metricValueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  metricGridValue: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textStrong,
+  },
+  statusDotSmall: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 4,
+  },
+  diskUsageBlock: {
+    marginTop: 10,
+  },
+  diskCapacityRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  diskUsagePctText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
+  diskUsageDetailText: {
+    fontSize: 10,
+    color: colors.sub,
+  },
+  diskUsageSubText: {
+    fontSize: 11,
+    color: colors.sub,
+  },
+  diskUsageTotalText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
   diskTrack: {
     height: 4,
     backgroundColor: colors.cardSecondary,
     borderRadius: 2,
     overflow: 'hidden',
-    marginTop: 10,
+    marginTop: 2,
   },
   diskFill: {
     height: '100%',

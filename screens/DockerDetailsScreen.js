@@ -9,8 +9,7 @@ import * as Clipboard from 'expo-clipboard';
 import {
   Cpu, Database, RotateCw, Play, Power, Terminal, ExternalLink,
   Search, Copy, Check, X, RefreshCw, Globe, Sliders, Box, Layers,
-  ChevronDown, ArrowUpDown, Filter, Sparkles
-} from 'lucide-react-native';
+  ChevronDown, ArrowUpDown, Filter, Sparkles, ArrowUp, FileCode, Plus, CheckCircle2, AlertTriangle, AlertCircle, Trash2, Folder } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import {
@@ -28,6 +27,43 @@ export default function DockerDetailsScreen() {
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'running' | 'stopped'
   const [sortRule, setSortRule] = useState('status'); // 'status' | 'name' | 'cpu'
   const [openingDocker, setOpeningDocker] = useState(null);
+  const [updatingDocker, setUpdatingDocker] = useState(null);
+
+  // 顶部分段切换：独立容器 vs Compose 堆栈
+  const [dockerMode, setDockerMode] = useState('containers'); // 'containers' | 'compose'
+
+  // Docker Compose 状态
+  const [composeProjects, setComposeProjects] = useState([]);
+  const [composeLoading, setComposeLoading] = useState(false);
+  const [composeActionLoading, setComposeActionLoading] = useState({});
+  const [composeSearchQuery, setComposeSearchQuery] = useState('');
+
+  // YAML 编辑器弹窗
+  const [yamlModalVisible, setYamlModalVisible] = useState(false);
+  const [selectedComposeProject, setSelectedComposeProject] = useState(null);
+  const [yamlContent, setYamlContent] = useState('');
+  const [yamlLoading, setYamlLoading] = useState(false);
+  const [yamlSaving, setYamlSaving] = useState(false);
+
+  // Compose 日志弹窗
+  const [composeLogsModalVisible, setComposeLogsModalVisible] = useState(false);
+  const [composeLogsContent, setComposeLogsContent] = useState('');
+  const [composeLogsLoading, setComposeLogsLoading] = useState(false);
+  const [composeLogsSearch, setComposeLogsSearch] = useState('');
+  const [composeLogsCopiedToast, setComposeLogsCopiedToast] = useState(false);
+  const composeLogScrollRef = useRef(null);
+
+  // 新建 Compose 堆栈弹窗
+  const [newStackModalVisible, setNewStackModalVisible] = useState(false);
+  const [newStackName, setNewStackName] = useState('');
+  const [newStackYaml, setNewStackYaml] = useState(`services:
+  web:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+`);
+  const [newStackCreating, setNewStackCreating] = useState(false);
 
   // Modern Confirm Dialog State
   const [confirmDialog, setConfirmDialog] = useState({
@@ -131,6 +167,7 @@ export default function DockerDetailsScreen() {
       };
       loadProxyData();
       pollData();
+      fetchComposeProjects();
       return () => { isActive = false; if (timerId) clearTimeout(timerId); };
     }, [])
   );
@@ -176,6 +213,278 @@ export default function DockerDetailsScreen() {
       showCancel: true,
       onConfirm: () => executeDockerAction('stop_docker', name),
     });
+  };
+
+  
+  // 容器升级操作
+  const handleUpdateDocker = (name) => {
+    showConfirm({
+      type: 'warning',
+      title: '升级容器',
+      message: `确定要拉取最新镜像并重新创建容器「${name}」吗？\n升级过程中容器将会短暂离线。`,
+      confirmText: '立即升级',
+      cancelText: '取消',
+      showCancel: true,
+      onConfirm: async () => {
+        setUpdatingDocker(name);
+        try {
+          const savedUrl = await AsyncStorage.getItem('@server_url');
+          const savedToken = await AsyncStorage.getItem('@api_token');
+          const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=update_docker&target=${encodeURIComponent(name)}`);
+          const data = await res.json();
+          if (data.status === 'success') {
+            showConfirm({
+              type: 'success',
+              title: '升级成功',
+              message: data.message || `容器「${name}」已升级为最新版本！`,
+              confirmText: '好的',
+              showCancel: false,
+            });
+            fetchDockerData();
+          } else {
+            showConfirm({
+              type: 'error',
+              title: '升级失败',
+              message: data.message || '更新过程遇到错误',
+              confirmText: '确定',
+              showCancel: false,
+            });
+          }
+        } catch (e) {
+          showConfirm({
+            type: 'warning',
+            title: '网络异常',
+            message: e.message || '网络连接超时',
+            confirmText: '确定',
+            showCancel: false,
+          });
+        } finally {
+          setUpdatingDocker(null);
+        }
+      },
+    });
+  };
+
+  // Compose 堆栈列表拉取
+  const fetchComposeProjects = async () => {
+    try {
+      setComposeLoading(true);
+      const savedUrl = await AsyncStorage.getItem('@server_url');
+      const savedToken = await AsyncStorage.getItem('@api_token');
+      if (!savedUrl || !savedToken) return;
+      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=compose_list`);
+      const data = await res.json();
+      if (data.status === 'success') {
+        setComposeProjects(data.projects || []);
+      }
+    } catch (err) {
+      console.log('fetchComposeProjects error:', err);
+    } finally {
+      setComposeLoading(false);
+    }
+  };
+
+  // Compose 指令执行 (up, down, restart, pull)
+  const executeComposeAction = async (target, cmd) => {
+    const cmdLabels = {
+      up: '启动',
+      down: '停止',
+      restart: '重启',
+      pull: '拉取更新',
+    };
+    const label = cmdLabels[cmd] || cmd;
+
+    const runAction = async () => {
+      setComposeActionLoading(prev => ({ ...prev, [target]: cmd }));
+      try {
+        const savedUrl = await AsyncStorage.getItem('@server_url');
+        const savedToken = await AsyncStorage.getItem('@api_token');
+        const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=compose_action&target=${encodeURIComponent(target)}&compose_cmd=${cmd}`);
+        const data = await res.json();
+        if (data.status === 'success') {
+          showConfirm({
+            type: 'success',
+            title: '操作完成',
+            message: data.message || `堆栈「${target}」${label}成功！`,
+            confirmText: '好的',
+            showCancel: false,
+          });
+          fetchComposeProjects();
+        } else {
+          showConfirm({
+            type: 'error',
+            title: '执行失败',
+            message: data.message || '执行 Compose 操作失败',
+            confirmText: '确定',
+            showCancel: false,
+          });
+        }
+      } catch (e) {
+        showConfirm({
+          type: 'warning',
+          title: '网络异常',
+          message: e.message || '网络通信超时',
+          confirmText: '确定',
+          showCancel: false,
+        });
+      } finally {
+        setComposeActionLoading(prev => ({ ...prev, [target]: null }));
+      }
+    };
+
+    if (cmd === 'down') {
+      showConfirm({
+        type: 'danger',
+        title: '停止 Compose 堆栈',
+        message: `确定要执行 docker compose down 停止并移除堆栈「${target}」的容器吗？`,
+        confirmText: '确认停止',
+        cancelText: '取消',
+        showCancel: true,
+        onConfirm: runAction,
+      });
+    } else if (cmd === 'restart') {
+      showConfirm({
+        type: 'info',
+        title: '重启 Compose 堆栈',
+        message: `确定要重启堆栈「${target}」中的全部容器吗？`,
+        confirmText: '确认重启',
+        cancelText: '取消',
+        showCancel: true,
+        onConfirm: runAction,
+      });
+    } else {
+      runAction();
+    }
+  };
+
+  // 打开 Compose YAML 配置
+  const openYamlModal = async (project) => {
+    setSelectedComposeProject(project);
+    setYamlModalVisible(true);
+    setYamlLoading(true);
+    try {
+      const savedUrl = await AsyncStorage.getItem('@server_url');
+      const savedToken = await AsyncStorage.getItem('@api_token');
+      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=compose_file&target=${encodeURIComponent(project.name)}`);
+      const data = await res.json();
+      if (data.status === 'success') {
+        setYamlContent(data.content || '');
+      } else {
+        setYamlContent(`# 加载失败: ${data.message || '未知错误'}`);
+      }
+    } catch (e) {
+      setYamlContent(`# 加载失败: ${e.message}`);
+    } finally {
+      setYamlLoading(false);
+    }
+  };
+
+  // 保存 Compose YAML
+  const saveYamlFile = async () => {
+    if (!selectedComposeProject) return;
+    setYamlSaving(true);
+    try {
+      const savedUrl = await AsyncStorage.getItem('@server_url');
+      const savedToken = await AsyncStorage.getItem('@api_token');
+      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=compose_save&target=${encodeURIComponent(selectedComposeProject.name)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `content=${encodeURIComponent(yamlContent)}`
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        showConfirm({
+          type: 'success',
+          title: '保存成功',
+          message: 'Compose 配置文件已更新。是否立即应用并启动？',
+          confirmText: '立即应用启动',
+          cancelText: '仅保存',
+          showCancel: true,
+          onConfirm: () => {
+            setYamlModalVisible(false);
+            executeComposeAction(selectedComposeProject.name, 'up');
+          },
+          onCancel: () => {
+            setYamlModalVisible(false);
+            fetchComposeProjects();
+          }
+        });
+      } else {
+        showConfirm({ type: 'error', title: '保存失败', message: data.message || '无法保存 YAML 文件', showCancel: false });
+      }
+    } catch (e) {
+      showConfirm({ type: 'warning', title: '网络异常', message: e.message, showCancel: false });
+    } finally {
+      setYamlSaving(false);
+    }
+  };
+
+  // Compose 日志查看
+  const openComposeLogs = async (project) => {
+    setSelectedComposeProject(project);
+    setComposeLogsModalVisible(true);
+    setComposeLogsLoading(true);
+    setComposeLogsContent('');
+    try {
+      const savedUrl = await AsyncStorage.getItem('@server_url');
+      const savedToken = await AsyncStorage.getItem('@api_token');
+      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=compose_logs&target=${encodeURIComponent(project.name)}&lines=250`);
+      const data = await res.json();
+      if (data.status === 'success') {
+        setComposeLogsContent(data.logs || '暂无日志输出');
+        setTimeout(() => {
+          if (composeLogScrollRef.current) composeLogScrollRef.current.scrollToEnd({ animated: true });
+        }, 300);
+      } else {
+        setComposeLogsContent(`获取日志失败: ${data.message}`);
+      }
+    } catch (e) {
+      setComposeLogsContent(`网络异常: ${e.message}`);
+    } finally {
+      setComposeLogsLoading(false);
+    }
+  };
+
+  // 创建新堆栈
+  const handleCreateNewStack = async () => {
+    if (!newStackName.trim()) {
+      showConfirm({ type: 'warning', title: '提示', message: '请输入堆栈项目名称', showCancel: false });
+      return;
+    }
+    setNewStackCreating(true);
+    try {
+      const savedUrl = await AsyncStorage.getItem('@server_url');
+      const savedToken = await AsyncStorage.getItem('@api_token');
+      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=compose_save&target=${encodeURIComponent(newStackName.trim())}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `content=${encodeURIComponent(newStackYaml)}`
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        setNewStackModalVisible(false);
+        showConfirm({
+          type: 'success',
+          title: '创建成功',
+          message: `堆栈「${newStackName.trim()}」已创建成功，是否立即部署启动？`,
+          confirmText: '立即启动',
+          cancelText: '稍后启动',
+          showCancel: true,
+          onConfirm: () => {
+            executeComposeAction(newStackName.trim(), 'up');
+          },
+          onCancel: () => {
+            fetchComposeProjects();
+          }
+        });
+      } else {
+        showConfirm({ type: 'error', title: '创建失败', message: data.message, showCancel: false });
+      }
+    } catch (e) {
+      showConfirm({ type: 'warning', title: '网络异常', message: e.message, showCancel: false });
+    } finally {
+      setNewStackCreating(false);
+    }
   };
 
   const handleRestartDocker = (name) => {
@@ -376,6 +685,18 @@ export default function DockerDetailsScreen() {
   }, [dockers]);
 
   // 过滤与排序
+  
+  const filteredComposeProjects = useMemo(() => {
+    let list = [...composeProjects];
+    if (composeSearchQuery.trim()) {
+      const q = composeSearchQuery.toLowerCase();
+      list = list.filter(p => (p.name || '').toLowerCase().includes(q) || (p.services || []).some(s => s.toLowerCase().includes(q)));
+    }
+    return list;
+  }, [composeProjects, composeSearchQuery]);
+
+  const composeRunningCount = useMemo(() => composeProjects.filter(p => p.status === 'running').length, [composeProjects]);
+
   const processedDockers = useMemo(() => {
     let list = [...dockers];
     if (statusFilter === 'running') {
@@ -413,6 +734,233 @@ export default function DockerDetailsScreen() {
 
   return (
     <View style={styles.container}>
+      {/* 顶部分段切换：独立容器 vs Compose 堆栈 */}
+      <View style={styles.segmentContainer}>
+        <TouchableOpacity
+          style={[styles.segmentBtn, dockerMode === 'containers' && styles.segmentBtnActive]}
+          onPress={() => setDockerMode('containers')}
+          activeOpacity={0.8}
+        >
+          <Box size={14} color={dockerMode === 'containers' ? '#ffffff' : colors.sub} style={{ marginRight: 6 }} />
+          <Text style={[styles.segmentBtnText, dockerMode === 'containers' && styles.segmentBtnTextActive]}>
+            独立容器 ({dockers.length})
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.segmentBtn, dockerMode === 'compose' && styles.segmentBtnActive]}
+          onPress={() => {
+            setDockerMode('compose');
+            fetchComposeProjects();
+          }}
+          activeOpacity={0.8}
+        >
+          <Layers size={14} color={dockerMode === 'compose' ? '#ffffff' : colors.sub} style={{ marginRight: 6 }} />
+          <Text style={[styles.segmentBtnText, dockerMode === 'compose' && styles.segmentBtnTextActive]}>
+            Compose 堆栈 ({composeProjects.length})
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      
+      {dockerMode === 'compose' ? (
+        <View style={{ flex: 1 }}>
+          {/* Compose 概览与快捷操作 */}
+          <View style={styles.composeHeroRow}>
+            <View style={styles.composeHeroCard}>
+              <Text style={styles.composeHeroNum}>{composeProjects.length}</Text>
+              <Text style={styles.composeHeroLabel}>总堆栈数</Text>
+            </View>
+            <View style={styles.composeHeroCard}>
+              <Text style={[styles.composeHeroNum, { color: colors.green }]}>{composeRunningCount}</Text>
+              <Text style={styles.composeHeroLabel}>全服务运行</Text>
+            </View>
+            <View style={styles.composeHeroCard}>
+              <Text style={[styles.composeHeroNum, { color: colors.amber }]}>
+                {composeProjects.length - composeRunningCount}
+              </Text>
+              <Text style={styles.composeHeroLabel}>未完全运行</Text>
+            </View>
+          </View>
+
+          {/* 搜索与新建堆栈 */}
+          <View style={styles.filterSection}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View style={[styles.searchBox, { flex: 1 }]}>
+                <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="搜索 Compose 项目或服务..."
+                  placeholderTextColor={colors.muted}
+                  value={composeSearchQuery}
+                  onChangeText={setComposeSearchQuery}
+                  autoCapitalize="none"
+                />
+                {composeSearchQuery ? (
+                  <TouchableOpacity onPress={() => setComposeSearchQuery('')}>
+                    <X size={15} color={colors.sub} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+
+              <TouchableOpacity
+                style={styles.newStackBtn}
+                onPress={() => {
+                  setNewStackName('');
+                  setNewStackModalVisible(true);
+                }}
+                activeOpacity={0.8}
+              >
+                <Plus size={15} color="#ffffff" style={{ marginRight: 4 }} />
+                <Text style={styles.newStackBtnText}>新建堆栈</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Compose 堆栈列表 */}
+          <ScrollView
+            contentContainerStyle={styles.content}
+            showsVerticalScrollIndicator={false}
+          >
+            {filteredComposeProjects.map((project, idx) => {
+              const isRunning = project.status === 'running';
+              const isPartial = project.status === 'partial';
+              const isStopped = project.status === 'stopped';
+              const actLoading = composeActionLoading[project.name];
+
+              return (
+                <View key={project.name || idx} style={styles.composeCard}>
+                  {/* Header */}
+                  <View style={styles.composeCardHeader}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                      <View style={[styles.composeIconBox, { backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : isPartial ? 'rgba(245, 158, 11, 0.12)' : 'rgba(148, 163, 184, 0.12)' }]}>
+                        <Layers size={18} color={isRunning ? colors.green : isPartial ? colors.amber : colors.sub} />
+                      </View>
+                      <View style={{ marginLeft: 10, flex: 1 }}>
+                        <Text style={styles.composeCardTitle} numberOfLines={1}>{project.name}</Text>
+                        <Text style={styles.composeCardPath} numberOfLines={1}>{project.yaml_file || project.path}</Text>
+                      </View>
+                    </View>
+
+                    {/* 状态徽章 */}
+                    <View style={[styles.composeStatusBadge, {
+                      backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : isPartial ? 'rgba(245, 158, 11, 0.12)' : 'rgba(148, 163, 184, 0.12)'
+                    }]}>
+                      <View style={[styles.statusDotSmall, {
+                        backgroundColor: isRunning ? colors.green : isPartial ? colors.amber : colors.sub
+                      }]} />
+                      <Text style={[styles.composeStatusBadgeText, {
+                        color: isRunning ? colors.green : isPartial ? colors.amber : colors.sub
+                      }]}>
+                        {isRunning ? '运行中' : isPartial ? '部分运行' : '已停止'}
+                        {project.total_count > 0 ? ` (${project.running_count || 0}/${project.total_count})` : ''}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* 包含服务标签列表 */}
+                  {project.services && project.services.length > 0 && (
+                    <View style={styles.composeServicesRow}>
+                      <Text style={styles.composeServicesLabel}>服务:</Text>
+                      <View style={styles.composeServiceTagsWrap}>
+                        {project.services.map((srv, sIdx) => (
+                          <View key={sIdx} style={styles.composeServiceChip}>
+                            <Text style={styles.composeServiceChipText}>{srv}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Action Bar */}
+                  <View style={styles.composeActionsRow}>
+                    {/* 查看配置与日志 */}
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                      <TouchableOpacity
+                        style={styles.composeConfigBtn}
+                        onPress={() => openYamlModal(project)}
+                        activeOpacity={0.7}
+                      >
+                        <FileCode size={13} color={colors.accent} style={{ marginRight: 4 }} />
+                        <Text style={styles.composeConfigBtnText}>配置</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.composeConfigBtn}
+                        onPress={() => openComposeLogs(project)}
+                        activeOpacity={0.7}
+                      >
+                        <Terminal size={13} color={colors.accent} style={{ marginRight: 4 }} />
+                        <Text style={styles.composeConfigBtnText}>日志</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* 生命周期操作 (Up, Down, Restart, Pull) */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <TouchableOpacity
+                        style={styles.circleActionBtn}
+                        onPress={() => executeComposeAction(project.name, 'pull')}
+                        disabled={!!actLoading}
+                        activeOpacity={0.7}
+                        accessibilityLabel="拉取最新镜像"
+                      >
+                        {actLoading === 'pull' ? (
+                          <ActivityIndicator size="small" color={colors.amber} />
+                        ) : (
+                          <ArrowUp size={14} color="#f59e0b" />
+                        )}
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.circleActionBtn}
+                        onPress={() => executeComposeAction(project.name, 'restart')}
+                        disabled={!!actLoading}
+                        activeOpacity={0.7}
+                        accessibilityLabel="重启堆栈"
+                      >
+                        {actLoading === 'restart' ? (
+                          <ActivityIndicator size="small" color={colors.sub} />
+                        ) : (
+                          <RotateCw size={14} color={colors.sub} />
+                        )}
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.circleActionBtn, {
+                          backgroundColor: isRunning ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)'
+                        }]}
+                        onPress={() => executeComposeAction(project.name, isRunning ? 'down' : 'up')}
+                        disabled={!!actLoading}
+                        activeOpacity={0.7}
+                      >
+                        {actLoading === (isRunning ? 'down' : 'up') ? (
+                          <ActivityIndicator size="small" color={isRunning ? colors.red : colors.green} />
+                        ) : isRunning ? (
+                          <Power size={14} color={colors.red} />
+                        ) : (
+                          <Play size={14} color={colors.green} />
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              );
+            })}
+
+            {filteredComposeProjects.length === 0 && !composeLoading && (
+              <View style={styles.emptyContainer}>
+                <Layers size={42} color={colors.muted} style={{ marginBottom: 12 }} />
+                <Text style={styles.emptyTitle}>暂无 Compose 堆栈</Text>
+                <Text style={styles.emptySub}>
+                  点击右上角「新建堆栈」创建新项目，或在 Unraid compose.manager 插件中添加。
+                </Text>
+              </View>
+            )}
+          </ScrollView>
+        </View>
+      ) : (
+        <View style={{ flex: 1 }}>
+
       {/* 1. 顶部 Bento 概览看板 (Hero Stats) */}
       <View style={styles.heroRow}>
         <View style={styles.heroCard}>
@@ -544,6 +1092,14 @@ export default function DockerDetailsScreen() {
                       </Text>
                     </View>
 
+                    
+                    {docker.update_available && (
+                      <View style={styles.updateBadge}>
+                        <ArrowUp size={10} color="#f59e0b" style={{ marginRight: 2 }} />
+                        <Text style={styles.updateBadgeText}>可更新</Text>
+                      </View>
+                    )}
+
                     {docker.port ? (
                       <View style={styles.portBadge}>
                         <Text style={styles.portBadgeText}>:{docker.port}</Text>
@@ -619,6 +1175,23 @@ export default function DockerDetailsScreen() {
                     </TouchableOpacity>
                   ) : null}
 
+                  
+                  {docker.update_available && (
+                    <TouchableOpacity
+                      style={[styles.circleActionBtn, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}
+                      onPress={() => handleUpdateDocker(docker.name)}
+                      disabled={updatingDocker === docker.name}
+                      activeOpacity={0.7}
+                      accessibilityLabel="升级容器"
+                    >
+                      {updatingDocker === docker.name ? (
+                        <ActivityIndicator size="small" color="#f59e0b" />
+                      ) : (
+                        <ArrowUp size={14} color="#f59e0b" />
+                      )}
+                    </TouchableOpacity>
+                  )}
+
                   <TouchableOpacity
                     style={[styles.circleActionBtn, { backgroundColor: isRunning ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)' }]}
                     onPress={() => (isRunning ? handleStopDocker(docker.name) : handleStartDocker(docker.name))}
@@ -644,6 +1217,9 @@ export default function DockerDetailsScreen() {
           </View>
         ) : null}
       </ScrollView>
+
+      </View>
+      )}
 
       {/* 4. 自定义反代配置弹窗 */}
       <Modal
@@ -791,6 +1367,222 @@ export default function DockerDetailsScreen() {
       </Modal>
 
       {/* 6. Modern Squircle Confirm Dialog */}
+      
+      {/* 5. Compose YAML 配置查看与编辑模态窗 */}
+      <Modal
+        visible={yamlModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setYamlModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalFullContainer}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.modalFullHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.modalFullTitle}>
+                {selectedComposeProject?.name} · YAML 配置
+              </Text>
+              <Text style={styles.modalFullSub} numberOfLines={1}>
+                {selectedComposeProject?.yaml_file || 'docker-compose.yml'}
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.modalCloseBtn}
+              onPress={() => setYamlModalVisible(false)}
+            >
+              <X size={18} color={colors.sub} />
+            </TouchableOpacity>
+          </View>
+
+          {yamlLoading ? (
+            <View style={styles.center}>
+              <ActivityIndicator size="large" color={colors.accent} />
+              <Text style={styles.loadingText}>正在加载 Compose YAML 配置...</Text>
+            </View>
+          ) : (
+            <ScrollView style={styles.yamlEditorScroll}>
+              <TextInput
+                style={styles.yamlTextInput}
+                multiline={true}
+                value={yamlContent}
+                onChangeText={setYamlContent}
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholder="YAML 配置为空"
+                placeholderTextColor={colors.muted}
+              />
+            </ScrollView>
+          )}
+
+          <View style={styles.modalFullFooter}>
+            <TouchableOpacity
+              style={[styles.saveYamlBtn, yamlSaving && { opacity: 0.6 }]}
+              onPress={saveYamlFile}
+              disabled={yamlSaving || yamlLoading}
+              activeOpacity={0.8}
+            >
+              {yamlSaving ? (
+                <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 6 }} />
+              ) : (
+                <Check size={16} color="#ffffff" style={{ marginRight: 6 }} />
+              )}
+              <Text style={styles.saveYamlBtnText}>
+                {yamlSaving ? '保存中...' : '保存配置文件'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* 6. Compose 堆栈聚合日志模态窗 */}
+      <Modal
+        visible={composeLogsModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setComposeLogsModalVisible(false)}
+      >
+        <View style={styles.modalFullContainer}>
+          <View style={styles.modalFullHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.modalFullTitle}>
+                {selectedComposeProject?.name} · 堆栈日志
+              </Text>
+              <Text style={styles.modalFullSub}>
+                聚合捕获各服务实时运行输出
+              </Text>
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity
+                style={styles.logActionBtn}
+                onPress={() => selectedComposeProject && openComposeLogs(selectedComposeProject)}
+                disabled={composeLogsLoading}
+              >
+                {composeLogsLoading ? (
+                  <ActivityIndicator size="small" color={colors.accent} />
+                ) : (
+                  <RefreshCw size={15} color={colors.accent} />
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.logActionBtn, composeLogsCopiedToast && { backgroundColor: 'rgba(16, 185, 129, 0.2)' }]}
+                onPress={async () => {
+                  try {
+                    await Clipboard.setStringAsync(composeLogsContent);
+                    setComposeLogsCopiedToast(true);
+                    setTimeout(() => setComposeLogsCopiedToast(false), 2000);
+                  } catch (e) {}
+                }}
+              >
+                {composeLogsCopiedToast ? (
+                  <Check size={15} color={colors.green} />
+                ) : (
+                  <Copy size={15} color={colors.sub} />
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.modalCloseBtn}
+                onPress={() => setComposeLogsModalVisible(false)}
+              >
+                <X size={18} color={colors.sub} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* 日志内容滚动区 */}
+          <ScrollView
+            ref={composeLogScrollRef}
+            style={styles.logsBody}
+            contentContainerStyle={styles.logsBodyContent}
+          >
+            {composeLogsLoading && !composeLogsContent ? (
+              <View style={styles.center}>
+                <ActivityIndicator size="large" color={colors.accent} />
+                <Text style={styles.loadingText}>正在获取 Compose 运行日志...</Text>
+              </View>
+            ) : (
+              <Text selectable={true} style={styles.logsMonoText}>
+                {composeLogsContent || '暂无容器输出日志'}
+              </Text>
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* 7. 新建 Compose 堆栈模态窗 */}
+      <Modal
+        visible={newStackModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setNewStackModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalFullContainer}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.modalFullHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.modalFullTitle}>新建 Docker Compose 堆栈</Text>
+              <Text style={styles.modalFullSub}>创建多容器协同服务项目</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.modalCloseBtn}
+              onPress={() => setNewStackModalVisible(false)}
+            >
+              <X size={18} color={colors.sub} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={{ flex: 1, padding: 16 }}>
+            <Text style={styles.fieldLabel}>堆栈名称 (英文/字母/连字符)</Text>
+            <TextInput
+              style={styles.modalTextInput}
+              placeholder="例如：nextcloud, homarr, myapp"
+              placeholderTextColor={colors.muted}
+              value={newStackName}
+              onChangeText={setNewStackName}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            <Text style={[styles.fieldLabel, { marginTop: 16 }]}>docker-compose.yml 配置文件</Text>
+            <View style={styles.yamlInputWrapper}>
+              <TextInput
+                style={styles.yamlTextInput}
+                multiline={true}
+                value={newStackYaml}
+                onChangeText={setNewStackYaml}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+          </ScrollView>
+
+          <View style={styles.modalFullFooter}>
+            <TouchableOpacity
+              style={[styles.saveYamlBtn, newStackCreating && { opacity: 0.6 }]}
+              onPress={handleCreateNewStack}
+              disabled={newStackCreating}
+              activeOpacity={0.8}
+            >
+              {newStackCreating ? (
+                <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 6 }} />
+              ) : (
+                <Plus size={16} color="#ffffff" style={{ marginRight: 6 }} />
+              )}
+              <Text style={styles.saveYamlBtnText}>
+                {newStackCreating ? '创建中...' : '创建并保存堆栈'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       <ModernConfirmDialog
         visible={confirmDialog.visible}
         type={confirmDialog.type}
@@ -1286,4 +2078,312 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     color: colors.sub,
     fontSize: 13,
   },
+
+  // 顶部分段器
+  segmentContainer: {
+    flexDirection: 'row',
+    backgroundColor: colors.cardSecondary,
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 6,
+    padding: 3,
+    borderRadius: 12,
+  },
+  segmentBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 9,
+  },
+  segmentBtnActive: {
+    backgroundColor: colors.accent,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  segmentBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.sub,
+  },
+  segmentBtnTextActive: {
+    color: '#ffffff',
+    fontWeight: 'bold',
+  },
+
+  // 容器更新徽章
+  updateBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.3)',
+  },
+  updateBadgeText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#f59e0b',
+  },
+
+  // Compose 英雄横幅
+  composeHeroRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    gap: 10,
+  },
+  composeHeroCard: {
+    flex: 1,
+    backgroundColor: colors.card,
+    borderRadius: 14,
+    padding: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  composeHeroNum: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+    marginBottom: 2,
+  },
+  composeHeroLabel: {
+    fontSize: 10,
+    color: colors.sub,
+  },
+
+  // 新建堆栈按键
+  newStackBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.accent,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 12,
+  },
+  newStackBtnText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#ffffff',
+  },
+
+  // Compose 卡片
+  composeCard: {
+    backgroundColor: colors.card,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: isDark ? 0.2 : 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+    marginBottom: 10,
+  },
+  composeCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  composeIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  composeCardTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
+  composeCardPath: {
+    fontSize: 10,
+    color: colors.sub,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginTop: 2,
+  },
+  composeStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  composeStatusBadgeText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  composeServicesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  composeServicesLabel: {
+    fontSize: 11,
+    color: colors.sub,
+    marginRight: 6,
+  },
+  composeServiceTagsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    flex: 1,
+  },
+  composeServiceChip: {
+    backgroundColor: colors.cardSecondary,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  composeServiceChipText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: colors.textStrong,
+  },
+  composeActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 12,
+  },
+  composeConfigBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: colors.cardSecondary,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  composeConfigBtnText: {
+    fontSize: 11,
+    color: colors.accent,
+    fontWeight: 'bold',
+  },
+
+  // 全屏模态窗通用
+  modalFullContainer: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  modalFullHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'ios' ? 20 : 16,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  modalFullTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
+  modalFullSub: {
+    fontSize: 11,
+    color: colors.sub,
+    marginTop: 2,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.cardSecondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalFullFooter: {
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  saveYamlBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accent,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  saveYamlBtnText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  yamlEditorScroll: {
+    flex: 1,
+    backgroundColor: isDark ? '#080c18' : '#f8fafc',
+    padding: 12,
+  },
+  yamlInputWrapper: {
+    backgroundColor: isDark ? '#080c18' : '#f8fafc',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    minHeight: 200,
+    padding: 10,
+    marginTop: 6,
+  },
+  yamlTextInput: {
+    color: isDark ? '#38bdf8' : '#0369a1',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 12,
+    lineHeight: 18,
+    minHeight: 250,
+  },
+  fieldLabel: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+    marginBottom: 6,
+  },
+  modalTextInput: {
+    backgroundColor: colors.cardSecondary,
+    color: colors.textStrong,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 13,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  logActionBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: colors.cardSecondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logsBody: {
+    flex: 1,
+    backgroundColor: isDark ? '#050811' : '#f1f5f9',
+  },
+  logsBodyContent: {
+    padding: 16,
+    paddingBottom: 40,
+  },
+  logsMonoText: {
+    color: isDark ? '#cbd5e1' : '#334155',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+
 });
