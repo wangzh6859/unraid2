@@ -202,9 +202,13 @@ export default function DockerDetailsScreen() {
 
     try {
       setOpeningDocker(docker.name);
-      const isLan = await detectLanEnvironment(serverUrl);
-      const freshInfo = resolveDockerWebUrl(docker, serverUrl, proxyConfig, dockerAliases, isLan);
-      const urlToOpen = freshInfo.targetUrl || webUiInfo.targetUrl;
+      const isLan = typeof detectLanEnvironment === 'function'
+        ? await detectLanEnvironment(serverUrl)
+        : false;
+      const freshInfo = typeof resolveDockerWebUrl === 'function'
+        ? (resolveDockerWebUrl(docker, serverUrl, proxyConfig, dockerAliases, isLan) || webUiInfo)
+        : webUiInfo;
+      const urlToOpen = (freshInfo && freshInfo.targetUrl) || (webUiInfo && webUiInfo.targetUrl);
 
       const canOpen = await Linking.canOpenURL(urlToOpen);
       if (canOpen) {
@@ -522,7 +526,10 @@ export default function DockerDetailsScreen() {
           const cpuVal = docker.cpu !== undefined && docker.cpu !== null ? String(docker.cpu) : '0%';
           const cpuText = cpuVal.includes('%') ? cpuVal : `${cpuVal}%`;
           const isRunning = docker.status === 'running';
-          const webUiInfo = resolveDockerWebUrl(docker, serverUrl, proxyConfig, dockerAliases, true);
+          const defaultWebInfo = { targetUrl: '', proxyUrl: '', rawInternalUrl: '', isCustom: false, isProxy: false, isFullUrl: false, alias: '' };
+          const webUiInfo = (typeof resolveDockerWebUrl === 'function')
+            ? (resolveDockerWebUrl(docker, serverUrl, proxyConfig, dockerAliases, true) || defaultWebInfo)
+            : defaultWebInfo;
           const hasWebAccess = !!(webUiInfo.targetUrl || docker.port || docker.ports);
           const hasCustomAlias = !!dockerAliases[docker.name];
           const avatarBg = getAvatarColor(docker.name);

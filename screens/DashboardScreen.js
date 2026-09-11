@@ -431,8 +431,10 @@ export default function DashboardScreen({ navigation }) {
       const savedUrl = await AsyncStorage.getItem('@server_url');
       const proxyCfg = await getProxyConfig();
       const aliases = await getDockerAliases();
-      const isLan = await detectLanEnvironment(savedUrl);
-      const webInfo = resolveDockerWebUrl(docker, savedUrl, proxyCfg, aliases, isLan);
+      const isLan = typeof detectLanEnvironment === 'function' ? await detectLanEnvironment(savedUrl) : false;
+      const webInfo = typeof resolveDockerWebUrl === 'function'
+        ? resolveDockerWebUrl(docker, savedUrl, proxyCfg, aliases, isLan)
+        : { targetUrl: '' };
 
       if (webInfo.targetUrl) {
         const can = await Linking.canOpenURL(webInfo.targetUrl);

@@ -148,13 +148,20 @@ export function resolveDockerWebUiUrl(docker, proxyConfig = {}, aliases = {}, se
   }
 
   const name = docker.name;
-  const primaryPort = docker.port || '';
+  const primaryPort = docker.port || (typeof docker.ports === 'string' ? (docker.ports.match(/(\d+)/) ? docker.ports.match(/(\d+)/)[1] : '') : '') || '';
 
   // 1. 计算原始内网地址 (域名加端口)
   let rawInternalUrl = docker.webui || '';
-  if (!rawInternalUrl && primaryPort && serverHost) {
+  if (serverHost) {
     const cleanHost = serverHost.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/:.*$/, '');
-    rawInternalUrl = `http://${cleanHost}:${primaryPort}`;
+    if (!rawInternalUrl && primaryPort) {
+      rawInternalUrl = `http://${cleanHost}:${primaryPort}`;
+    } else if (rawInternalUrl) {
+      rawInternalUrl = rawInternalUrl.replace(/\[IP\]/gi, cleanHost);
+      if (primaryPort) {
+        rawInternalUrl = rawInternalUrl.replace(/\[PORT:\d+\]/gi, primaryPort);
+      }
+    }
   }
 
   // 2. 检查是否有针对该容器的个性化简称或独立完整 URL
@@ -245,6 +252,13 @@ export function getCachedLanStatus() {
 }
 
 /**
+ * 获取最近探测缓存环境别名
+ */
+export function getCachedLanEnvironment() {
+  return getCachedLanStatus();
+}
+
+/**
  * 手动更新内网状态缓存
  */
 export function setCachedLanStatus(isLan) {
@@ -260,25 +274,92 @@ export function setCachedLanStatus(isLan) {
 export async function probeLanReachable(probeUrl, timeoutMs = 600) {
   if (!probeUrl) return false;
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      try { controller.abort(); } catch (e) {}
-    }, timeoutMs);
+    let controller = null;
+    let timer = null;
+    if (typeof AbortController !== 'undefined') {
+      controller = new AbortController();
+      timer = setTimeout(() => {
+        try { controller.abort(); } catch (e) {}
+      }, timeoutMs);
+    }
 
     await fetch(probeUrl, {
       method: 'GET',
-      signal: controller.signal,
+      signal: controller ? controller.signal : undefined,
       mode: 'no-cors',
       cache: 'no-store',
     });
 
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
     setCachedLanStatus(true);
     return true;
   } catch (err) {
     setCachedLanStatus(false);
     return false;
   }
+}
+
+/**
+ * 智能探测当前是否处于内网环境
+ */
+export async function detectLanEnvironment(serverUrl, timeoutMs = 800) {
+  if (!serverUrl) return false;
+  const cached = getCachedLanStatus();
+  if (cached !== null) {
+    return cached;
+  }
+  return await probeLanReachable(serverUrl, timeoutMs);
+}
+
+/**
+ * 依据当前内网/外网环境，解析出容器 WebUI 综合访问信息
+ * @param {Object} docker 容器数据对象
+ * @param {string} serverUrl Unraid 服务器地址
+ * @param {Object} proxyConfig 全局反代配置
+ * @param {Object} aliases 个性化别名字典
+ * @param {boolean|null} isLan 是否处于局域网/内网直连环境
+ * @returns {Object}
+ */
+export function resolveDockerWebUrl(docker, serverUrl = '', proxyConfig = {}, aliases = {}, isLan = false) {
+  if (!docker) {
+    return {
+      targetUrl: '',
+      proxyUrl: '',
+      rawInternalUrl: '',
+      isCustom: false,
+      isProxy: false,
+      isFullUrl: false,
+      alias: '',
+    };
+  }
+
+  // 防御性参数适配：兼容 (docker, proxyConfig, aliases, serverHost) 的旧签名
+  let realServerUrl = serverUrl;
+  let realProxyConfig = proxyConfig;
+  let realAliases = aliases;
+  let realIsLan = isLan;
+
+  if (serverUrl && typeof serverUrl === 'object') {
+    realProxyConfig = serverUrl;
+    realAliases = proxyConfig || {};
+    realServerUrl = typeof aliases === 'string' ? aliases : '';
+    realIsLan = typeof isLan === 'boolean' ? isLan : false;
+  }
+
+  const info = resolveDockerWebUiUrl(docker, realProxyConfig, realAliases, realServerUrl);
+  const finalIsLan = realIsLan !== undefined && realIsLan !== null ? realIsLan : getCachedLanStatus();
+
+  let targetUrl = info.targetUrl;
+  if (finalIsLan === true) {
+    targetUrl = info.rawInternalUrl || info.proxyUrl || info.targetUrl || '';
+  } else if (finalIsLan === false) {
+    targetUrl = info.proxyUrl || info.rawInternalUrl || info.targetUrl || '';
+  }
+
+  return {
+    ...info,
+    targetUrl: targetUrl || '',
+  };
 }
 
 /**
