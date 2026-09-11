@@ -539,23 +539,50 @@ export default function SettingsScreen({ navigation }) {
     });
   };
 
+  const openAliasesModal = async () => {
+    try {
+      const fresh = await getDockerAliases();
+      const cleanMap = {};
+      if (fresh && typeof fresh === 'object') {
+        Object.entries(fresh).forEach(([k, v]) => {
+          if (k && k.trim() && v && String(v).trim()) {
+            cleanMap[k.trim()] = String(v).trim();
+          }
+        });
+      }
+      setAliasesMap(cleanMap);
+    } catch (e) {
+      console.log('Open aliases modal error:', e);
+    }
+    setAliasesModalVisible(true);
+  };
+
   const handleDeleteAlias = async (cName) => {
     await removeDockerAlias(cName);
-    const updated = { ...aliasesMap };
-    delete updated[cName];
-    setAliasesMap(updated);
+    setAliasesMap(prev => {
+      const updated = { ...prev };
+      delete updated[cName];
+      return updated;
+    });
   };
 
   const handleClearAllAliases = () => {
     showConfirm({
       type: 'danger',
-      title: '清空所有容器定制配置',
-      message: '确定要清空所有已保存的容器简称与专属网址吗？此操作不可逆。',
+      title: '清空所有自定义反代规则',
+      message: '确定要清空所有已保存的容器简称与专属反代网址吗？此操作不可逆。',
       confirmText: '确认清空',
       onConfirm: async () => {
         await clearAllDockerAliases();
         setAliasesMap({});
         setAliasesModalVisible(false);
+        showConfirm({
+          type: 'success',
+          title: '已清空',
+          message: '已清空所有容器的自定义反代规则，所有容器已恢复为默认模板解析。',
+          confirmText: '好的',
+          showCancel: false,
+        });
       },
     });
   };
@@ -865,16 +892,16 @@ export default function SettingsScreen({ navigation }) {
 
         <View style={styles.divider} />
 
-        <TouchableOpacity style={styles.row} onPress={() => setAliasesModalVisible(true)}>
+        <TouchableOpacity style={styles.row} onPress={openAliasesModal}>
           <View style={[styles.iconBox, { backgroundColor: 'rgba(139, 92, 246, 0.15)' }]}>
             <Sliders color={colors.purple} size={20} />
           </View>
           <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>容器个性化简称管理</Text>
+            <Text style={styles.rowTitle}>自定义反代管理</Text>
             <Text style={styles.rowSub}>
               {Object.keys(aliasesMap).length > 0
-                ? `${Object.keys(aliasesMap).length} 个容器已配置专属简称或网址`
-                : '暂无定制 (在 Docker 详情点击“定制”可添加简称)'}
+                ? `${Object.keys(aliasesMap).length} 个容器已配置独立简称或专属反代`
+                : '暂无自定义规则 (在 Docker 卡片点击“定制”可添加)'}
             </Text>
           </View>
           <Text style={styles.editHint}>管理</Text>
@@ -1219,38 +1246,69 @@ export default function SettingsScreen({ navigation }) {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Docker Aliases Management Modal */}
+      {/* Docker Custom Reverse Proxy & Aliases Management Modal */}
       <Modal visible={aliasesModalVisible} transparent animationType="fade" onRequestClose={() => setAliasesModalVisible(false)}>
         <View style={styles.overlayCenter}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setAliasesModalVisible(false)} />
-          <View style={[styles.limitBox, { maxHeight: '80%' }]}>
-            <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(139, 92, 246, 0.12)' }]}>
-              <Sliders color={colors.purple} size={28} />
+          <View style={[styles.limitBox, { width: '100%', maxWidth: 360, maxHeight: '80%', alignItems: 'stretch' }]}>
+            <View style={{ alignItems: 'center' }}>
+              <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(139, 92, 246, 0.12)' }]}>
+                <Sliders color={colors.purple} size={28} />
+              </View>
+              <Text style={styles.limitTitle}>自定义反代管理</Text>
+              <Text style={styles.dialogSub}>
+                针对特殊容器单独指定的个性化简称或专属反代网址：
+              </Text>
             </View>
-            <Text style={styles.limitTitle}>容器个性化简称列表</Text>
-            <Text style={styles.dialogSub}>
-              针对特殊容器单独指定的简称或独立网址：
-            </Text>
-            <ScrollView style={{ maxHeight: 240, marginVertical: 8 }} indicatorStyle={colors.mode === 'dark' ? 'white' : 'black'}>
+
+            <ScrollView
+              style={{ width: '100%', maxHeight: 260, marginVertical: 8 }}
+              contentContainerStyle={{ width: '100%' }}
+              indicatorStyle={colors.mode === 'dark' ? 'white' : 'black'}
+            >
               {Object.keys(aliasesMap).length === 0 ? (
-                <View style={{ paddingVertical: 20, alignItems: 'center' }}>
-                  <Text style={{ fontSize: 13, color: colors.muted }}>暂无任何个性化简称</Text>
-                  <Text style={{ fontSize: 12, color: colors.sub, marginTop: 4, textAlign: 'center' }}>
-                    在【Docker 详情】页面每个容器卡片上，点击“定制”即可为特殊容器指定简称。
+                <View style={{ width: '100%', paddingVertical: 24, alignItems: 'center' }}>
+                  <Text style={{ fontSize: 14, color: colors.muted, fontWeight: '500' }}>暂无任何自定义反代规则</Text>
+                  <Text style={{ fontSize: 12, color: colors.sub, marginTop: 6, textAlign: 'center', lineHeight: 18, paddingHorizontal: 16 }}>
+                    在【Docker 容器】页面任意容器卡片上，点击“定制”即可为特殊容器指定简称或独立网址。
                   </Text>
                 </View>
               ) : (
                 Object.entries(aliasesMap).map(([cName, val]) => (
-                  <View key={cName} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.divider }}>
-                    <View style={{ flex: 1, marginRight: 8 }}>
-                      <Text style={{ fontSize: 14, fontWeight: 'bold', color: colors.textStrong }}>{cName}</Text>
-                      <Text style={{ fontSize: 12, color: colors.accent }} numberOfLines={1}>
-                        {val.startsWith('http') ? val : `简称: ${val} (自动套用模板)`}
+                  <View
+                    key={cName}
+                    style={{
+                      width: '100%',
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      paddingVertical: 12,
+                      paddingHorizontal: 6,
+                      borderBottomWidth: StyleSheet.hairlineWidth,
+                      borderBottomColor: colors.divider,
+                    }}
+                  >
+                    <View style={{ flex: 1, marginRight: 10 }}>
+                      <Text style={{ fontSize: 15, fontWeight: 'bold', color: colors.textStrong }} numberOfLines={1}>
+                        {cName}
+                      </Text>
+                      <Text style={{ fontSize: 12, color: colors.accent, marginTop: 2 }} numberOfLines={1}>
+                        {val && typeof val === 'string' && val.startsWith('http')
+                          ? `专属网址: ${val}`
+                          : `简称: ${val} (自动拼接)`}
                       </Text>
                     </View>
                     <TouchableOpacity
                       onPress={() => handleDeleteAlias(cName)}
-                      style={{ padding: 6, borderRadius: 6, backgroundColor: 'rgba(239, 68, 68, 0.12)' }}
+                      style={{
+                        width: 34,
+                        height: 34,
+                        borderRadius: 8,
+                        backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                      }}
+                      activeOpacity={0.7}
                     >
                       <Trash2 size={16} color={colors.red} />
                     </TouchableOpacity>
@@ -1258,13 +1316,20 @@ export default function SettingsScreen({ navigation }) {
                 ))
               )}
             </ScrollView>
-            <View style={styles.renameBtns}>
+
+            <View style={[styles.renameBtns, { width: '100%', marginTop: 12 }]}>
               {Object.keys(aliasesMap).length > 0 ? (
-                <TouchableOpacity style={[styles.renameBtn, { backgroundColor: 'rgba(239, 68, 68, 0.15)', marginRight: 8 }]} onPress={handleClearAllAliases}>
+                <TouchableOpacity
+                  style={[styles.renameBtn, { backgroundColor: 'rgba(239, 68, 68, 0.15)', marginRight: 8 }]}
+                  onPress={handleClearAllAliases}
+                >
                   <Text style={[styles.renameBtnText, { color: colors.red }]}>清空全部</Text>
                 </TouchableOpacity>
               ) : null}
-              <TouchableOpacity style={[styles.renameBtn, { backgroundColor: colors.accent, flex: 1 }]} onPress={() => setAliasesModalVisible(false)}>
+              <TouchableOpacity
+                style={[styles.renameBtn, { backgroundColor: colors.accent, flex: 1 }]}
+                onPress={() => setAliasesModalVisible(false)}
+              >
                 <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>完成</Text>
               </TouchableOpacity>
             </View>

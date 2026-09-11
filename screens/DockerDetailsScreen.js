@@ -687,11 +687,11 @@ export default function DockerDetailsScreen() {
               <Globe color={colors.accent} size={28} />
             </View>
             <Text style={[styles.aliasModalTitle, { color: colors.textStrong }]}>
-              配置 Web 界面 · {targetDockerForAlias?.name}
+              自定义反代配置 · {targetDockerForAlias?.name}
             </Text>
             <Text style={[styles.aliasModalSub, { color: colors.sub }]}>
               {proxyConfig.enabled && proxyConfig.template
-                ? `全局模板：${proxyConfig.template}\n输入简称（如 qb）将自动拼接，或输入独立完整网址。`
+                ? `全局反代模板：${proxyConfig.template}\n输入简称（如 qb）将自动拼接，或输入独立专属网址。`
                 : '全局反代模板未开启或未配置。建议直接输入完整网址（如 https://...），或前往【设置】配置全局反代模板。'}
             </Text>
 
@@ -702,7 +702,7 @@ export default function DockerDetailsScreen() {
               autoFocus
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder="输入简称 (如 qb) 或完整网址 (如 https://...)"
+              placeholder="输入简称 (如 qb) 或专属网址 (如 https://...)"
               placeholderTextColor={colors.muted}
             />
 
