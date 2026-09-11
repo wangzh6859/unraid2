@@ -401,50 +401,75 @@ export default function DockerDetailsScreen() {
 
           return (
             <View key={index} style={styles.card}>
-              <View style={[styles.avatar, { backgroundColor: getAvatarColor(docker.name) }]}>
-                <Text style={styles.avatarText}>{docker.name.substring(0, 2).toUpperCase()}</Text>
-              </View>
-
-              <View style={styles.infoContainer}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
-                  <Text style={styles.nameText} numberOfLines={1}>{docker.name}</Text>
-                  {docker.port ? (
-                    <View style={styles.portBadge}>
-                      <Text style={styles.portBadgeText}>:{docker.port}</Text>
-                    </View>
-                  ) : null}
+              {/* Top Section: Avatar + Container Info + Status Pill */}
+              <View style={styles.cardHeader}>
+                <View style={[styles.avatar, { backgroundColor: getAvatarColor(docker.name) }]}>
+                  <Text style={styles.avatarText}>{docker.name.substring(0, 2).toUpperCase()}</Text>
                 </View>
 
-                {isRunning ? (
-                  <View style={styles.statsRow}>
-                    <View style={styles.statBadge}>
-                      <Cpu size={12} color={colors.amber} />
-                      <Text style={styles.statText}>{cpuText}</Text>
-                    </View>
-                    <View style={styles.statBadge}>
-                      <Database size={12} color={colors.green} />
-                      <Text style={styles.statText}>{shortMemory}</Text>
-                    </View>
+                <View style={styles.headerInfo}>
+                  <View style={styles.nameRow}>
+                    <Text style={styles.nameText} numberOfLines={1}>{docker.name}</Text>
+                    {docker.port ? (
+                      <View style={styles.portBadge}>
+                        <Text style={styles.portBadgeText}>:{docker.port}</Text>
+                      </View>
+                    ) : null}
                   </View>
-                ) : (
-                  <Text style={[styles.stoppedText, { color: colors.muted }]}>已停止运行</Text>
-                )}
 
-                {/* WebUI & Proxy Shortcut Row */}
-                <View style={styles.webUiRow}>
+                  {isRunning ? (
+                    <View style={styles.statsRow}>
+                      <View style={styles.statBadge}>
+                        <Cpu size={12} color={colors.amber} />
+                        <Text style={styles.statText}>{cpuText}</Text>
+                      </View>
+                      <View style={styles.statBadge}>
+                        <Database size={12} color={colors.green} />
+                        <Text style={styles.statText}>{shortMemory}</Text>
+                      </View>
+                    </View>
+                  ) : (
+                    <Text style={[styles.stoppedText, { color: colors.muted }]}>已停止运行</Text>
+                  )}
+                </View>
+
+                {/* Status Pill in Top-Right */}
+                <View style={[
+                  styles.statusPill,
+                  {
+                    backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                    borderColor: isRunning ? 'rgba(16, 185, 129, 0.28)' : 'rgba(239, 68, 68, 0.28)',
+                  }
+                ]}>
+                  <View style={[styles.statusDot, { backgroundColor: isRunning ? colors.green : colors.red }]} />
+                  <Text style={[
+                    styles.statusPillText,
+                    { color: isRunning ? colors.green : colors.red }
+                  ]}>
+                    {isRunning ? '运行中' : '已停止'}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Card Divider */}
+              <View style={styles.cardDivider} />
+
+              {/* Bottom Section: WebUI Shortcut (Left) + Actions (Right) */}
+              <View style={styles.cardFooter}>
+                <View style={styles.footerLeft}>
                   {webUiInfo.targetUrl ? (
                     <TouchableOpacity
                       style={[
-                        styles.webUiTag,
-                        webUiInfo.isCustom && styles.webUiTagCustom,
+                        styles.webUiBtn,
+                        webUiInfo.isCustom && styles.webUiBtnCustom,
                         !isRunning && { opacity: 0.6 }
                       ]}
                       onPress={() => handleOpenWebUi(webUiInfo.targetUrl)}
                       onLongPress={() => handleShowWebUiOptions(docker, webUiInfo)}
                       activeOpacity={0.75}
                     >
-                      <Globe size={11} color="#ffffff" style={{ marginRight: 3 }} />
-                      <Text style={styles.webUiTagText} numberOfLines={1}>
+                      <Globe size={13} color="#ffffff" style={{ marginRight: 4 }} />
+                      <Text style={styles.webUiBtnText} numberOfLines={1}>
                         {webUiInfo.isCustom
                           ? (webUiInfo.isFullUrl ? '专属网址' : `简称: ${webUiInfo.alias}`)
                           : (webUiInfo.isProxy ? '反代Web' : 'WebUI')}
@@ -454,25 +479,25 @@ export default function DockerDetailsScreen() {
                   ) : null}
 
                   <TouchableOpacity
-                    style={styles.aliasEditBtn}
+                    style={[
+                      styles.aliasEditBtn,
+                      !webUiInfo.targetUrl && styles.aliasEditBtnDashed
+                    ]}
                     onPress={() => handleOpenAliasModal(docker, webUiInfo)}
                     activeOpacity={0.7}
                   >
-                    <Sliders size={11} color={colors.sub} style={{ marginRight: 3 }} />
+                    <Sliders size={12} color={colors.sub} style={{ marginRight: 4 }} />
                     <Text style={[styles.aliasEditBtnText, { color: colors.sub }]}>
                       {webUiInfo.isCustom ? '修改' : (webUiInfo.targetUrl ? '定制' : '+ 配置WebUI')}
                     </Text>
                   </TouchableOpacity>
                 </View>
-              </View>
 
-              <View style={styles.controlContainer}>
-                <View style={[styles.statusDot, { backgroundColor: isRunning ? colors.green : colors.red }]} />
-                <View style={styles.btnRow}>
+                <View style={styles.footerRight}>
                   {/* Terminal Log Button */}
                   <TouchableOpacity
                     onPress={() => openDockerLogs(docker)}
-                    style={[styles.actionBtn, { backgroundColor: 'rgba(107, 114, 128, 0.18)' }]}
+                    style={styles.actionBtn}
                     activeOpacity={0.7}
                   >
                     <Terminal size={15} color={colors.text} />
@@ -485,7 +510,7 @@ export default function DockerDetailsScreen() {
                       style={[styles.actionBtn, { backgroundColor: colors.purple }]}
                       activeOpacity={0.7}
                     >
-                      <RotateCw size={15} color="#ffffff" />
+                      <RotateCw size={14} color="#ffffff" />
                     </TouchableOpacity>
                   )}
 
@@ -495,7 +520,7 @@ export default function DockerDetailsScreen() {
                     style={[styles.actionBtn, { backgroundColor: isRunning ? colors.red : colors.green }]}
                     activeOpacity={0.7}
                   >
-                    {isRunning ? <Power size={15} color="#ffffff" /> : <Play size={15} color="#ffffff" />}
+                    {isRunning ? <Power size={14} color="#ffffff" /> : <Play size={14} color="#ffffff" />}
                   </TouchableOpacity>
                 </View>
               </View>
@@ -721,22 +746,49 @@ const createStyles = (colors) => StyleSheet.create({
   content: { padding: 16, paddingBottom: 40 },
   center: { flex: 1, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center' },
   card: {
-    flexDirection: 'row',
     backgroundColor: colors.card,
     borderRadius: 18,
-    padding: 16,
+    padding: 14,
     marginBottom: 12,
-    alignItems: 'center',
     elevation: 2,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 6,
   },
-  avatar: { width: 44, height: 44, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
-  avatarText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
-  infoContainer: { flex: 1, marginRight: 8, overflow: 'hidden' },
-  nameText: { color: colors.textStrong, fontSize: 16, fontWeight: 'bold' },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  avatarText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  headerInfo: {
+    flex: 1,
+    marginRight: 8,
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  nameText: {
+    color: colors.textStrong,
+    fontSize: 15,
+    fontWeight: 'bold',
+    flexShrink: 1,
+  },
   portBadge: {
     backgroundColor: 'rgba(59, 130, 246, 0.12)',
     paddingHorizontal: 6,
@@ -751,26 +803,110 @@ const createStyles = (colors) => StyleSheet.create({
   },
   stoppedText: {
     fontSize: 12,
-    marginTop: 4,
+    marginTop: 2,
   },
-  statsRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
+  statsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   statBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.input,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
     borderRadius: 6,
     gap: 4,
   },
-  statText: { color: colors.text, fontSize: 11, fontWeight: 'bold', fontVariant: ['tabular-nums'] },
-  controlContainer: { alignItems: 'flex-end', justifyContent: 'center' },
-  statusDot: { width: 8, height: 8, borderRadius: 4, marginBottom: 8 },
-  btnRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  actionBtn: {
-    width: 32,
+  statText: {
+    color: colors.text,
+    fontSize: 11,
+    fontWeight: 'bold',
+    fontVariant: ['tabular-nums'],
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 5,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  statusPillText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  cardDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.divider,
+    marginVertical: 11,
+    opacity: 0.7,
+  },
+  cardFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  footerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+    marginRight: 10,
+  },
+  webUiBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.accent,
+    paddingHorizontal: 10,
     height: 32,
-    borderRadius: 10,
+    borderRadius: 8,
+    maxWidth: 160,
+  },
+  webUiBtnCustom: {
+    backgroundColor: colors.purple,
+  },
+  webUiBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 'bold',
+    flexShrink: 1,
+  },
+  aliasEditBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.input,
+    paddingHorizontal: 9,
+    height: 32,
+    borderRadius: 8,
+  },
+  aliasEditBtnDashed: {
+    borderWidth: 1,
+    borderColor: colors.divider,
+    borderStyle: 'dashed',
+    backgroundColor: 'transparent',
+  },
+  aliasEditBtnText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  footerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  actionBtn: {
+    width: 34,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: colors.input,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -870,39 +1006,6 @@ const createStyles = (colors) => StyleSheet.create({
     fontSize: 13,
   },
 
-  webUiRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 8,
-  },
-  webUiTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.accent,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  webUiTagCustom: {
-    backgroundColor: colors.purple,
-  },
-  webUiTagText: {
-    color: '#ffffff',
-    fontSize: 11,
-    fontWeight: 'bold',
-  },
-  aliasEditBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.input,
-    paddingHorizontal: 7,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  aliasEditBtnText: {
-    fontSize: 11,
-  },
   modalOverlayCenter: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.65)',
