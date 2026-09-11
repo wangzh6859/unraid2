@@ -1,14 +1,20 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { StyleSheet, Text, View, ScrollView, ActivityIndicator, TouchableOpacity } from 'react-native';
+import {
+  StyleSheet, Text, View, ScrollView, ActivityIndicator, TouchableOpacity,
+  Platform
+} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
-import { HardDrive, Server, ShieldCheck, ThumbsUp, ThumbsDown, Thermometer, ChevronRight, Play, Pause, Square } from 'lucide-react-native';
+import {
+  HardDrive, Server, ShieldCheck, ThumbsUp, ThumbsDown, Thermometer,
+  ChevronRight, Play, Pause, Square, Shield, Zap, AlertTriangle, CheckCircle2
+} from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 
 export default function StorageDetailsScreen({ navigation }) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
   const [disks, setDisks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -68,8 +74,21 @@ export default function StorageDetailsScreen({ navigation }) {
       const data = await response.json();
       if (data.storage && data.storage.disks) setDisks(data.storage.disks);
       if (data.parity) setParity(data.parity);
-    } catch (error) { console.log(error); } finally { setLoading(false); }
+    } catch (error) {
+      console.log(error);
+    } finally {
+      setLoading(false);
+      setParityLoading(false);
+    }
   };
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchStorageData();
+      const interval = setInterval(fetchStorageData, 3000);
+      return () => clearInterval(interval);
+    }, [])
+  );
 
   const handleParityControl = (cmd, actionName) => {
     showConfirm({
@@ -100,13 +119,10 @@ export default function StorageDetailsScreen({ navigation }) {
               showCancel: false,
             });
           } else {
-            const isUnknownAction = data.message && /unknown action/i.test(data.message);
             showConfirm({
               type: 'warning',
-              title: '执行未完成',
-              message: isUnknownAction
-                ? '服务端尚未更新最新的 api.php。\n\n请将项目中的 api.php 同步至 Unraid 的 /usr/local/emhttp/api.php 并执行 chmod 755 /usr/local/emhttp/api.php'
-                : (data.message || '服务器拒绝执行校验指令'),
+              title: '执行未成功',
+              message: data.message || '操作失败',
               confirmText: '知道了',
               showCancel: false,
             });
@@ -114,8 +130,8 @@ export default function StorageDetailsScreen({ navigation }) {
         } catch (e) {
           showConfirm({
             type: 'warning',
-            title: '网络通信失败',
-            message: e.message || '无法连接到服务器',
+            title: '网络异常',
+            message: e.message || '网络连接异常',
             confirmText: '知道了',
             showCancel: false,
           });
@@ -126,248 +142,190 @@ export default function StorageDetailsScreen({ navigation }) {
     });
   };
 
-  useFocusEffect(
-    useCallback(() => {
-      let isActive = true;
-      let timerId = null;
-      const pollData = async () => {
-        if (!isActive) return;
-        await fetchStorageData();
-        if (isActive) timerId = setTimeout(pollData, 5000); // 硬盘状态每 5 秒刷新
-      };
-      pollData();
-      return () => { isActive = false; if (timerId) clearTimeout(timerId); };
-    }, [])
-  );
+  // 磁盘分类整理
+  const parityDisks = useMemo(() => disks.filter(d => d.is_parity || (d.name || '').toLowerCase().includes('parity')), [disks]);
+  const dataDisks = useMemo(() => disks.filter(d => !d.is_parity && !(d.name || '').toLowerCase().includes('parity') && !(d.name || '').toLowerCase().includes('cache') && !(d.name || '').toLowerCase().includes('pool')), [disks]);
+  const cacheDisks = useMemo(() => disks.filter(d => (d.name || '').toLowerCase().includes('cache') || (d.name || '').toLowerCase().includes('pool')), [disks]);
 
-  if (loading && disks.length === 0) return <View style={styles.center}><ActivityIndicator size="large" color={colors.green} /></View>;
+  // 总容量汇总计算
+  const totalArraySize = useMemo(() => dataDisks.reduce((acc, d) => acc + (d.size || d.total || 0), 0), [dataDisks]);
+  const totalArrayUsed = useMemo(() => dataDisks.reduce((acc, d) => acc + (d.used || 0), 0), [dataDisks]);
+  const totalArrayPct = totalArraySize > 0 ? ((totalArrayUsed / totalArraySize) * 100).toFixed(1) : 0;
 
-  const isParityChecking = parity.status === 'checking';
-  const isParityPaused = parity.status === 'paused';
+  const isChecking = parity.status === 'checking';
+  const isPaused = parity.status === 'paused';
+
+  if (loading && disks.length === 0) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={colors.accent} />
+        <Text style={styles.loadingText}>正在抓取存储设备及阵列状态...</Text>
+      </View>
+    );
+  }
 
   return (
-    <View style={styles.container}>
-      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-        {/* Parity Check Status & Control Card (Relocated from Home) */}
-        <View style={styles.card}>
-          <View style={styles.parityHeaderRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <ShieldCheck color={isParityChecking ? colors.amber : colors.accent} size={20} style={{ marginRight: 8 }} />
-              <Text style={styles.parityCardTitle}>阵列奇偶校验</Text>
-            </View>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* 1. 顶部存储阵列概览全景卡片 */}
+      <View style={styles.heroCard}>
+        <View style={styles.heroHeader}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <HardDrive size={18} color={colors.accent} style={{ marginRight: 8 }} />
+            <Text style={styles.heroTitle}>Array 存储阵列全景</Text>
+          </View>
+          <View style={styles.healthBadge}>
+            <View style={[styles.healthDot, { backgroundColor: colors.green }]} />
+            <Text style={styles.healthBadgeText}>阵列保护中</Text>
+          </View>
+        </View>
 
-            <View style={[
-              styles.parityTag,
-              {
-                backgroundColor: isParityChecking
-                  ? 'rgba(245, 158, 11, 0.15)'
-                  : isParityPaused
-                  ? 'rgba(239, 68, 68, 0.15)'
-                  : 'rgba(16, 185, 129, 0.15)'
-              }
-            ]}>
-              <Text style={[
-                styles.parityTagText,
-                {
-                  color: isParityChecking
-                    ? colors.amber
-                    : isParityPaused
-                    ? colors.red
-                    : colors.green
-                }
-              ]}>
-                {isParityChecking ? '校验进行中' : isParityPaused ? '校验已暂停' : '空闲 / 状态正常'}
+        <View style={styles.capacityRow}>
+          <Text style={styles.capacityBigNum}>{totalArrayPct}%</Text>
+          <Text style={styles.capacitySubText}>
+            已使用 {formatBytes(totalArrayUsed)} / 总量 {formatBytes(totalArraySize)}
+          </Text>
+        </View>
+
+        {/* 分段式彩色容量分布条 */}
+        <View style={styles.multiSegTrack}>
+          <View style={[styles.multiSegBar, { width: `${Math.min(totalArrayPct, 100)}%`, backgroundColor: totalArrayPct > 85 ? colors.red : colors.accent }]} />
+        </View>
+
+        <View style={styles.arrayMetaGrid}>
+          <View style={styles.arrayMetaItem}>
+            <Text style={styles.arrayMetaLabel}>校验盘</Text>
+            <Text style={styles.arrayMetaVal}>{parityDisks.length} 块</Text>
+          </View>
+          <View style={styles.arrayMetaItem}>
+            <Text style={styles.arrayMetaLabel}>数据盘</Text>
+            <Text style={styles.arrayMetaVal}>{dataDisks.length} 块</Text>
+          </View>
+          <View style={styles.arrayMetaItem}>
+            <Text style={styles.arrayMetaLabel}>缓存池</Text>
+            <Text style={styles.arrayMetaVal}>{cacheDisks.length} 块</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* 2. 奇偶校验中控台卡片 */}
+      <View style={styles.card}>
+        <View style={styles.cardHeaderRow}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <ShieldCheck size={18} color={isChecking ? colors.amber : colors.green} style={{ marginRight: 8 }} />
+            <Text style={styles.cardTitle}>奇偶校验中控 (Parity Check)</Text>
+          </View>
+          <View style={[styles.parityStatusPill, {
+            backgroundColor: isChecking ? 'rgba(245, 158, 11, 0.15)' : isPaused ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)'
+          }]}>
+            <Text style={[styles.parityStatusPillText, {
+              color: isChecking ? colors.amber : isPaused ? colors.red : colors.green
+            }]}>
+              {isChecking ? '校验进行中' : isPaused ? '已暂停' : '空闲 / 数据安全'}
+            </Text>
+          </View>
+        </View>
+
+        {isChecking || isPaused ? (
+          <View style={styles.parityActiveBox}>
+            <View style={styles.parityProgressRow}>
+              <Text style={styles.parityProgressNum}>{(parity.progress || 0).toFixed(1)}%</Text>
+              <Text style={styles.paritySpeedText}>
+                {parity.speed ? `速率: ${parity.speed}` : '计算速率中...'}
               </Text>
             </View>
-          </View>
 
-          {isParityChecking || isParityPaused ? (
-            <View style={{ marginTop: 10 }}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
-                <Text style={[styles.parityProgressNumber, { color: colors.textStrong }]}>
-                  {(parity.progress || 0).toFixed(1)}%
-                </Text>
-                {parity.speed ? (
-                  <Text style={[styles.subText, { color: colors.accent, fontWeight: 'bold' }]}>
-                    {parity.speed}
-                  </Text>
-                ) : null}
-              </View>
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${Math.min(parity.progress || 0, 100)}%`, backgroundColor: colors.amber }]} />
+            </View>
 
-              <View style={styles.track}>
-                <View style={[styles.bar, { width: `${Math.min(100, Math.max(0, parity.progress || 0))}%`, backgroundColor: colors.amber }]} />
-              </View>
+            <View style={styles.parityDetailRow}>
+              <Text style={styles.parityDetailText}>发现错误: <Text style={{ color: parity.errors > 0 ? colors.red : colors.green, fontWeight: 'bold' }}>{parity.errors || 0}</Text></Text>
+              {parity.finish ? <Text style={styles.parityDetailText}>预计剩余: {parity.finish}</Text> : null}
+            </View>
 
-              <View style={styles.parityMetaRow}>
-                <Text style={[styles.subText, { color: colors.sub }]}>
-                  预计剩余: {parity.finish || '计算中...'}
-                </Text>
-                <Text style={[styles.subText, { color: parity.errors > 0 ? colors.red : colors.sub }]}>
-                  同步错误: {parity.errors || 0}
-                </Text>
-              </View>
-
-              {/* Parity In-Progress Controls */}
-              <View style={styles.parityBtnRow}>
-                {isParityChecking ? (
-                  <TouchableOpacity
-                    style={[styles.parityMiniBtn, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}
-                    onPress={() => handleParityControl('pause', '暂停')}
-                    disabled={parityLoading}
-                  >
-                    <Pause size={14} color={colors.amber} style={{ marginRight: 4 }} />
-                    <Text style={[styles.parityMiniBtnText, { color: colors.amber }]}>暂停</Text>
-                  </TouchableOpacity>
-                ) : (
-                  <TouchableOpacity
-                    style={[styles.parityMiniBtn, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}
-                    onPress={() => handleParityControl('resume', '恢复')}
-                    disabled={parityLoading}
-                  >
-                    <Play size={14} color={colors.green} style={{ marginRight: 4 }} />
-                    <Text style={[styles.parityMiniBtnText, { color: colors.green }]}>恢复校验</Text>
-                  </TouchableOpacity>
-                )}
-
+            <View style={styles.parityBtnRow}>
+              {isChecking ? (
                 <TouchableOpacity
-                  style={[styles.parityMiniBtn, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}
-                  onPress={() => handleParityControl('cancel', '终止')}
+                  style={[styles.parityControlBtn, { backgroundColor: colors.cardSecondary, borderColor: colors.cardBorder }]}
+                  onPress={() => handleParityControl('pause', '暂停校验')}
                   disabled={parityLoading}
                 >
-                  <Square size={14} color={colors.red} style={{ marginRight: 4 }} />
-                  <Text style={[styles.parityMiniBtnText, { color: colors.red }]}>终止校验</Text>
+                  <Pause size={13} color={colors.amber} style={{ marginRight: 4 }} />
+                  <Text style={[styles.parityControlBtnText, { color: colors.amber }]}>暂停</Text>
                 </TouchableOpacity>
-              </View>
-            </View>
-          ) : (
-            <View style={{ marginTop: 10 }}>
-              <Text style={[styles.subText, { color: colors.sub, fontSize: 13, lineHeight: 18, marginBottom: 10 }]}>
-                定期执行奇偶校验可扫描并验证所有磁盘数据块与校验盘的一致性，防范坏道风险。
-              </Text>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.parityControlBtn, { backgroundColor: colors.green }]}
+                  onPress={() => handleParityControl('resume', '继续校验')}
+                  disabled={parityLoading}
+                >
+                  <Play size={13} color="#ffffff" style={{ marginRight: 4 }} />
+                  <Text style={[styles.parityControlBtnText, { color: '#ffffff' }]}>继续</Text>
+                </TouchableOpacity>
+              )}
+
               <TouchableOpacity
-                style={[styles.parityStartBtn, { backgroundColor: colors.accent }]}
-                onPress={() => handleParityControl('start', '启动奇偶校验')}
+                style={[styles.parityControlBtn, { backgroundColor: 'rgba(239, 68, 68, 0.12)', borderColor: 'rgba(239, 68, 68, 0.3)' }]}
+                onPress={() => handleParityControl('cancel', '终止校验')}
                 disabled={parityLoading}
               >
-                {parityLoading ? (
-                  <ActivityIndicator size="small" color="#ffffff" />
-                ) : (
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Play size={14} color="#ffffff" style={{ marginRight: 6 }} />
-                    <Text style={styles.parityStartBtnText}>启动无修正奇偶校验 (Check)</Text>
-                  </View>
-                )}
+                <Square size={13} color={colors.red} style={{ marginRight: 4 }} />
+                <Text style={[styles.parityControlBtnText, { color: colors.red }]}>终止校验</Text>
               </TouchableOpacity>
             </View>
-          )}
-        </View>
-
-        {/* Physical Disk List Header */}
-        <View style={{ marginBottom: 12, marginTop: 4 }}>
-          <Text style={{ color: colors.sub, fontSize: 13, fontWeight: 'bold' }}>物理与阵列磁盘 ({disks.length})</Text>
-        </View>
-
-        {disks.length === 0 ? (
-          <View style={styles.center}><Text style={styles.emptyText}>未找到物理磁盘</Text></View>
+          </View>
         ) : (
-          disks.map((disk, index) => {
-            const isParity = disk.is_parity || (disk.name || '').toLowerCase().includes('parity');
-            const isCache = (disk.name || '').toLowerCase().includes('cache');
-            const isSmartError = disk.smart_status && disk.smart_status !== 'Normal';
-            const isStandby = disk.status === 'standby';
-
-            const totalSize = disk.total || disk.size || 0;
-            const usedSize = disk.used || 0;
-            const calcPct = typeof disk.percentage === 'number'
-              ? disk.percentage
-              : (totalSize > 0 ? Math.round((usedSize / totalSize) * 100) : 0);
-            const safePct = Math.min(100, Math.max(0, isNaN(calcPct) ? 0 : calcPct));
-
-            return (
-              <TouchableOpacity 
-                key={disk.name || index} 
-                style={[styles.card, isSmartError && styles.cardError]}
-                onPress={() => navigation.navigate('SMART详情', { device: disk.device, name: disk.name })}
-              >
-                {/* 第一行：设备名称 和 容量总览 */}
-                <View style={styles.cardHeader}>
-                  <View style={styles.titleRow}>
-                    {isParity ? (
-                      <ShieldCheck size={20} color={colors.accent} />
-                    ) : isCache ? (
-                      <Server size={20} color={colors.accent} />
-                    ) : (
-                      <HardDrive size={20} color={isSmartError ? colors.red : colors.green} />
-                    )}
-                    <Text style={styles.diskName}>{disk.name || '磁盘'}</Text>
-                    {isParity && (
-                      <View style={[styles.parityBadge, { backgroundColor: colors.accent + '22' }]}>
-                        <Text style={[styles.parityBadgeText, { color: colors.accent }]}>校验保护</Text>
-                      </View>
-                    )}
-                    <Text style={styles.deviceLabel}>({disk.device || '未知'})</Text>
-                  </View>
-                  <ChevronRight size={18} color={colors.muted} />
-                </View>
-
-                {/* 第二行：状态/温度/SMART 状态数据 */}
-                <View style={styles.gridRow}>
-                  {/* 状态 */}
-                  <View style={styles.gridItem}>
-                    <Text style={styles.gridLabel}>状态</Text>
-                    <View style={styles.statusRow}>
-                      <View style={[styles.statusDot, { backgroundColor: isStandby ? colors.muted : colors.green }]} />
-                      <Text style={styles.gridValue}>{isStandby ? '待机' : '活动'}</Text>
-                    </View>
-                  </View>
-                  {/* 温度 */}
-                  <View style={styles.gridItem}>
-                    <Text style={styles.gridLabel}>温度</Text>
-                    <View style={styles.statusRow}>
-                      <Thermometer size={14} color={isStandby ? colors.muted : colors.green} style={{marginRight: 4}} />
-                      <Text style={[styles.gridValue, { color: isStandby ? colors.muted : colors.green }]}>
-                        {disk.temp ? `${disk.temp} °C` : '*'}
-                      </Text>
-                    </View>
-                  </View>
-                  {/* S.M.A.R.T. */}
-                  <View style={styles.gridItem}>
-                    <Text style={styles.gridLabel}>S.M.A.R.T.</Text>
-                    <View style={styles.statusRow}>
-                      {isSmartError ? <ThumbsDown size={14} color={colors.amber} style={{marginRight: 4}} /> : <ThumbsUp size={14} color={colors.green} style={{marginRight: 4}} />}
-                      <Text style={[styles.gridValue, { color: isSmartError ? colors.amber : colors.green }]}>
-                        {isSmartError ? '错误' : '良好'}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-
-                {/* 第三行：利用率 */}
-                <View style={styles.usageContainer}>
-                  {isParity ? (
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Text style={styles.usageText}>保护阵列数据一致性</Text>
-                      <Text style={styles.usageText}>总容量: {formatBytes(totalSize)}</Text>
-                    </View>
-                  ) : (
-                    <>
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                        <Text style={styles.usageText}>利用率: {safePct}%</Text>
-                        <Text style={styles.usageText}>{formatBytes(usedSize)} / {formatBytes(totalSize)}</Text>
-                      </View>
-                      <View style={styles.track}>
-                        <View style={[styles.bar, { width: `${safePct}%`, backgroundColor: safePct > 85 ? colors.red : (isCache ? colors.accent : colors.green) }]} />
-                      </View>
-                    </>
-                  )}
-                </View>
-              </TouchableOpacity>
-            );
-          })
+          <View style={styles.parityIdleBox}>
+            <Text style={styles.parityIdleText}>
+              所有阵列数据块已受到奇偶校验算法保护，校验可验证盘片一致性。
+            </Text>
+            <TouchableOpacity
+              style={styles.parityStartBtn}
+              onPress={() => handleParityControl('start', '开始奇偶校验')}
+              disabled={parityLoading}
+              activeOpacity={0.8}
+            >
+              {parityLoading ? (
+                <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 8 }} />
+              ) : (
+                <Play size={14} color="#ffffff" style={{ marginRight: 6 }} />
+              )}
+              <Text style={styles.parityStartBtnText}>立即执行奇偶校验</Text>
+            </TouchableOpacity>
+          </View>
         )}
-      </ScrollView>
+      </View>
 
-      {/* Squircle Confirmation Dialog */}
+      {/* 3. 磁盘设备分类列表 */}
+      {/* 3.1 校验盘列表 */}
+      {parityDisks.length > 0 && (
+        <View style={styles.diskGroupSection}>
+          <Text style={styles.diskGroupTitle}>校验盘 (Parity Drives)</Text>
+          {parityDisks.map((d, idx) => renderDiskItem(d, idx))}
+        </View>
+      )}
+
+      {/* 3.2 数据盘列表 */}
+      {dataDisks.length > 0 && (
+        <View style={styles.diskGroupSection}>
+          <Text style={styles.diskGroupTitle}>阵列数据盘 (Data Array Disks)</Text>
+          {dataDisks.map((d, idx) => renderDiskItem(d, idx))}
+        </View>
+      )}
+
+      {/* 3.3 缓存池列表 */}
+      {cacheDisks.length > 0 && (
+        <View style={styles.diskGroupSection}>
+          <Text style={styles.diskGroupTitle}>缓存池与加速设备 (Pools & Cache)</Text>
+          {cacheDisks.map((d, idx) => renderDiskItem(d, idx))}
+        </View>
+      )}
+
+      {/* Modern Squircle Confirm Dialog */}
       <ModernConfirmDialog
         visible={confirmDialog.visible}
         type={confirmDialog.type}
@@ -379,45 +337,403 @@ export default function StorageDetailsScreen({ navigation }) {
         onConfirm={confirmDialog.onConfirm}
         onCancel={() => setConfirmDialog(prev => ({ ...prev, visible: false }))}
       />
-    </View>
+    </ScrollView>
   );
+
+  function renderDiskItem(disk, index) {
+    const isParity = disk.is_parity || (disk.name || '').toLowerCase().includes('parity');
+    const isStandby = disk.status === 'standby';
+    const tempVal = disk.temp !== null && disk.temp !== undefined && !isNaN(disk.temp) ? parseInt(disk.temp, 10) : null;
+    const isWarm = tempVal && tempVal >= 40;
+    const isCool = tempVal && tempVal < 40;
+    const pct = disk.percentage || 0;
+    const isNormalSmart = (disk.smart_status || 'Normal').toLowerCase() === 'normal';
+
+    return (
+      <TouchableOpacity
+        key={disk.device || disk.name || index}
+        style={styles.diskCard}
+        onPress={() => navigation.navigate('SMART详情', { disk })}
+        activeOpacity={0.7}
+      >
+        <View style={styles.diskCardHeader}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+            <View style={[styles.diskIconBox, { backgroundColor: isParity ? 'rgba(56, 189, 248, 0.12)' : 'rgba(16, 185, 129, 0.12)' }]}>
+              <HardDrive size={18} color={isParity ? colors.accent : colors.green} />
+            </View>
+
+            <View style={{ marginLeft: 10, flex: 1 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Text style={styles.diskNameText} numberOfLines={1}>{disk.name}</Text>
+                {disk.device ? (
+                  <View style={styles.deviceTag}>
+                    <Text style={styles.deviceTagText}>{disk.device}</Text>
+                  </View>
+                ) : null}
+              </View>
+
+              <Text style={styles.diskCapacitySub}>
+                {isParity
+                  ? `校验容量: ${formatBytes(disk.size || disk.total)}`
+                  : `已用: ${formatBytes(disk.used)} / ${formatBytes(disk.size || disk.total)} (${pct}%)`}
+              </Text>
+            </View>
+          </View>
+
+          {/* 温度与状态标签 */}
+          <View style={styles.diskStatusCol}>
+            <View style={[styles.tempPill, {
+              backgroundColor: isStandby ? colors.cardSecondary : isWarm ? 'rgba(249, 115, 22, 0.15)' : 'rgba(6, 182, 212, 0.15)'
+            }]}>
+              <Thermometer size={11} color={isStandby ? colors.sub : isWarm ? colors.tempWarm : colors.networkDown} style={{ marginRight: 2 }} />
+              <Text style={[styles.tempPillText, {
+                color: isStandby ? colors.sub : isWarm ? colors.tempWarm : colors.networkDown
+              }]}>
+                {isStandby ? '休眠' : tempVal ? `${tempVal}°C` : '待机'}
+              </Text>
+            </View>
+
+            <View style={styles.smartIndicatorRow}>
+              {isNormalSmart ? (
+                <CheckCircle2 size={11} color={colors.green} style={{ marginRight: 3 }} />
+              ) : (
+                <AlertTriangle size={11} color={colors.red} style={{ marginRight: 3 }} />
+              )}
+              <Text style={[styles.smartIndicatorText, { color: isNormalSmart ? colors.green : colors.red }]}>
+                {isNormalSmart ? '健康' : '异常'}
+              </Text>
+              <ChevronRight size={13} color={colors.sub} style={{ marginLeft: 2 }} />
+            </View>
+          </View>
+        </View>
+
+        {/* 数据盘进度条 */}
+        {!isParity && (
+          <View style={styles.diskTrack}>
+            <View style={[styles.diskFill, { width: `${Math.min(pct, 100)}%`, backgroundColor: pct > 85 ? colors.red : colors.accent }]} />
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  }
 }
 
-const createStyles = (colors) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 16, paddingBottom: 40 },
-  center: { flex: 1, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center' },
-  emptyText: { color: colors.sub, fontSize: 16 },
-  card: { backgroundColor: colors.card, borderRadius: 16, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: colors.divider },
-  cardError: { borderColor: colors.red, backgroundColor: 'rgba(239, 68, 68, 0.10)' },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  diskName: { color: colors.textStrong, fontSize: 18, fontWeight: 'bold' },
-  parityBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
-  parityBadgeText: { fontSize: 11, fontWeight: '600' },
-  deviceLabel: { color: colors.muted, fontSize: 14 },
-  gridRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 },
-  gridItem: { flex: 1 },
-  gridLabel: { color: colors.sub, fontSize: 12, marginBottom: 4 },
-  statusRow: { flexDirection: 'row', alignItems: 'center' },
-  statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
-  gridValue: { color: colors.textStrong, fontSize: 14, fontWeight: 'bold' },
-  usageContainer: { marginTop: 4 },
-  usageText: { color: colors.sub, fontSize: 12 },
-  track: { height: 8, backgroundColor: colors.input, borderRadius: 4, overflow: 'hidden' },
-  bar: { height: '100%', borderRadius: 4 },
+const createStyles = (colors, isDark) => StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.bg,
+  },
+  content: {
+    padding: 16,
+    paddingTop: Platform.OS === 'ios' ? 12 : 16,
+    paddingBottom: 32,
+    gap: 14,
+  },
+  center: {
+    flex: 1,
+    backgroundColor: colors.bg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  loadingText: {
+    color: colors.sub,
+    fontSize: 14,
+    marginTop: 12,
+  },
 
-  // Parity Check styles
-  parityHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  parityCardTitle: { color: colors.textStrong, fontSize: 16, fontWeight: 'bold' },
-  parityTag: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
-  parityTagText: { fontSize: 12, fontWeight: 'bold' },
-  parityProgressNumber: { fontSize: 24, fontWeight: 'bold' },
-  parityMetaRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
-  subText: { color: colors.sub, fontSize: 12 },
-  parityBtnRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
-  parityMiniBtn: { flex: 1, height: 34, borderRadius: 8, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
-  parityMiniBtnText: { fontSize: 12, fontWeight: 'bold' },
-  parityStartBtn: { height: 40, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-  parityStartBtnText: { color: '#ffffff', fontSize: 14, fontWeight: 'bold' },
+  // 1. Hero Card
+  heroCard: {
+    backgroundColor: colors.card,
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: isDark ? 0.25 : 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  heroHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  heroTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
+  healthBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  healthDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 5,
+  },
+  healthBadgeText: {
+    fontSize: 11,
+    color: colors.green,
+    fontWeight: 'bold',
+  },
+  capacityRow: {
+    marginBottom: 10,
+  },
+  capacityBigNum: {
+    fontSize: 26,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+    letterSpacing: -0.5,
+  },
+  capacitySubText: {
+    fontSize: 12,
+    color: colors.sub,
+    marginTop: 2,
+  },
+  multiSegTrack: {
+    height: 8,
+    backgroundColor: colors.cardSecondary,
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 14,
+  },
+  multiSegBar: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  arrayMetaGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.cardBorder,
+  },
+  arrayMetaItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  arrayMetaLabel: {
+    fontSize: 11,
+    color: colors.sub,
+    marginBottom: 2,
+  },
+  arrayMetaVal: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
+
+  // 2. Parity Card
+  card: {
+    backgroundColor: colors.card,
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: isDark ? 0.25 : 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  cardTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
+  parityStatusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  parityStatusPillText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  parityActiveBox: {
+    marginTop: 4,
+  },
+  parityProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  parityProgressNum: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
+  paritySpeedText: {
+    fontSize: 12,
+    color: colors.amber,
+    fontWeight: '600',
+  },
+  progressTrack: {
+    height: 7,
+    backgroundColor: colors.cardSecondary,
+    borderRadius: 3.5,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 3.5,
+  },
+  parityDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  parityDetailText: {
+    fontSize: 12,
+    color: colors.sub,
+  },
+  parityBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  parityControlBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  parityControlBtnText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  parityIdleBox: {
+    paddingTop: 2,
+  },
+  parityIdleText: {
+    fontSize: 12,
+    color: colors.sub,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  parityStartBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accent,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  parityStartBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+
+  // 3. Disks
+  diskGroupSection: {
+    marginTop: 6,
+    gap: 10,
+  },
+  diskGroupTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: colors.sub,
+    marginLeft: 4,
+    marginBottom: 2,
+  },
+  diskCard: {
+    backgroundColor: colors.card,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: isDark ? 0.2 : 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  diskCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  diskIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  diskNameText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+    marginRight: 6,
+  },
+  deviceTag: {
+    backgroundColor: colors.cardSecondary,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  deviceTagText: {
+    fontSize: 10,
+    color: colors.sub,
+    fontWeight: '600',
+  },
+  diskCapacitySub: {
+    fontSize: 11,
+    color: colors.sub,
+    marginTop: 2,
+  },
+  diskStatusCol: {
+    alignItems: 'flex-end',
+  },
+  tempPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginBottom: 4,
+  },
+  tempPillText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  smartIndicatorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  smartIndicatorText: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  diskTrack: {
+    height: 4,
+    backgroundColor: colors.cardSecondary,
+    borderRadius: 2,
+    overflow: 'hidden',
+    marginTop: 10,
+  },
+  diskFill: {
+    height: '100%',
+    borderRadius: 2,
+  },
 });

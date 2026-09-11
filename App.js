@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { Home, Folder, Settings } from 'lucide-react-native';
+import { Home, Box, Monitor, Folder, Settings } from 'lucide-react-native';
 import AppLockModal from './components/AppLockModal';
 
 // 引入所有子页面
@@ -34,36 +34,52 @@ function HomeStack() {
       }}
     >
       <Stack.Screen name="仪表盘" component={DashboardScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="存储详情" component={StorageDetailsScreen} options={{ title: '磁盘存储与阵列' }} />
+      <Stack.Screen name="SMART详情" component={SmartDetailsScreen} options={{ title: 'S.M.A.R.T. 诊断' }} />
       <Stack.Screen name="Docker详情" component={DockerDetailsScreen} options={{ title: 'Docker 容器' }} />
       <Stack.Screen name="VM详情" component={VmDetailsScreen} options={{ title: '虚拟机' }} />
-      <Stack.Screen name="存储详情" component={StorageDetailsScreen} options={{ title: '磁盘存储详情' }} />
-      <Stack.Screen name="SMART详情" component={SmartDetailsScreen} options={{ title: 'S.M.A.R.T. 诊断' }} />
     </Stack.Navigator>
   );
 }
 
-// 💡 将原来的 Tab 导航器打包成一个独立的“底座组件”（跟随主题）
+// 💡 5 大一级核心导航器（跟随主题，现代微光 Dock）
 function MainTabs() {
   const { colors } = useTheme();
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
-        tabBarIcon: ({ color, size }) => {
-          if (route.name === '首页') return <Home color={color} size={size} />;
-          if (route.name === '文件') return <Folder color={color} size={size} />;
-          if (route.name === '设置') return <Settings color={color} size={size} />;
+        tabBarIcon: ({ color, size, focused }) => {
+          const iconSize = 22;
+          if (route.name === '首页') return <Home color={color} size={iconSize} strokeWidth={focused ? 2.4 : 1.8} />;
+          if (route.name === '容器') return <Box color={color} size={iconSize} strokeWidth={focused ? 2.4 : 1.8} />;
+          if (route.name === '虚拟机') return <Monitor color={color} size={iconSize} strokeWidth={focused ? 2.4 : 1.8} />;
+          if (route.name === '文件') return <Folder color={color} size={iconSize} strokeWidth={focused ? 2.4 : 1.8} />;
+          if (route.name === '设置') return <Settings color={color} size={iconSize} strokeWidth={focused ? 2.4 : 1.8} />;
         },
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.sub,
         headerStyle: { backgroundColor: colors.bar },
         headerTintColor: colors.textStrong,
-        tabBarStyle: { backgroundColor: colors.bar, borderTopColor: colors.divider },
+        tabBarStyle: {
+          backgroundColor: colors.bar,
+          borderTopColor: colors.divider,
+          height: Platform.OS === 'ios' ? 86 : 60,
+          paddingBottom: Platform.OS === 'ios' ? 26 : 8,
+          paddingTop: 6,
+        },
+        tabBarLabelStyle: {
+          fontSize: 11,
+          fontWeight: '600',
+          marginTop: -2,
+        },
         sceneContainerStyle: { backgroundColor: colors.bg },
       })}
     >
       <Tab.Screen name="首页" component={HomeStack} options={{ headerShown: false }} />
-      <Tab.Screen name="文件" component={FilesScreen} />
-      <Tab.Screen name="设置" component={SettingsScreen} />
+      <Tab.Screen name="容器" component={DockerDetailsScreen} options={{ headerTitle: 'Docker 容器中枢' }} />
+      <Tab.Screen name="虚拟机" component={VmDetailsScreen} options={{ headerTitle: '虚拟机 (VM)' }} />
+      <Tab.Screen name="文件" component={FilesScreen} options={{ headerTitle: '文件管理' }} />
+      <Tab.Screen name="设置" component={SettingsScreen} options={{ headerTitle: '系统设置' }} />
     </Tab.Navigator>
   );
 }

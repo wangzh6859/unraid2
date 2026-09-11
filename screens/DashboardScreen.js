@@ -449,7 +449,7 @@ export default function DashboardScreen({ navigation }) {
           confirmText: '去配置',
           cancelText: '取消',
           showCancel: true,
-          onConfirm: () => navigation.navigate('Docker详情'),
+          onConfirm: () => navigation.navigate('容器'),
         });
       }
     } catch (e) {
@@ -944,7 +944,7 @@ export default function DashboardScreen({ navigation }) {
           </View>
           <TouchableOpacity
             style={{ flexDirection: 'row', alignItems: 'center' }}
-            onPress={() => navigation.navigate('Docker详情')}
+            onPress={() => navigation.navigate('容器')}
           >
             <Text style={styles.moreLinkText}>更多</Text>
             <ChevronRight size={14} color={colors.sub} />
@@ -959,7 +959,7 @@ export default function DashboardScreen({ navigation }) {
           {/* 汇总磁贴 */}
           <TouchableOpacity
             style={styles.dockerSummaryTile}
-            onPress={() => navigation.navigate('Docker详情')}
+            onPress={() => navigation.navigate('容器')}
             activeOpacity={0.8}
           >
             <Text style={styles.dockerSummaryNum}>{dockers.running || 0}</Text>
@@ -1000,7 +1000,7 @@ export default function DashboardScreen({ navigation }) {
       {/* 6. 虚拟机概览 (VM) */}
       <TouchableOpacity
         style={styles.card}
-        onPress={() => navigation.navigate('VM详情')}
+        onPress={() => navigation.navigate('虚拟机')}
         activeOpacity={0.85}
       >
         <View style={styles.cardHeaderRow}>

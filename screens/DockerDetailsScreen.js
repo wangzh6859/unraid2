@@ -8,23 +8,26 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import {
   Cpu, Database, RotateCw, Play, Power, Terminal, ExternalLink,
-  Search, Copy, Check, X, RefreshCw, Globe, Sliders,
+  Search, Copy, Check, X, RefreshCw, Globe, Sliders, Box, Layers,
+  ChevronDown, ArrowUpDown, Filter, Sparkles
 } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import {
   getProxyConfig, getDockerAliases, saveDockerAlias,
-  removeDockerAlias, resolveDockerWebUiUrl, formatProxyUrl,
-  resolveAutoWebUiUrl, probeLanReachable, getCachedLanStatus,
+  removeDockerAlias, resolveDockerWebUrl,
+  detectLanEnvironment, getCachedLanEnvironment
 } from '../utils/dockerWebUiManager';
 
 export default function DockerDetailsScreen() {
-  const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
   const [dockers, setDockers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [sortRule, setSortRule] = useState('name');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'running' | 'stopped'
+  const [sortRule, setSortRule] = useState('status'); // 'status' | 'name' | 'cpu'
   const [openingDocker, setOpeningDocker] = useState(null);
 
   // Modern Confirm Dialog State
@@ -75,7 +78,7 @@ export default function DockerDetailsScreen() {
   // WebUI Reverse Proxy & Custom Aliases State
   const [proxyConfig, setProxyConfig] = useState({ enabled: false, template: '' });
   const [dockerAliases, setDockerAliases] = useState({});
-  const [serverHost, setServerHost] = useState('');
+  const [serverUrl, setServerUrl] = useState('');
   const [aliasModalVisible, setAliasModalVisible] = useState(false);
   const [targetDockerForAlias, setTargetDockerForAlias] = useState(null);
   const [aliasInputValue, setAliasInputValue] = useState('');
@@ -83,7 +86,7 @@ export default function DockerDetailsScreen() {
   const getAvatarColor = (name) => {
     let hash = 0;
     for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-    const palette = ['#f87171', '#fb923c', '#fbbf24', '#a3e635', '#34d399', '#2dd4bf', '#38bdf8', '#818cf8', '#a78bfa', '#e879f9', '#f43f5e'];
+    const palette = ['#38bdf8', '#818cf8', '#a78bfa', '#34d399', '#2dd4bf', '#fbbf24', '#f87171', '#f43f5e', '#ec4899'];
     return palette[Math.abs(hash) % palette.length];
   };
 
@@ -107,6 +110,20 @@ export default function DockerDetailsScreen() {
     }
   };
 
+  const loadProxyData = async () => {
+    const [pCfg, aliases, savedUrl] = await Promise.all([
+      getProxyConfig(),
+      getDockerAliases(),
+      AsyncStorage.getItem('@server_url'),
+    ]);
+    setProxyConfig(pCfg);
+    setDockerAliases(aliases || {});
+    setServerUrl(savedUrl || '');
+    if (savedUrl) {
+      detectLanEnvironment(savedUrl);
+    }
+  };
+
   useFocusEffect(
     useCallback(() => {
       let isActive = true;
@@ -122,67 +139,89 @@ export default function DockerDetailsScreen() {
     }, [])
   );
 
-  const loadProxyData = async () => {
+  const executeDockerAction = async (action, name) => {
     try {
-      const [pCfg, aliases, savedUrl] = await Promise.all([
-        getProxyConfig(),
-        getDockerAliases(),
-        AsyncStorage.getItem('@server_url'),
-      ]);
-      setProxyConfig(pCfg);
-      setDockerAliases(aliases || {});
-      if (savedUrl) {
-        const cleanHost = savedUrl.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/:.*$/, '');
-        setServerHost(cleanHost);
+      const savedUrl = await AsyncStorage.getItem('@server_url');
+      const savedToken = await AsyncStorage.getItem('@api_token');
+      const response = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=${action}&target=${encodeURIComponent(name)}`);
+      const result = await response.json();
+      if (result.status === 'success') {
+        await fetchDockerData();
+      } else {
+        showConfirm({
+          type: 'warning',
+          title: '操作未成功',
+          message: result.message || '服务器拒绝执行此操作',
+          confirmText: '知道了',
+          showCancel: false,
+        });
       }
-    } catch (e) {
-      console.log('Load proxy data error:', e);
+    } catch (error) {
+      showConfirm({
+        type: 'warning',
+        title: '网络异常',
+        message: '连接服务器超时或失败，请检查网络设置。',
+        confirmText: '知道了',
+        showCancel: false,
+      });
     }
   };
 
-  // Pre-warm LAN detection cache in background when containers load
-  useEffect(() => {
-    if (dockers.length > 0 && serverHost && getCachedLanStatus() === null) {
-      const candidate = dockers.find(d => d.port);
-      if (candidate) {
-        const cleanHost = serverHost.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/:.*$/, '');
-        const probeUrl = `http://${cleanHost}:${candidate.port}`;
-        probeLanReachable(probeUrl, 700).catch(() => {});
-      }
-    }
-  }, [dockers, serverHost]);
+  const handleStartDocker = (name) => {
+    executeDockerAction('start_docker', name);
+  };
 
-  const handleOpenWebUi = async (docker, webUiInfo) => {
-    if (!docker || !webUiInfo) return;
-    setOpeningDocker(docker.name);
+  const handleStopDocker = (name) => {
+    showConfirm({
+      type: 'warning',
+      title: '停止容器',
+      message: `确定要停止容器「${name}」吗？`,
+      confirmText: '确认停止',
+      showCancel: true,
+      onConfirm: () => executeDockerAction('stop_docker', name),
+    });
+  };
+
+  const handleRestartDocker = (name) => {
+    showConfirm({
+      type: 'info',
+      title: '重启容器',
+      message: `确定要重启容器「${name}」吗？`,
+      confirmText: '确认重启',
+      showCancel: true,
+      onConfirm: () => executeDockerAction('restart_docker', name),
+    });
+  };
+
+  // 快捷一键直达 WebUI
+  const handleLaunchWebUI = async (docker, webUiInfo) => {
+    if (!webUiInfo.targetUrl) {
+      handleOpenAliasModal(docker, webUiInfo);
+      return;
+    }
+
     try {
-      // 自动识别是否为内网环境，非内网直接打开反代地址，内网则打开域名加端口
-      const finalUrl = await resolveAutoWebUiUrl(webUiInfo);
-      if (finalUrl) {
-        const canOpen = await Linking.canOpenURL(finalUrl);
-        if (canOpen) {
-          await Linking.openURL(finalUrl);
-        } else {
-          showConfirm({
-            type: 'warning',
-            title: '无法打开网页',
-            message: `系统未能识别或处理该 URL：\n${finalUrl}`,
-            showCancel: false,
-          });
-        }
+      setOpeningDocker(docker.name);
+      const isLan = await detectLanEnvironment(serverUrl);
+      const freshInfo = resolveDockerWebUrl(docker, serverUrl, proxyConfig, dockerAliases, isLan);
+      const urlToOpen = freshInfo.targetUrl || webUiInfo.targetUrl;
+
+      const canOpen = await Linking.canOpenURL(urlToOpen);
+      if (canOpen) {
+        await Linking.openURL(urlToOpen);
       } else {
         showConfirm({
-          type: 'info',
-          title: '未配置访问地址',
-          message: '当前容器未检测到映射端口或反代地址。请点击「定制」为其配置专属网址或简称。',
+          type: 'warning',
+          title: '无法打开链接',
+          message: `系统无法唤起该地址：\n${urlToOpen}`,
           showCancel: false,
         });
       }
     } catch (err) {
       showConfirm({
         type: 'warning',
-        title: '打开链接异常',
-        message: err.message || '系统未能拉起浏览器',
+        title: '打开异常',
+        message: err.message || '打开 WebUI 遇到未知异常',
         showCancel: false,
       });
     } finally {
@@ -250,7 +289,7 @@ export default function DockerDetailsScreen() {
       type: 'success',
       title: '配置已生效',
       message: clean
-        ? `已成功为容器「${cName}」设置专属配置：\n${clean.startsWith('http') ? clean : `简称: ${clean} (自动代入模板)`}`
+        ? `已成功为容器「${cName}」设置专属规则：\n${clean.startsWith('http') ? clean : `简称: ${clean} (自动代入模板)`}`
         : `已清除容器「${cName}」的专属简称，恢复为默认解析规则。`,
       confirmText: '好的',
       showCancel: false,
@@ -266,84 +305,18 @@ export default function DockerDetailsScreen() {
       delete updated[cName];
       return updated;
     });
-    setAliasInputValue('');
     setAliasModalVisible(false);
-  };
-
-  const toggleDocker = async (name, currentStatus) => {
-    const isStopping = currentStatus === 'running';
     showConfirm({
-      type: isStopping ? 'warning' : 'info',
-      title: isStopping ? '停止容器' : '启动容器',
-      message: isStopping
-        ? `确定要停止容器「${name}」吗？依赖该容器的服务将会暂时下线。`
-        : `确定要启动容器「${name}」吗？`,
-      confirmText: isStopping ? '确认停止' : '确认启动',
-      onConfirm: async () => {
-        try {
-          const savedUrl = await AsyncStorage.getItem('@server_url');
-          const savedToken = await AsyncStorage.getItem('@api_token');
-          const action = isStopping ? 'stop_docker' : 'start_docker';
-          const response = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=${action}&target=${encodeURIComponent(name)}`);
-          const result = await response.json();
-          if (result.status === 'success') {
-            fetchDockerData();
-          } else {
-            showConfirm({
-              type: 'warning',
-              title: '操作失败',
-              message: result.message || '服务器拒绝执行指令',
-              showCancel: false,
-            });
-          }
-        } catch (error) {
-          showConfirm({
-            type: 'warning',
-            title: '网络异常',
-            message: error.message || '无法连接到 Unraid 服务器',
-            showCancel: false,
-          });
-        }
-      },
+      type: 'info',
+      title: '已恢复默认',
+      message: `已清除容器「${cName}」的独立反代规则。`,
+      confirmText: '好的',
+      showCancel: false,
     });
   };
 
-  const restartDocker = async (name) => {
-    showConfirm({
-      type: 'warning',
-      title: '确认重启容器',
-      message: `确定要重启容器「${name}」吗？重启过程中服务将短暂中断。`,
-      confirmText: '立即重启',
-      onConfirm: async () => {
-        try {
-          const savedUrl = await AsyncStorage.getItem('@server_url');
-          const savedToken = await AsyncStorage.getItem('@api_token');
-          const response = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=restart_docker&target=${encodeURIComponent(name)}`);
-          const result = await response.json();
-          if (result.status === 'success') {
-            fetchDockerData();
-          } else {
-            showConfirm({
-              type: 'warning',
-              title: '重启失败',
-              message: result.message || '服务器拒绝重启容器',
-              showCancel: false,
-            });
-          }
-        } catch (error) {
-          showConfirm({
-            type: 'warning',
-            title: '网络异常',
-            message: '无法与服务器建立通信',
-            showCancel: false,
-          });
-        }
-      },
-    });
-  };
-
-  // Open Log Viewer
-  const openDockerLogs = async (dockerItem) => {
+  // 日志拉取与搜索
+  const openLogsModal = (dockerItem) => {
     setSelectedDocker(dockerItem);
     setLogsContent('');
     setLogSearchQuery('');
@@ -397,206 +370,360 @@ export default function DockerDetailsScreen() {
     return lines.filter(line => line.toLowerCase().includes(query)).join('\n');
   }, [logsContent, logSearchQuery]);
 
-  const sortedDockers = [...dockers].sort((a, b) => {
-    if (sortRule === 'status') return (a.status === 'running' ? -1 : 1) - (b.status === 'running' ? -1 : 1);
-    if (sortRule === 'cpu') {
-      const cpuA = parseFloat(String(a.cpu || '').replace('%', '')) || 0;
-      const cpuB = parseFloat(String(b.cpu || '').replace('%', '')) || 0;
-      return cpuB - cpuA;
+  // 聚合指标计算
+  const runningCount = useMemo(() => dockers.filter(d => d.status === 'running').length, [dockers]);
+  const stoppedCount = useMemo(() => dockers.length - runningCount, [dockers, runningCount]);
+  const totalCpuAgg = useMemo(() => {
+    let sum = 0;
+    dockers.forEach(d => {
+      const val = parseFloat(String(d.cpu || '').replace('%', '')) || 0;
+      sum += val;
+    });
+    return sum.toFixed(1);
+  }, [dockers]);
+
+  // 过滤与排序
+  const processedDockers = useMemo(() => {
+    let list = [...dockers];
+    if (statusFilter === 'running') {
+      list = list.filter(d => d.status === 'running');
+    } else if (statusFilter === 'stopped') {
+      list = list.filter(d => d.status !== 'running');
     }
-    return String(a.name || '').localeCompare(String(b.name || ''));
-  });
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter(d => (d.name || '').toLowerCase().includes(q) || String(d.port || '').includes(q));
+    }
+
+    list.sort((a, b) => {
+      if (sortRule === 'status') return (a.status === 'running' ? -1 : 1) - (b.status === 'running' ? -1 : 1);
+      if (sortRule === 'cpu') {
+        const cpuA = parseFloat(String(a.cpu || '').replace('%', '')) || 0;
+        const cpuB = parseFloat(String(b.cpu || '').replace('%', '')) || 0;
+        return cpuB - cpuA;
+      }
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+
+    return list;
+  }, [dockers, statusFilter, searchQuery, sortRule]);
 
   if (loading && dockers.length === 0) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color={colors.accent} />
+        <Text style={styles.loadingText}>正在加载 Docker 容器清单...</Text>
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
-      <View style={styles.sortBar}>
-        <Text style={styles.sortLabel}>排序:</Text>
-        <TouchableOpacity
-          style={[styles.sortBtn, sortRule === 'name' && styles.sortBtnActive]}
-          onPress={() => setSortRule('name')}
-        >
-          <Text style={[styles.sortBtnText, sortRule === 'name' && { color: '#ffffff' }]}>名称</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.sortBtn, sortRule === 'status' && styles.sortBtnActive]}
-          onPress={() => setSortRule('status')}
-        >
-          <Text style={[styles.sortBtnText, sortRule === 'status' && { color: '#ffffff' }]}>状态</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.sortBtn, sortRule === 'cpu' && styles.sortBtnActive]}
-          onPress={() => setSortRule('cpu')}
-        >
-          <Text style={[styles.sortBtnText, sortRule === 'cpu' && { color: '#ffffff' }]}>CPU</Text>
-        </TouchableOpacity>
+      {/* 1. 顶部 Bento 概览看板 (Hero Stats) */}
+      <View style={styles.heroRow}>
+        <View style={styles.heroCard}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+            <View style={[styles.heroDot, { backgroundColor: colors.green }]} />
+            <Text style={styles.heroLabel}>运行中</Text>
+          </View>
+          <Text style={[styles.heroNum, { color: colors.green }]}>{runningCount}</Text>
+        </View>
+
+        <View style={styles.heroCard}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+            <View style={[styles.heroDot, { backgroundColor: colors.sub }]} />
+            <Text style={styles.heroLabel}>已停止</Text>
+          </View>
+          <Text style={[styles.heroNum, { color: colors.textStrong }]}>{stoppedCount}</Text>
+        </View>
+
+        <View style={styles.heroCard}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+            <Cpu size={11} color={colors.tempWarm} style={{ marginRight: 4 }} />
+            <Text style={styles.heroLabel}>总负载</Text>
+          </View>
+          <Text style={[styles.heroNum, { color: colors.tempWarm }]}>{totalCpuAgg}%</Text>
+        </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
-        {sortedDockers.map((docker, index) => {
+      {/* 2. 搜索框与状态筛选胶囊 */}
+      <View style={styles.filterSection}>
+        <View style={styles.searchBox}>
+          <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="搜索容器名称或端口..."
+            placeholderTextColor={colors.muted}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          {searchQuery ? (
+            <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <X size={15} color={colors.sub} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        <View style={styles.filterRow}>
+          <View style={styles.tabsRow}>
+            <TouchableOpacity
+              style={[styles.tabBtn, statusFilter === 'all' && styles.tabBtnActive]}
+              onPress={() => setStatusFilter('all')}
+            >
+              <Text style={[styles.tabBtnText, statusFilter === 'all' && styles.tabBtnTextActive]}>
+                全部 {dockers.length}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tabBtn, statusFilter === 'running' && styles.tabBtnActive]}
+              onPress={() => setStatusFilter('running')}
+            >
+              <Text style={[styles.tabBtnText, statusFilter === 'running' && styles.tabBtnTextActive]}>
+                运行中 {runningCount}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tabBtn, statusFilter === 'stopped' && styles.tabBtnActive]}
+              onPress={() => setStatusFilter('stopped')}
+            >
+              <Text style={[styles.tabBtnText, statusFilter === 'stopped' && styles.tabBtnTextActive]}>
+                已停止 {stoppedCount}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* 排序切换 */}
+          <TouchableOpacity
+            style={styles.sortToggleBtn}
+            onPress={() => {
+              const next = sortRule === 'status' ? 'cpu' : sortRule === 'cpu' ? 'name' : 'status';
+              setSortRule(next);
+            }}
+          >
+            <ArrowUpDown size={12} color={colors.sub} style={{ marginRight: 4 }} />
+            <Text style={styles.sortToggleText}>
+              {sortRule === 'status' ? '按状态' : sortRule === 'cpu' ? '按CPU' : '按名称'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* 3. 现代化容器卡片列表 */}
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
+        {processedDockers.map((docker, index) => {
           const rawMem = String(docker.memory || docker.mem || '');
           const shortMemory = rawMem.includes(' / ') ? rawMem.split(' / ')[0].trim() : (rawMem || '0B');
           const cpuVal = docker.cpu !== undefined && docker.cpu !== null ? String(docker.cpu) : '0%';
           const cpuText = cpuVal.includes('%') ? cpuVal : `${cpuVal}%`;
           const isRunning = docker.status === 'running';
-          const webUiInfo = resolveDockerWebUiUrl(docker, proxyConfig, dockerAliases, serverHost);
+          const webUiInfo = resolveDockerWebUrl(docker, serverUrl, proxyConfig, dockerAliases, true);
+          const hasWebAccess = !!(webUiInfo.targetUrl || docker.port || docker.ports);
+          const hasCustomAlias = !!dockerAliases[docker.name];
+          const avatarBg = getAvatarColor(docker.name);
+          const initial = (docker.name || 'D').slice(0, 2).toUpperCase();
 
           return (
-            <View key={index} style={styles.card}>
-              {/* Top Section: Avatar + Container Info + Status Pill */}
-              <View style={styles.cardHeader}>
-                <View style={[styles.avatar, { backgroundColor: getAvatarColor(docker.name) }]}>
-                  <Text style={styles.avatarText}>{docker.name.substring(0, 2).toUpperCase()}</Text>
+            <View key={docker.name || index} style={styles.dockerCard}>
+              {/* 上层：头像 + 名称 + 状态呼吸灯 + 端口 */}
+              <View style={styles.cardUpperTier}>
+                <View style={[styles.avatar, { backgroundColor: avatarBg }]}>
+                  <Text style={styles.avatarText}>{initial}</Text>
                 </View>
 
-                <View style={styles.headerInfo}>
-                  <View style={styles.nameRow}>
-                    <Text style={styles.nameText} numberOfLines={1}>{docker.name}</Text>
+                <View style={styles.nameBlock}>
+                  <Text style={styles.dockerTitle} numberOfLines={1}>
+                    {docker.name}
+                  </Text>
+                  <View style={styles.metaBadgeRow}>
+                    <View style={[styles.statusBadge, { backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : 'rgba(148, 163, 184, 0.12)' }]}>
+                      <View style={[styles.statusDotSmall, { backgroundColor: isRunning ? colors.green : colors.sub }]} />
+                      <Text style={[styles.statusBadgeText, { color: isRunning ? colors.green : colors.sub }]}>
+                        {isRunning ? '运行中' : '已停止'}
+                      </Text>
+                    </View>
+
                     {docker.port ? (
                       <View style={styles.portBadge}>
                         <Text style={styles.portBadgeText}>:{docker.port}</Text>
                       </View>
                     ) : null}
                   </View>
+                </View>
 
-                  {isRunning ? (
-                    <View style={styles.statsRow}>
-                      <View style={styles.statBadge}>
-                        <Cpu size={12} color={colors.amber} />
-                        <Text style={styles.statText}>{cpuText}</Text>
-                      </View>
-                      <View style={styles.statBadge}>
-                        <Database size={12} color={colors.green} />
-                        <Text style={styles.statText}>{shortMemory}</Text>
-                      </View>
+                {/* 资源胶囊 */}
+                {isRunning ? (
+                  <View style={styles.resourcePillsCol}>
+                    <View style={styles.resourcePill}>
+                      <Cpu size={10} color={colors.tempWarm} style={{ marginRight: 3 }} />
+                      <Text style={[styles.resourcePillText, { color: colors.tempWarm }]}>{cpuText}</Text>
                     </View>
-                  ) : (
-                    <Text style={[styles.stoppedText, { color: colors.muted }]}>已停止运行</Text>
-                  )}
-                </View>
-
-                {/* Status Pill in Top-Right */}
-                <View style={[
-                  styles.statusPill,
-                  {
-                    backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-                    borderColor: isRunning ? 'rgba(16, 185, 129, 0.28)' : 'rgba(239, 68, 68, 0.28)',
-                  }
-                ]}>
-                  <View style={[styles.statusDot, { backgroundColor: isRunning ? colors.green : colors.red }]} />
-                  <Text style={[
-                    styles.statusPillText,
-                    { color: isRunning ? colors.green : colors.red }
-                  ]}>
-                    {isRunning ? '运行中' : '已停止'}
-                  </Text>
-                </View>
+                    <View style={[styles.resourcePill, { marginTop: 4 }]}>
+                      <Database size={10} color={colors.accent} style={{ marginRight: 3 }} />
+                      <Text style={[styles.resourcePillText, { color: colors.accent }]}>{shortMemory}</Text>
+                    </View>
+                  </View>
+                ) : null}
               </View>
 
-              {/* Card Divider */}
-              <View style={styles.cardDivider} />
-
-              {/* Bottom Section: WebUI Shortcut (Left) + Actions (Right) */}
-              <View style={styles.cardFooter}>
-                <View style={styles.footerLeft}>
-                  {webUiInfo.targetUrl || webUiInfo.rawInternalUrl ? (
+              {/* 下层：Action Bar 交互操作栏 */}
+              <View style={styles.cardLowerTier}>
+                <View style={styles.webActionGroup}>
+                  {hasWebAccess ? (
                     <TouchableOpacity
-                      style={[
-                        styles.webUiBtn,
-                        !isRunning && { opacity: 0.6 }
-                      ]}
-                      onPress={() => handleOpenWebUi(docker, webUiInfo)}
+                      style={styles.webLaunchPill}
+                      onPress={() => handleLaunchWebUI(docker, webUiInfo)}
                       onLongPress={() => handleShowWebUiOptions(docker, webUiInfo)}
-                      activeOpacity={0.75}
-                      disabled={openingDocker === docker.name}
+                      activeOpacity={0.7}
                     >
                       {openingDocker === docker.name ? (
-                        <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 4 }} />
+                        <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 5 }} />
                       ) : (
-                        <Globe size={13} color="#ffffff" style={{ marginRight: 4 }} />
+                        <Globe size={13} color="#ffffff" style={{ marginRight: 5 }} />
                       )}
-                      <Text style={styles.webUiBtnText}>Web</Text>
-                      <ExternalLink size={10} color="rgba(255, 255, 255, 0.85)" style={{ marginLeft: 4 }} />
+                      <Text style={styles.webLaunchPillText}>Web</Text>
+                      <ExternalLink size={11} color="#ffffff" style={{ marginLeft: 3, opacity: 0.85 }} />
                     </TouchableOpacity>
                   ) : null}
 
                   <TouchableOpacity
-                    style={[
-                      styles.aliasEditBtn,
-                      !(webUiInfo.targetUrl || webUiInfo.rawInternalUrl) && styles.aliasEditBtnDashed
-                    ]}
+                    style={[styles.customConfigPill, hasCustomAlias && styles.customConfigPillActive]}
                     onPress={() => handleOpenAliasModal(docker, webUiInfo)}
                     activeOpacity={0.7}
                   >
-                    <Sliders size={12} color={webUiInfo.isCustom ? colors.accent : colors.sub} style={{ marginRight: 4 }} />
-                    <Text style={[styles.aliasEditBtnText, { color: webUiInfo.isCustom ? colors.accent : colors.sub }]}>
-                      {!(webUiInfo.targetUrl || webUiInfo.rawInternalUrl) ? '+ 配置Web' : '定制'}
+                    <Sliders size={12} color={hasCustomAlias ? colors.accent : colors.sub} style={{ marginRight: 4 }} />
+                    <Text style={[styles.customConfigPillText, hasCustomAlias && { color: colors.accent, fontWeight: 'bold' }]}>
+                      {hasCustomAlias ? '已定制' : '定制'}
                     </Text>
                   </TouchableOpacity>
                 </View>
 
-                <View style={styles.footerRight}>
-                  {/* Terminal Log Button */}
+                {/* 容器操作按键群 */}
+                <View style={styles.mgmtBtnGroup}>
                   <TouchableOpacity
-                    onPress={() => openDockerLogs(docker)}
-                    style={styles.actionBtn}
+                    style={styles.circleActionBtn}
+                    onPress={() => openLogsModal(docker)}
                     activeOpacity={0.7}
                   >
-                    <Terminal size={15} color={colors.text} />
+                    <Terminal size={14} color={colors.accent} />
                   </TouchableOpacity>
 
-                  {/* Restart Button */}
-                  {isRunning && (
+                  {isRunning ? (
                     <TouchableOpacity
-                      onPress={() => restartDocker(docker.name)}
-                      style={[styles.actionBtn, { backgroundColor: colors.purple }]}
+                      style={styles.circleActionBtn}
+                      onPress={() => handleRestartDocker(docker.name)}
                       activeOpacity={0.7}
                     >
-                      <RotateCw size={14} color="#ffffff" />
+                      <RotateCw size={14} color={colors.sub} />
                     </TouchableOpacity>
-                  )}
+                  ) : null}
 
-                  {/* Start / Stop Button */}
                   <TouchableOpacity
-                    onPress={() => toggleDocker(docker.name, docker.status)}
-                    style={[styles.actionBtn, { backgroundColor: isRunning ? colors.red : colors.green }]}
+                    style={[styles.circleActionBtn, { backgroundColor: isRunning ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)' }]}
+                    onPress={() => (isRunning ? handleStopDocker(docker.name) : handleStartDocker(docker.name))}
                     activeOpacity={0.7}
                   >
-                    {isRunning ? <Power size={14} color="#ffffff" /> : <Play size={14} color="#ffffff" />}
+                    {isRunning ? (
+                      <Power size={14} color={colors.red} />
+                    ) : (
+                      <Play size={14} color={colors.green} />
+                    )}
                   </TouchableOpacity>
                 </View>
               </View>
             </View>
           );
         })}
+
+        {processedDockers.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Box size={42} color={colors.muted} style={{ marginBottom: 12 }} />
+            <Text style={styles.emptyTitle}>未匹配到任何容器</Text>
+            <Text style={styles.emptySub}>尝试切换上方筛选标签或搜索关键字</Text>
+          </View>
+        ) : null}
       </ScrollView>
 
-      {/* Terminal Real-Time Log Viewer Modal */}
+      {/* 4. 自定义反代配置弹窗 */}
+      <Modal
+        visible={aliasModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setAliasModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalBackdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.aliasModalBox}>
+            <View style={styles.aliasModalHeader}>
+              <Text style={styles.aliasModalTitle}>
+                自定义反代配置 · {targetDockerForAlias?.name || '容器'}
+              </Text>
+              <Text style={styles.aliasModalSub}>
+                为该容器单独指定专属前缀简称（如 alist）或完整反代网址（如 https://alist.yourdomain.com）：
+              </Text>
+            </View>
+
+            <View style={styles.aliasInputWrapper}>
+              <TextInput
+                style={styles.aliasTextInput}
+                placeholder="例如：alist 或 https://custom.domain.com"
+                placeholderTextColor={colors.muted}
+                value={aliasInputValue}
+                onChangeText={setAliasInputValue}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+
+            <View style={styles.aliasModalBtnRow}>
+              <TouchableOpacity
+                style={styles.aliasClearBtn}
+                onPress={handleClearAlias}
+              >
+                <Text style={styles.aliasClearBtnText}>恢复默认</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.aliasCancelBtn}
+                onPress={() => setAliasModalVisible(false)}
+              >
+                <Text style={styles.aliasCancelBtnText}>取消</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.aliasSaveBtn}
+                onPress={handleSaveAlias}
+              >
+                <Text style={styles.aliasSaveBtnText}>保存规则</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* 5. 实时容器日志流模态窗 */}
       <Modal
         visible={logModalVisible}
         animationType="slide"
         onRequestClose={() => setLogModalVisible(false)}
       >
-        <View style={styles.logContainer}>
-          {/* Header Bar */}
+        <View style={styles.logModalContainer}>
           <View style={styles.logHeader}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.logHeaderTitle} numberOfLines={1}>
-                容器日志 · {selectedDocker?.name}
-              </Text>
-              <Text style={styles.logHeaderSub}>实时抓取最新 200 行标准输出</Text>
+              <Text style={styles.logTitle}>{selectedDocker ? `${selectedDocker.name} · 日志` : '容器日志'}</Text>
+              <Text style={styles.logSub}>最近 200 行标准输出与错误流 (stdout/stderr)</Text>
             </View>
 
-            <View style={styles.logHeaderActions}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <TouchableOpacity
-                style={[styles.logActionBtn, { backgroundColor: '#1e293b' }]}
+                style={styles.logActionBtn}
                 onPress={() => selectedDocker && fetchDockerLogs(selectedDocker.name)}
                 disabled={logsLoading}
               >
@@ -608,14 +735,14 @@ export default function DockerDetailsScreen() {
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.logActionBtn, { backgroundColor: copiedToast ? 'rgba(16, 185, 129, 0.2)' : '#1e293b' }]}
+                style={[styles.logActionBtn, copiedToast && { backgroundColor: 'rgba(16, 185, 129, 0.2)' }]}
                 onPress={copyAllLogs}
               >
                 {copiedToast ? <Check size={16} color="#34d399" /> : <Copy size={16} color="#94a3b8" />}
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.logActionBtn, { backgroundColor: '#1e293b' }]}
+                style={styles.logActionBtn}
                 onPress={() => setLogModalVisible(false)}
               >
                 <X size={18} color="#94a3b8" />
@@ -623,139 +750,51 @@ export default function DockerDetailsScreen() {
             </View>
           </View>
 
-          {/* Search Filter Bar */}
           <View style={styles.logSearchBar}>
-            <Search size={16} color="#64748b" style={{ marginRight: 8 }} />
+            <Search size={15} color="#64748b" style={{ marginRight: 8 }} />
             <TextInput
               style={styles.logSearchInput}
               value={logSearchQuery}
               onChangeText={setLogSearchQuery}
-              placeholder="过滤日志关键字 (例如: error, starting, warn)..."
+              placeholder="过滤日志关键字..."
               placeholderTextColor="#64748b"
               autoCapitalize="none"
               autoCorrect={false}
             />
             {logSearchQuery ? (
               <TouchableOpacity onPress={() => setLogSearchQuery('')}>
-                <X size={16} color="#64748b" />
+                <X size={15} color="#64748b" />
               </TouchableOpacity>
             ) : null}
           </View>
 
-          {/* Toast Notification */}
           {copiedToast ? (
             <View style={styles.toastBox}>
-              <Text style={styles.toastText}>✓ 全部日志已复制到系统剪贴板</Text>
+              <Text style={styles.toastText}>✓ 日志已完整复制到剪贴板</Text>
             </View>
           ) : null}
 
-          {/* Terminal Output Area */}
           <ScrollView
             ref={logScrollRef}
-            style={styles.terminalBody}
-            contentContainerStyle={styles.terminalContent}
+            style={styles.logBody}
+            contentContainerStyle={styles.logBodyContent}
             indicatorStyle="white"
           >
             {logsLoading && !logsContent ? (
               <View style={styles.logCenter}>
                 <ActivityIndicator size="large" color="#38bdf8" style={{ marginBottom: 12 }} />
-                <Text style={styles.logLoadingText}>正在拉取容器 stdout/stderr 日志流...</Text>
+                <Text style={styles.logLoadingText}>正在拉取容器最新日志流...</Text>
               </View>
             ) : (
               <Text selectable={true} style={styles.logText}>
-                {filteredLogs || (logSearchQuery ? '无匹配该关键字的日志行' : '暂无日志输出')}
+                {filteredLogs || (logSearchQuery ? '未找到符合关键字的日志项' : '暂无日志输出')}
               </Text>
             )}
           </ScrollView>
         </View>
       </Modal>
 
-      {/* Container Custom Alias / URL Edit Modal */}
-      <Modal
-        visible={aliasModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setAliasModalVisible(false)}
-      >
-        <KeyboardAvoidingView
-          style={styles.modalOverlayCenter}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setAliasModalVisible(false)} />
-          <View style={[styles.aliasModalBox, { backgroundColor: colors.card }]}>
-            <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
-              <Globe color={colors.accent} size={28} />
-            </View>
-            <Text style={[styles.aliasModalTitle, { color: colors.textStrong }]}>
-              自定义反代配置 · {targetDockerForAlias?.name}
-            </Text>
-            <Text style={[styles.aliasModalSub, { color: colors.sub }]}>
-              {proxyConfig.enabled && proxyConfig.template
-                ? `全局反代模板：${proxyConfig.template}\n输入简称（如 qb）将自动拼接，或输入独立专属网址。`
-                : '全局反代模板未开启或未配置。建议直接输入完整网址（如 https://...），或前往【设置】配置全局反代模板。'}
-            </Text>
-
-            <TextInput
-              style={[styles.aliasModalInput, { backgroundColor: colors.input, color: colors.textStrong }]}
-              value={aliasInputValue}
-              onChangeText={setAliasInputValue}
-              autoFocus
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="输入简称 (如 qb) 或专属网址 (如 https://...)"
-              placeholderTextColor={colors.muted}
-            />
-
-            {/* Live Preview Box */}
-            <View style={[styles.previewBox, { backgroundColor: colors.input }]}>
-              <Text style={[styles.previewLabel, { color: colors.sub }]}>跳转预览:</Text>
-              <Text style={[styles.previewUrl, { color: colors.accent }]} numberOfLines={2}>
-                {(() => {
-                  const val = aliasInputValue ? aliasInputValue.trim() : '';
-                  if (!val) {
-                    if (proxyConfig.enabled && proxyConfig.template && targetDockerForAlias) {
-                      return formatProxyUrl(proxyConfig.template, targetDockerForAlias.name, targetDockerForAlias.port);
-                    }
-                    return targetDockerForAlias?.webui || (targetDockerForAlias?.port ? `http://${serverHost || 'IP'}:${targetDockerForAlias.port}` : '未检测到默认访问地址');
-                  }
-                  if (val.startsWith('http://') || val.startsWith('https://')) {
-                    return val;
-                  }
-                  if (proxyConfig.template) {
-                    return formatProxyUrl(proxyConfig.template, val, targetDockerForAlias?.port);
-                  }
-                  return `简称: ${val} (需在【设置】开启反代模板后方可拼接)`;
-                })()}
-              </Text>
-            </View>
-
-            <View style={styles.aliasModalBtns}>
-              {dockerAliases[targetDockerForAlias?.name] ? (
-                <TouchableOpacity
-                  style={[styles.aliasModalBtn, { backgroundColor: 'rgba(239, 68, 68, 0.15)', marginRight: 8 }]}
-                  onPress={handleClearAlias}
-                >
-                  <Text style={[styles.aliasModalBtnText, { color: colors.red }]}>恢复默认</Text>
-                </TouchableOpacity>
-              ) : null}
-              <TouchableOpacity
-                style={[styles.aliasModalBtn, { backgroundColor: colors.input, marginRight: 8 }]}
-                onPress={() => setAliasModalVisible(false)}
-              >
-                <Text style={[styles.aliasModalBtnText, { color: colors.sub }]}>取消</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.aliasModalBtn, { backgroundColor: colors.accent, flex: 1 }]}
-                onPress={handleSaveAlias}
-              >
-                <Text style={[styles.aliasModalBtnText, { color: '#ffffff' }]}>保存生效</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      {/* Modern Confirm Dialog */}
+      {/* 6. Modern Squircle Confirm Dialog */}
       <ModernConfirmDialog
         visible={confirmDialog.visible}
         type={confirmDialog.type}
@@ -771,194 +810,398 @@ export default function DockerDetailsScreen() {
   );
 }
 
-const createStyles = (colors) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg },
-  sortBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: colors.card,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-  },
-  sortLabel: { color: colors.sub, marginRight: 12, fontSize: 14 },
-  sortBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: colors.input,
-    marginRight: 8,
-  },
-  sortBtnActive: { backgroundColor: colors.accent },
-  sortBtnText: { color: colors.text, fontSize: 12, fontWeight: 'bold' },
-  content: { padding: 16, paddingBottom: 40 },
-  center: { flex: 1, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center' },
-  card: {
-    backgroundColor: colors.card,
-    borderRadius: 18,
-    padding: 14,
-    marginBottom: 12,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  avatarText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  headerInfo: {
+const createStyles = (colors, isDark) => StyleSheet.create({
+  container: {
     flex: 1,
-    marginRight: 8,
+    backgroundColor: colors.bg,
   },
-  nameRow: {
-    flexDirection: 'row',
+  center: {
+    flex: 1,
+    backgroundColor: colors.bg,
     alignItems: 'center',
-    gap: 6,
-    marginBottom: 4,
+    justifyContent: 'center',
+    padding: 20,
   },
-  nameText: {
-    color: colors.textStrong,
-    fontSize: 15,
-    fontWeight: 'bold',
-    flexShrink: 1,
+  loadingText: {
+    color: colors.sub,
+    fontSize: 14,
+    marginTop: 12,
   },
-  portBadge: {
-    backgroundColor: 'rgba(59, 130, 246, 0.12)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  portBadgeText: {
-    color: colors.accent,
-    fontSize: 11,
-    fontWeight: 'bold',
-    fontVariant: ['tabular-nums'],
-  },
-  stoppedText: {
-    fontSize: 12,
-    marginTop: 2,
-  },
-  statsRow: {
+
+  // Hero Stats Row
+  heroRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 10,
   },
-  statBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.input,
-    paddingHorizontal: 7,
-    paddingVertical: 2.5,
-    borderRadius: 6,
-    gap: 4,
-  },
-  statText: {
-    color: colors.text,
-    fontSize: 11,
-    fontWeight: 'bold',
-    fontVariant: ['tabular-nums'],
-  },
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+  heroCard: {
+    flex: 1,
+    backgroundColor: colors.card,
+    borderRadius: 16,
+    padding: 12,
     borderWidth: 1,
-    gap: 5,
+    borderColor: colors.cardBorder,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: isDark ? 0.2 : 0.04,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  statusDot: {
+  heroDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
+    marginRight: 6,
   },
-  statusPillText: {
+  heroLabel: {
     fontSize: 11,
+    color: colors.sub,
     fontWeight: '600',
   },
-  cardDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: colors.divider,
-    marginVertical: 11,
-    opacity: 0.7,
+  heroNum: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    letterSpacing: -0.5,
   },
-  cardFooter: {
+
+  // Filter Section
+  filterSection: {
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.card,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    height: 40,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    marginBottom: 10,
+  },
+  searchInput: {
+    flex: 1,
+    color: colors.textStrong,
+    fontSize: 13,
+    paddingVertical: 0,
+  },
+  filterRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  footerLeft: {
+  tabsRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  tabBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: colors.cardSecondary,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  tabBtnActive: {
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
+  },
+  tabBtnText: {
+    fontSize: 12,
+    color: colors.sub,
+    fontWeight: '600',
+  },
+  tabBtnTextActive: {
+    color: '#ffffff',
+  },
+  sortToggleBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    flex: 1,
+    backgroundColor: colors.cardSecondary,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  sortToggleText: {
+    fontSize: 11,
+    color: colors.sub,
+    fontWeight: '600',
+  },
+
+  // Content & Docker Cards
+  content: {
+    padding: 16,
+    paddingTop: 6,
+    paddingBottom: 32,
+    gap: 12,
+  },
+  dockerCard: {
+    backgroundColor: colors.card,
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: isDark ? 0.25 : 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  cardUpperTier: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  avatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 10,
   },
-  webUiBtn: {
+  avatarText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  nameBlock: {
+    flex: 1,
+    marginRight: 8,
+  },
+  dockerTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+    marginBottom: 4,
+  },
+  metaBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  statusDotSmall: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    marginRight: 4,
+  },
+  statusBadgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  portBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: colors.cardSecondary,
+  },
+  portBadgeText: {
+    fontSize: 10,
+    color: colors.sub,
+    fontWeight: '500',
+  },
+  resourcePillsCol: {
+    alignItems: 'flex-end',
+  },
+  resourcePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.cardSecondary,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  resourcePillText: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
+
+  // Action Bar (Lower Tier)
+  cardLowerTier: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.cardBorder,
+  },
+  webActionGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  webLaunchPill: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.accent,
     paddingHorizontal: 12,
-    height: 32,
-    borderRadius: 8,
+    paddingVertical: 6,
+    borderRadius: 10,
   },
-  webUiBtnText: {
+  webLaunchPillText: {
     color: '#ffffff',
     fontSize: 12,
     fontWeight: 'bold',
   },
-  aliasEditBtn: {
+  customConfigPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.input,
-    paddingHorizontal: 9,
-    height: 32,
-    borderRadius: 8,
-  },
-  aliasEditBtnDashed: {
+    backgroundColor: colors.cardSecondary,
     borderWidth: 1,
-    borderColor: colors.divider,
-    borderStyle: 'dashed',
-    backgroundColor: 'transparent',
+    borderColor: colors.cardBorder,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
   },
-  aliasEditBtnText: {
-    fontSize: 12,
-    fontWeight: '500',
+  customConfigPillActive: {
+    borderColor: colors.accent,
+    backgroundColor: isDark ? 'rgba(56, 189, 248, 0.12)' : '#e0f2fe',
   },
-  footerRight: {
+  customConfigPillText: {
+    fontSize: 11,
+    color: colors.sub,
+    fontWeight: '600',
+  },
+  mgmtBtnGroup: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
   },
-  actionBtn: {
-    width: 34,
+  circleActionBtn: {
+    width: 32,
     height: 32,
-    borderRadius: 8,
-    backgroundColor: colors.input,
-    justifyContent: 'center',
+    borderRadius: 10,
+    backgroundColor: colors.cardSecondary,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
     alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  // Terminal Log Viewer Styles
-  logContainer: {
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+  },
+  emptyTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+    marginBottom: 4,
+  },
+  emptySub: {
+    fontSize: 12,
+    color: colors.sub,
+  },
+
+  // Custom Reverse Proxy Modal
+  modalBackdrop: {
     flex: 1,
-    backgroundColor: '#0a0f1d',
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  aliasModalBox: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: colors.card,
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  aliasModalHeader: {
+    marginBottom: 14,
+  },
+  aliasModalTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+    marginBottom: 6,
+  },
+  aliasModalSub: {
+    fontSize: 12,
+    color: colors.sub,
+    lineHeight: 17,
+  },
+  aliasInputWrapper: {
+    backgroundColor: colors.input,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    height: 44,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  aliasTextInput: {
+    color: colors.textStrong,
+    fontSize: 13,
+  },
+  aliasModalBtnRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  aliasClearBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginRight: 'auto',
+  },
+  aliasClearBtnText: {
+    color: colors.red,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  aliasCancelBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: colors.cardSecondary,
+  },
+  aliasCancelBtnText: {
+    color: colors.sub,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  aliasSaveBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: colors.accent,
+  },
+  aliasSaveBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+
+  // Terminal Log Modal
+  logModalContainer: {
+    flex: 1,
+    backgroundColor: isDark ? '#080d19' : '#f8fafc',
   },
   logHeader: {
     flexDirection: 'row',
@@ -966,76 +1209,74 @@ const createStyles = (colors) => StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: Platform.OS === 'ios' ? 48 : 16,
     paddingBottom: 14,
-    backgroundColor: '#0f172a',
+    backgroundColor: isDark ? '#0d1424' : '#ffffff',
     borderBottomWidth: 1,
-    borderBottomColor: '#1e293b',
+    borderBottomColor: colors.cardBorder,
   },
-  logHeaderTitle: {
-    color: '#f8fafc',
+  logTitle: {
+    color: colors.textStrong,
     fontSize: 17,
     fontWeight: 'bold',
   },
-  logHeaderSub: {
-    color: '#64748b',
+  logSub: {
+    color: colors.sub,
     fontSize: 12,
     marginTop: 2,
-  },
-  logHeaderActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
   },
   logActionBtn: {
     width: 36,
     height: 36,
     borderRadius: 10,
+    backgroundColor: isDark ? '#151d2e' : '#f1f5f9',
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
     justifyContent: 'center',
     alignItems: 'center',
   },
   logSearchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#0f172a',
+    backgroundColor: isDark ? '#101726' : '#ffffff',
     marginHorizontal: 16,
     marginVertical: 10,
     paddingHorizontal: 12,
     height: 40,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#1e293b',
+    borderColor: colors.cardBorder,
   },
   logSearchInput: {
     flex: 1,
-    color: '#f8fafc',
+    color: colors.textStrong,
     fontSize: 13,
     paddingVertical: 0,
   },
   toastBox: {
-    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
     paddingVertical: 6,
     paddingHorizontal: 16,
     marginHorizontal: 16,
     marginBottom: 8,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.4)',
+    borderColor: 'rgba(16, 185, 129, 0.35)',
   },
   toastText: {
-    color: '#34d399',
+    color: colors.green,
     fontSize: 12,
     fontWeight: 'bold',
     textAlign: 'center',
   },
-  terminalBody: {
+  logBody: {
     flex: 1,
-    backgroundColor: '#050811',
+    backgroundColor: isDark ? '#050811' : '#f1f5f9',
   },
-  terminalContent: {
+  logBodyContent: {
     padding: 16,
     paddingBottom: 40,
   },
   logText: {
-    color: '#e2e8f0',
+    color: isDark ? '#cbd5e1' : '#334155',
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     fontSize: 12,
     lineHeight: 18,
@@ -1046,84 +1287,7 @@ const createStyles = (colors) => StyleSheet.create({
     marginTop: 80,
   },
   logLoadingText: {
-    color: '#94a3b8',
+    color: colors.sub,
     fontSize: 13,
-  },
-
-  modalOverlayCenter: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  aliasModalBox: {
-    width: '100%',
-    maxWidth: 380,
-    borderRadius: 20,
-    padding: 22,
-    alignItems: 'center',
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-  },
-  dialogIconBadge: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  aliasModalTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    marginBottom: 6,
-  },
-  aliasModalSub: {
-    fontSize: 12,
-    lineHeight: 18,
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  aliasModalInput: {
-    width: '100%',
-    height: 44,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    fontSize: 14,
-    marginBottom: 12,
-  },
-  previewBox: {
-    width: '100%',
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 18,
-  },
-  previewLabel: {
-    fontSize: 11,
-    marginBottom: 2,
-  },
-  previewUrl: {
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  aliasModalBtns: {
-    flexDirection: 'row',
-    width: '100%',
-  },
-  aliasModalBtn: {
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  aliasModalBtnText: {
-    fontSize: 14,
-    fontWeight: 'bold',
   },
 });
