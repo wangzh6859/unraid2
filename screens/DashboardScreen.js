@@ -18,7 +18,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import { getWolConfig, sendWakeOnLanPacket, formatMacAddress } from '../utils/wolManager';
-import { resolveDockerWebUrl, getProxyConfig, getDockerAliases, detectLanEnvironment } from '../utils/dockerWebUiManager';
+import { resolveDockerWebUrl, getProxyConfig, getDockerAliases } from '../utils/dockerWebUiManager';
 
 // -------------------------------------------------------------
 // Vector Math Helpers for SVG Gauges & Waves
@@ -431,9 +431,8 @@ export default function DashboardScreen({ navigation }) {
       const savedUrl = await AsyncStorage.getItem('@server_url');
       const proxyCfg = await getProxyConfig();
       const aliases = await getDockerAliases();
-      const isLan = typeof detectLanEnvironment === 'function' ? await detectLanEnvironment(savedUrl) : false;
       const webInfo = typeof resolveDockerWebUrl === 'function'
-        ? resolveDockerWebUrl(docker, savedUrl, proxyCfg, aliases, isLan)
+        ? resolveDockerWebUrl(docker, savedUrl, proxyCfg, aliases)
         : { targetUrl: '' };
 
       if (webInfo.targetUrl) {

@@ -16,7 +16,6 @@ import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import {
   getProxyConfig, getDockerAliases, saveDockerAlias,
   removeDockerAlias, resolveDockerWebUrl,
-  detectLanEnvironment, getCachedLanEnvironment
 } from '../utils/dockerWebUiManager';
 
 export default function DockerDetailsScreen() {
@@ -119,9 +118,6 @@ export default function DockerDetailsScreen() {
     setProxyConfig(pCfg);
     setDockerAliases(aliases || {});
     setServerUrl(savedUrl || '');
-    if (savedUrl) {
-      detectLanEnvironment(savedUrl);
-    }
   };
 
   useFocusEffect(
@@ -202,13 +198,7 @@ export default function DockerDetailsScreen() {
 
     try {
       setOpeningDocker(docker.name);
-      const isLan = typeof detectLanEnvironment === 'function'
-        ? await detectLanEnvironment(serverUrl)
-        : false;
-      const freshInfo = typeof resolveDockerWebUrl === 'function'
-        ? (resolveDockerWebUrl(docker, serverUrl, proxyConfig, dockerAliases, isLan) || webUiInfo)
-        : webUiInfo;
-      const urlToOpen = (freshInfo && freshInfo.targetUrl) || (webUiInfo && webUiInfo.targetUrl);
+      const urlToOpen = webUiInfo.targetUrl;
 
       const canOpen = await Linking.canOpenURL(urlToOpen);
       if (canOpen) {
@@ -234,27 +224,15 @@ export default function DockerDetailsScreen() {
   };
 
   const handleShowWebUiOptions = (docker, webUiInfo) => {
-    const hasInternal = !!webUiInfo.rawInternalUrl;
     const proxy = webUiInfo.proxyUrl || (webUiInfo.isProxy || webUiInfo.isFullUrl ? webUiInfo.targetUrl : '');
     showConfirm({
       type: 'info',
       title: `${docker.name} · Web 访问选项`,
-      message: `内网环境 (域名加端口):\n${webUiInfo.rawInternalUrl || '未检测到端口'}\n\n非内网环境 (反代地址):\n${proxy || '未配置全局反代或简称'}\n\n请选择访问方式：`,
-      confirmText: '打开内网 (域名加端口)',
-      cancelText: proxy ? '打开反代地址' : '配置反代',
+      message: `反代地址:\n${proxy || '未配置全局反代或简称'}\n\n内网直连 (域名加端口):\n${webUiInfo.rawInternalUrl || '未检测到端口'}\n\n请选择访问方式：`,
+      confirmText: proxy ? '打开反代地址' : '配置反代',
+      cancelText: '打开内网直连',
       showCancel: true,
       onConfirm: async () => {
-        if (webUiInfo.rawInternalUrl) {
-          try {
-            await Linking.openURL(webUiInfo.rawInternalUrl);
-          } catch (e) {
-            showConfirm({ type: 'warning', title: '打开异常', message: e.message, showCancel: false });
-          }
-        } else {
-          showConfirm({ type: 'warning', title: '提示', message: '未检测到内网端口直连地址', showCancel: false });
-        }
-      },
-      onCancel: async () => {
         if (proxy) {
           try {
             await Linking.openURL(proxy);
@@ -263,6 +241,17 @@ export default function DockerDetailsScreen() {
           }
         } else {
           handleOpenAliasModal(docker, webUiInfo);
+        }
+      },
+      onCancel: async () => {
+        if (webUiInfo.rawInternalUrl) {
+          try {
+            await Linking.openURL(webUiInfo.rawInternalUrl);
+          } catch (e) {
+            showConfirm({ type: 'warning', title: '打开异常', message: e.message, showCancel: false });
+          }
+        } else {
+          showConfirm({ type: 'warning', title: '提示', message: '未检测到内网端口直连地址', showCancel: false });
         }
       },
     });
@@ -528,7 +517,7 @@ export default function DockerDetailsScreen() {
           const isRunning = docker.status === 'running';
           const defaultWebInfo = { targetUrl: '', proxyUrl: '', rawInternalUrl: '', isCustom: false, isProxy: false, isFullUrl: false, alias: '' };
           const webUiInfo = (typeof resolveDockerWebUrl === 'function')
-            ? (resolveDockerWebUrl(docker, serverUrl, proxyConfig, dockerAliases, true) || defaultWebInfo)
+            ? (resolveDockerWebUrl(docker, serverUrl, proxyConfig, dockerAliases) || defaultWebInfo)
             : defaultWebInfo;
           const hasWebAccess = !!(webUiInfo.targetUrl || docker.port || docker.ports);
           const hasCustomAlias = !!dockerAliases[docker.name];

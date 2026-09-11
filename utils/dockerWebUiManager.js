@@ -207,7 +207,8 @@ export function resolveDockerWebUiUrl(docker, proxyConfig = {}, aliases = {}, se
   }
 
   // 3. 未设置个性化别名，检查是否开启了全局反向代理模板
-  if (proxyConfig && proxyConfig.enabled && proxyConfig.template) {
+  // 直接统一使用反代地址：只要配置了模板（且未显式关闭），直接使用反代地址
+  if (proxyConfig && proxyConfig.template && proxyConfig.enabled !== false) {
     const proxyUrl = formatProxyUrl(proxyConfig.template, name, primaryPort);
     return {
       targetUrl: proxyUrl,
@@ -232,95 +233,15 @@ export function resolveDockerWebUiUrl(docker, proxyConfig = {}, aliases = {}, se
   };
 }
 
-// -------------------------------------------------------------
-// 内网环境智能感知与自动分流器
-// -------------------------------------------------------------
-let cachedLanStatus = {
-  isLan: null,
-  timestamp: 0,
-};
-
 /**
- * 获取最近探测缓存（45 秒内有效）
- */
-export function getCachedLanStatus() {
-  const now = Date.now();
-  if (cachedLanStatus.isLan !== null && (now - cachedLanStatus.timestamp < 45000)) {
-    return cachedLanStatus.isLan;
-  }
-  return null;
-}
-
-/**
- * 获取最近探测缓存环境别名
- */
-export function getCachedLanEnvironment() {
-  return getCachedLanStatus();
-}
-
-/**
- * 手动更新内网状态缓存
- */
-export function setCachedLanStatus(isLan) {
-  cachedLanStatus = {
-    isLan: !!isLan,
-    timestamp: Date.now(),
-  };
-}
-
-/**
- * 快速探测指定内网地址是否可直连（轻量超时，不阻断主线程）
- */
-export async function probeLanReachable(probeUrl, timeoutMs = 600) {
-  if (!probeUrl) return false;
-  try {
-    let controller = null;
-    let timer = null;
-    if (typeof AbortController !== 'undefined') {
-      controller = new AbortController();
-      timer = setTimeout(() => {
-        try { controller.abort(); } catch (e) {}
-      }, timeoutMs);
-    }
-
-    await fetch(probeUrl, {
-      method: 'GET',
-      signal: controller ? controller.signal : undefined,
-      mode: 'no-cors',
-      cache: 'no-store',
-    });
-
-    if (timer) clearTimeout(timer);
-    setCachedLanStatus(true);
-    return true;
-  } catch (err) {
-    setCachedLanStatus(false);
-    return false;
-  }
-}
-
-/**
- * 智能探测当前是否处于内网环境
- */
-export async function detectLanEnvironment(serverUrl, timeoutMs = 800) {
-  if (!serverUrl) return false;
-  const cached = getCachedLanStatus();
-  if (cached !== null) {
-    return cached;
-  }
-  return await probeLanReachable(serverUrl, timeoutMs);
-}
-
-/**
- * 依据当前内网/外网环境，解析出容器 WebUI 综合访问信息
+ * 依据配置直接解析出容器 WebUI 综合访问信息（统一优先反代，无需内外网判定）
  * @param {Object} docker 容器数据对象
- * @param {string} serverUrl Unraid 服务器地址
- * @param {Object} proxyConfig 全局反代配置
- * @param {Object} aliases 个性化别名字典
- * @param {boolean|null} isLan 是否处于局域网/内网直连环境
+ * @param {string|Object} serverUrl Unraid 服务器地址（或 proxyConfig）
+ * @param {Object} proxyConfig 全局反代配置（或 aliases）
+ * @param {Object} aliases 个性化别名字典（或 serverHost）
  * @returns {Object}
  */
-export function resolveDockerWebUrl(docker, serverUrl = '', proxyConfig = {}, aliases = {}, isLan = false) {
+export function resolveDockerWebUrl(docker, serverUrl = '', proxyConfig = {}, aliases = {}) {
   if (!docker) {
     return {
       targetUrl: '',
@@ -337,56 +258,20 @@ export function resolveDockerWebUrl(docker, serverUrl = '', proxyConfig = {}, al
   let realServerUrl = serverUrl;
   let realProxyConfig = proxyConfig;
   let realAliases = aliases;
-  let realIsLan = isLan;
 
   if (serverUrl && typeof serverUrl === 'object') {
     realProxyConfig = serverUrl;
     realAliases = proxyConfig || {};
     realServerUrl = typeof aliases === 'string' ? aliases : '';
-    realIsLan = typeof isLan === 'boolean' ? isLan : false;
   }
 
-  const info = resolveDockerWebUiUrl(docker, realProxyConfig, realAliases, realServerUrl);
-  const finalIsLan = realIsLan !== undefined && realIsLan !== null ? realIsLan : getCachedLanStatus();
-
-  let targetUrl = info.targetUrl;
-  if (finalIsLan === true) {
-    targetUrl = info.rawInternalUrl || info.proxyUrl || info.targetUrl || '';
-  } else if (finalIsLan === false) {
-    targetUrl = info.proxyUrl || info.rawInternalUrl || info.targetUrl || '';
-  }
-
-  return {
-    ...info,
-    targetUrl: targetUrl || '',
-  };
+  return resolveDockerWebUiUrl(docker, realProxyConfig, realAliases, realServerUrl);
 }
 
-/**
- * 自动识别网络环境并返回目标 WebUI 访问链接：
- * - 内网环境：自动打开「域名加端口」
- * - 非内网环境：自动打开「反代地址」
- */
-export async function resolveAutoWebUiUrl(webUiInfo) {
-  if (!webUiInfo) return '';
-  const internalUrl = webUiInfo.rawInternalUrl;
-  const proxyUrl = webUiInfo.proxyUrl || (webUiInfo.isProxy || webUiInfo.isFullUrl ? webUiInfo.targetUrl : '');
-
-  // 1. 若只存在其中一种地址，直接返回该地址
-  if (!proxyUrl && internalUrl) return internalUrl;
-  if (proxyUrl && !internalUrl) return proxyUrl;
-  if (!proxyUrl && !internalUrl) return webUiInfo.targetUrl || '';
-
-  // 2. 检查 45 秒内缓存状态，秒级响应
-  const cached = getCachedLanStatus();
-  if (cached === true) {
-    return internalUrl;
-  }
-  if (cached === false) {
-    return proxyUrl;
-  }
-
-  // 3. 发起 600ms 快速内网探测
-  const isLan = await probeLanReachable(internalUrl, 600);
-  return isLan ? internalUrl : proxyUrl;
-}
+// 兼容性占位（不再进行任何内外网探测阻塞）
+export async function detectLanEnvironment() { return false; }
+export function getCachedLanEnvironment() { return false; }
+export function getCachedLanStatus() { return false; }
+export function setCachedLanStatus() {}
+export async function probeLanReachable() { return false; }
+export async function resolveAutoWebUiUrl(webUiInfo) { return (webUiInfo && webUiInfo.targetUrl) || ''; }
