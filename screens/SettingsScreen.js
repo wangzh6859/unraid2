@@ -13,7 +13,7 @@ import {
   HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server,
   LogOut, Moon, Sun, FolderDown, RefreshCw, Trash2, Key, Power,
   RotateCw, AlertTriangle, CheckCircle, Fingerprint, ShieldAlert,
-  Sparkles, DownloadCloud, ExternalLink, Activity, Radio, Zap,
+  Sparkles, DownloadCloud, ExternalLink, Activity, Radio, Zap, Globe, Sliders, X, Check,
 } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import {
@@ -27,6 +27,10 @@ import {
   getWolConfig, saveWolConfig, sendWakeOnLanPacket,
   isValidMacAddress, formatMacAddress,
 } from '../utils/wolManager';
+import {
+  getProxyConfig, saveProxyConfig, getDockerAliases,
+  clearAllDockerAliases, removeDockerAlias, formatProxyUrl,
+} from '../utils/dockerWebUiManager';
 
 export default function SettingsScreen({ navigation }) {
   // Modern squircle confirm & result dialog state
@@ -90,6 +94,14 @@ export default function SettingsScreen({ navigation }) {
   const [wolBroadcastIp, setWolBroadcastIp] = useState('255.255.255.255');
   const [wolPort, setWolPort] = useState(9);
   const [wolTesting, setWolTesting] = useState(false);
+
+  // Docker Reverse Proxy & WebUI Jump
+  const [proxyEnabled, setProxyEnabled] = useState(false);
+  const [proxyTemplate, setProxyTemplate] = useState('');
+  const [aliasesMap, setAliasesMap] = useState({});
+  const [proxyEditVisible, setProxyEditVisible] = useState(false);
+  const [proxyInput, setProxyInput] = useState('');
+  const [aliasesModalVisible, setAliasesModalVisible] = useState(false);
 
   // Security & Biometrics
   const [appLockEnabled, setAppLockEnabled] = useState(false);
@@ -274,6 +286,13 @@ export default function SettingsScreen({ navigation }) {
       setWolMac(wolCfg.mac);
       setWolBroadcastIp(wolCfg.broadcastIp);
       setWolPort(wolCfg.port);
+
+      const pCfg = await getProxyConfig();
+      setProxyEnabled(pCfg.enabled);
+      setProxyTemplate(pCfg.template);
+
+      const aliases = await getDockerAliases();
+      setAliasesMap(aliases || {});
     } catch (e) {
       console.log(e);
     }
@@ -487,6 +506,57 @@ export default function SettingsScreen({ navigation }) {
       message: '设置已实时保存并即时生效！',
       confirmText: '好的',
       showCancel: false,
+    });
+  };
+
+  // =========================================================================
+  // Docker Reverse Proxy & Aliases Handlers
+  // =========================================================================
+  const toggleProxyEnabled = async (val) => {
+    setProxyEnabled(val);
+    await saveProxyConfig({ enabled: val });
+  };
+
+  const editProxyTemplate = () => {
+    setProxyInput(proxyTemplate || 'https://{name_lower}.yourdomain.com');
+    setProxyEditVisible(true);
+  };
+
+  const handleSaveProxyTemplate = async () => {
+    const clean = proxyInput ? proxyInput.trim() : '';
+    setProxyTemplate(clean);
+    await saveProxyConfig({ template: clean, enabled: clean ? true : proxyEnabled });
+    if (clean && !proxyEnabled) setProxyEnabled(true);
+    setProxyEditVisible(false);
+    showConfirm({
+      type: 'success',
+      title: '反代规则已更新',
+      message: clean
+        ? `已成功配置反代模板：\n${clean}\n\n例如：容器 qbittorrent 将自动解析为：\n${formatProxyUrl(clean, 'qbittorrent', '8080')}`
+        : '已清除反代规则模板。',
+      confirmText: '好的',
+      showCancel: false,
+    });
+  };
+
+  const handleDeleteAlias = async (cName) => {
+    await removeDockerAlias(cName);
+    const updated = { ...aliasesMap };
+    delete updated[cName];
+    setAliasesMap(updated);
+  };
+
+  const handleClearAllAliases = () => {
+    showConfirm({
+      type: 'danger',
+      title: '清空所有容器定制配置',
+      message: '确定要清空所有已保存的容器简称与专属网址吗？此操作不可逆。',
+      confirmText: '确认清空',
+      onConfirm: async () => {
+        await clearAllDockerAliases();
+        setAliasesMap({});
+        setAliasesModalVisible(false);
+      },
     });
   };
 
@@ -754,6 +824,60 @@ export default function SettingsScreen({ navigation }) {
               <Text style={[styles.powerActionTagText, { color: colors.amber }]}>测试</Text>
             )}
           </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* Docker Reverse Proxy & WebUI Jump */}
+      <Text style={styles.sectionTitle}>Docker 反代与 Web 界面</Text>
+      <View style={styles.card}>
+        <View style={styles.row}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+            <Globe color={colors.accent} size={20} />
+          </View>
+          <View style={styles.infoBox}>
+            <Text style={styles.rowTitle}>反向代理域名跳转</Text>
+            <Text style={styles.rowSub}>
+              {proxyEnabled ? '开启中：优先使用反代域名打开 Web 界面' : '关闭：直接使用服务器内网 IP:端口直连'}
+            </Text>
+          </View>
+          <Switch
+            value={proxyEnabled}
+            onValueChange={toggleProxyEnabled}
+            trackColor={{ false: colors.input, true: colors.accent }}
+            thumbColor={'#ffffff'}
+          />
+        </View>
+
+        <View style={styles.divider} />
+
+        <TouchableOpacity style={styles.row} onPress={editProxyTemplate}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+            <ExternalLink color={colors.green} size={20} />
+          </View>
+          <View style={styles.infoBox}>
+            <Text style={styles.rowTitle}>反代规则模板</Text>
+            <Text style={styles.rowSub} numberOfLines={1}>
+              {proxyTemplate || '未配置 (点击设置域名拼接模板)'}
+            </Text>
+          </View>
+          <Text style={styles.editHint}>修改</Text>
+        </TouchableOpacity>
+
+        <View style={styles.divider} />
+
+        <TouchableOpacity style={styles.row} onPress={() => setAliasesModalVisible(true)}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(139, 92, 246, 0.15)' }]}>
+            <Sliders color={colors.purple} size={20} />
+          </View>
+          <View style={styles.infoBox}>
+            <Text style={styles.rowTitle}>容器个性化简称管理</Text>
+            <Text style={styles.rowSub}>
+              {Object.keys(aliasesMap).length > 0
+                ? `${Object.keys(aliasesMap).length} 个容器已配置专属简称或网址`
+                : '暂无定制 (在 Docker 详情点击“定制”可添加简称)'}
+            </Text>
+          </View>
+          <Text style={styles.editHint}>管理</Text>
         </TouchableOpacity>
       </View>
 
@@ -1048,6 +1172,104 @@ export default function SettingsScreen({ navigation }) {
             </View>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Docker Reverse Proxy Template Edit Modal */}
+      <Modal visible={proxyEditVisible} transparent animationType="fade" onRequestClose={() => setProxyEditVisible(false)}>
+        <KeyboardAvoidingView style={styles.overlayCenter} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setProxyEditVisible(false)} />
+          <View style={styles.limitBox}>
+            <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
+              <Globe color={colors.accent} size={28} />
+            </View>
+            <Text style={styles.limitTitle}>配置反向代理规则模板</Text>
+            <Text style={styles.dialogSub}>
+              支持变量占位符：{'\n'}
+              • {'{name_lower}'}：容器名转小写（推荐）{'\n'}
+              • {'{name}'}：容器原始名称{'\n'}
+              • {'{port}'}：容器映射主端口
+            </Text>
+            <TextInput
+              style={styles.limitInput}
+              value={proxyInput}
+              onChangeText={setProxyInput}
+              autoFocus
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="例如: https://{name_lower}.yourdomain.com"
+              placeholderTextColor={colors.muted}
+            />
+            {proxyInput ? (
+              <View style={{ backgroundColor: colors.input, borderRadius: 8, padding: 10, marginBottom: 16 }}>
+                <Text style={{ fontSize: 12, color: colors.sub, marginBottom: 2 }}>实时解析预览 (以 qbittorrent 为例):</Text>
+                <Text style={{ fontSize: 13, color: colors.accent, fontWeight: 'bold' }} numberOfLines={1}>
+                  {formatProxyUrl(proxyInput, 'qbittorrent', '8080')}
+                </Text>
+              </View>
+            ) : null}
+            <View style={styles.renameBtns}>
+              <TouchableOpacity style={[styles.renameBtn, { backgroundColor: colors.input }]} onPress={() => setProxyEditVisible(false)}>
+                <Text style={styles.renameBtnText}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.renameBtn, { backgroundColor: colors.accent }]} onPress={handleSaveProxyTemplate}>
+                <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>保存生效</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Docker Aliases Management Modal */}
+      <Modal visible={aliasesModalVisible} transparent animationType="fade" onRequestClose={() => setAliasesModalVisible(false)}>
+        <View style={styles.overlayCenter}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setAliasesModalVisible(false)} />
+          <View style={[styles.limitBox, { maxHeight: '80%' }]}>
+            <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(139, 92, 246, 0.12)' }]}>
+              <Sliders color={colors.purple} size={28} />
+            </View>
+            <Text style={styles.limitTitle}>容器个性化简称列表</Text>
+            <Text style={styles.dialogSub}>
+              针对特殊容器单独指定的简称或独立网址：
+            </Text>
+            <ScrollView style={{ maxHeight: 240, marginVertical: 8 }} indicatorStyle={colors.mode === 'dark' ? 'white' : 'black'}>
+              {Object.keys(aliasesMap).length === 0 ? (
+                <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                  <Text style={{ fontSize: 13, color: colors.muted }}>暂无任何个性化简称</Text>
+                  <Text style={{ fontSize: 12, color: colors.sub, marginTop: 4, textAlign: 'center' }}>
+                    在【Docker 详情】页面每个容器卡片上，点击“定制”即可为特殊容器指定简称。
+                  </Text>
+                </View>
+              ) : (
+                Object.entries(aliasesMap).map(([cName, val]) => (
+                  <View key={cName} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.divider }}>
+                    <View style={{ flex: 1, marginRight: 8 }}>
+                      <Text style={{ fontSize: 14, fontWeight: 'bold', color: colors.textStrong }}>{cName}</Text>
+                      <Text style={{ fontSize: 12, color: colors.accent }} numberOfLines={1}>
+                        {val.startsWith('http') ? val : `简称: ${val} (自动套用模板)`}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => handleDeleteAlias(cName)}
+                      style={{ padding: 6, borderRadius: 6, backgroundColor: 'rgba(239, 68, 68, 0.12)' }}
+                    >
+                      <Trash2 size={16} color={colors.red} />
+                    </TouchableOpacity>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+            <View style={styles.renameBtns}>
+              {Object.keys(aliasesMap).length > 0 ? (
+                <TouchableOpacity style={[styles.renameBtn, { backgroundColor: 'rgba(239, 68, 68, 0.15)', marginRight: 8 }]} onPress={handleClearAllAliases}>
+                  <Text style={[styles.renameBtnText, { color: colors.red }]}>清空全部</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity style={[styles.renameBtn, { backgroundColor: colors.accent, flex: 1 }]} onPress={() => setAliasesModalVisible(false)}>
+                <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>完成</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
 
       {/* In-App Software Update Modal */}

@@ -1,17 +1,21 @@
-import React, { useState, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, ActivityIndicator, TouchableOpacity,
-  Modal, TextInput, Pressable, Platform, Linking,
+  Modal, TextInput, Pressable, Platform, Linking, KeyboardAvoidingView,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import {
   Cpu, Database, RotateCw, Play, Power, Terminal, ExternalLink,
-  Search, Copy, Check, X, RefreshCw,
+  Search, Copy, Check, X, RefreshCw, Globe, Sliders,
 } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
+import {
+  getProxyConfig, getDockerAliases, saveDockerAlias,
+  removeDockerAlias, resolveDockerWebUiUrl, formatProxyUrl,
+} from '../utils/dockerWebUiManager';
 
 export default function DockerDetailsScreen() {
   const { colors } = useTheme();
@@ -66,6 +70,14 @@ export default function DockerDetailsScreen() {
   const [copiedToast, setCopiedToast] = useState(false);
   const logScrollRef = useRef(null);
 
+  // WebUI Reverse Proxy & Custom Aliases State
+  const [proxyConfig, setProxyConfig] = useState({ enabled: false, template: '' });
+  const [dockerAliases, setDockerAliases] = useState({});
+  const [serverHost, setServerHost] = useState('');
+  const [aliasModalVisible, setAliasModalVisible] = useState(false);
+  const [targetDockerForAlias, setTargetDockerForAlias] = useState(null);
+  const [aliasInputValue, setAliasInputValue] = useState('');
+
   const getAvatarColor = (name) => {
     let hash = 0;
     for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
@@ -102,10 +114,112 @@ export default function DockerDetailsScreen() {
         await fetchDockerData();
         if (isActive) timerId = setTimeout(pollData, 3000);
       };
+      loadProxyData();
       pollData();
       return () => { isActive = false; if (timerId) clearTimeout(timerId); };
     }, [])
   );
+
+  const loadProxyData = async () => {
+    try {
+      const [pCfg, aliases, savedUrl] = await Promise.all([
+        getProxyConfig(),
+        getDockerAliases(),
+        AsyncStorage.getItem('@server_url'),
+      ]);
+      setProxyConfig(pCfg);
+      setDockerAliases(aliases || {});
+      if (savedUrl) {
+        const cleanHost = savedUrl.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/:.*$/, '');
+        setServerHost(cleanHost);
+      }
+    } catch (e) {
+      console.log('Load proxy data error:', e);
+    }
+  };
+
+  const handleOpenWebUi = async (url) => {
+    if (!url) return;
+    try {
+      const canOpen = await Linking.canOpenURL(url);
+      if (canOpen) {
+        await Linking.openURL(url);
+      } else {
+        showConfirm({
+          type: 'warning',
+          title: '无法打开网页',
+          message: `系统未能识别或处理该 URL：\n${url}`,
+          showCancel: false,
+        });
+      }
+    } catch (err) {
+      showConfirm({
+        type: 'warning',
+        title: '打开链接异常',
+        message: err.message || '系统未能拉起浏览器',
+        showCancel: false,
+      });
+    }
+  };
+
+  const handleShowWebUiOptions = (docker, webUiInfo) => {
+    const hasInternal = !!webUiInfo.rawInternalUrl;
+    showConfirm({
+      type: 'info',
+      title: `${docker.name} · Web 访问选项`,
+      message: `目标反代地址:\n${webUiInfo.targetUrl || '未配置'}\n\n内网直连地址:\n${webUiInfo.rawInternalUrl || '未检测到主机端口'}\n\n请选择访问方式：`,
+      confirmText: '打开反代网址',
+      cancelText: hasInternal ? '打开内网地址' : '修改简称',
+      onConfirm: () => {
+        if (webUiInfo.targetUrl) handleOpenWebUi(webUiInfo.targetUrl);
+      },
+    });
+  };
+
+  const handleOpenAliasModal = (docker, webUiInfo) => {
+    setTargetDockerForAlias(docker);
+    setAliasInputValue(webUiInfo.alias || '');
+    setAliasModalVisible(true);
+  };
+
+  const handleSaveAlias = async () => {
+    if (!targetDockerForAlias) return;
+    const cName = targetDockerForAlias.name;
+    const clean = aliasInputValue ? aliasInputValue.trim() : '';
+    await saveDockerAlias(cName, clean);
+    setDockerAliases(prev => {
+      const updated = { ...prev };
+      if (clean) {
+        updated[cName] = clean;
+      } else {
+        delete updated[cName];
+      }
+      return updated;
+    });
+    setAliasModalVisible(false);
+    showConfirm({
+      type: 'success',
+      title: '配置已生效',
+      message: clean
+        ? `已成功为容器「${cName}」设置专属配置：\n${clean.startsWith('http') ? clean : `简称: ${clean} (自动代入模板)`}`
+        : `已清除容器「${cName}」的专属简称，恢复为默认解析规则。`,
+      confirmText: '好的',
+      showCancel: false,
+    });
+  };
+
+  const handleClearAlias = async () => {
+    if (!targetDockerForAlias) return;
+    const cName = targetDockerForAlias.name;
+    await removeDockerAlias(cName);
+    setDockerAliases(prev => {
+      const updated = { ...prev };
+      delete updated[cName];
+      return updated;
+    });
+    setAliasInputValue('');
+    setAliasModalVisible(false);
+  };
 
   const toggleDocker = async (name, currentStatus) => {
     const isStopping = currentStatus === 'running';
@@ -283,6 +397,7 @@ export default function DockerDetailsScreen() {
           const cpuVal = docker.cpu !== undefined && docker.cpu !== null ? String(docker.cpu) : '0%';
           const cpuText = cpuVal.includes('%') ? cpuVal : `${cpuVal}%`;
           const isRunning = docker.status === 'running';
+          const webUiInfo = resolveDockerWebUiUrl(docker, proxyConfig, dockerAliases, serverHost);
 
           return (
             <View key={index} style={styles.card}>
@@ -314,6 +429,41 @@ export default function DockerDetailsScreen() {
                 ) : (
                   <Text style={[styles.stoppedText, { color: colors.muted }]}>已停止运行</Text>
                 )}
+
+                {/* WebUI & Proxy Shortcut Row */}
+                <View style={styles.webUiRow}>
+                  {webUiInfo.targetUrl ? (
+                    <TouchableOpacity
+                      style={[
+                        styles.webUiTag,
+                        webUiInfo.isCustom && styles.webUiTagCustom,
+                        !isRunning && { opacity: 0.6 }
+                      ]}
+                      onPress={() => handleOpenWebUi(webUiInfo.targetUrl)}
+                      onLongPress={() => handleShowWebUiOptions(docker, webUiInfo)}
+                      activeOpacity={0.75}
+                    >
+                      <Globe size={11} color="#ffffff" style={{ marginRight: 3 }} />
+                      <Text style={styles.webUiTagText} numberOfLines={1}>
+                        {webUiInfo.isCustom
+                          ? (webUiInfo.isFullUrl ? '专属网址' : `简称: ${webUiInfo.alias}`)
+                          : (webUiInfo.isProxy ? '反代Web' : 'WebUI')}
+                      </Text>
+                      <ExternalLink size={10} color="rgba(255, 255, 255, 0.85)" style={{ marginLeft: 3 }} />
+                    </TouchableOpacity>
+                  ) : null}
+
+                  <TouchableOpacity
+                    style={styles.aliasEditBtn}
+                    onPress={() => handleOpenAliasModal(docker, webUiInfo)}
+                    activeOpacity={0.7}
+                  >
+                    <Sliders size={11} color={colors.sub} style={{ marginRight: 3 }} />
+                    <Text style={[styles.aliasEditBtnText, { color: colors.sub }]}>
+                      {webUiInfo.isCustom ? '修改' : (webUiInfo.targetUrl ? '定制' : '+ 配置WebUI')}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               </View>
 
               <View style={styles.controlContainer}>
@@ -444,6 +594,89 @@ export default function DockerDetailsScreen() {
             )}
           </ScrollView>
         </View>
+      {/* Container Custom Alias / URL Edit Modal */}
+      <Modal
+        visible={aliasModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAliasModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalOverlayCenter}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setAliasModalVisible(false)} />
+          <View style={[styles.aliasModalBox, { backgroundColor: colors.card }]}>
+            <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
+              <Globe color={colors.accent} size={28} />
+            </View>
+            <Text style={[styles.aliasModalTitle, { color: colors.textStrong }]}>
+              配置 Web 界面 · {targetDockerForAlias?.name}
+            </Text>
+            <Text style={[styles.aliasModalSub, { color: colors.sub }]}>
+              {proxyConfig.enabled && proxyConfig.template
+                ? `全局模板：${proxyConfig.template}\n输入简称（如 qb）将自动拼接，或输入独立完整网址。`
+                : '全局反代模板未开启或未配置。建议直接输入完整网址（如 https://...），或前往【设置】配置全局反代模板。'}
+            </Text>
+
+            <TextInput
+              style={[styles.aliasModalInput, { backgroundColor: colors.input, color: colors.textStrong }]}
+              value={aliasInputValue}
+              onChangeText={setAliasInputValue}
+              autoFocus
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="输入简称 (如 qb) 或完整网址 (如 https://...)"
+              placeholderTextColor={colors.muted}
+            />
+
+            {/* Live Preview Box */}
+            <View style={[styles.previewBox, { backgroundColor: colors.input }]}>
+              <Text style={[styles.previewLabel, { color: colors.sub }]}>跳转预览:</Text>
+              <Text style={[styles.previewUrl, { color: colors.accent }]} numberOfLines={2}>
+                {(() => {
+                  const val = aliasInputValue ? aliasInputValue.trim() : '';
+                  if (!val) {
+                    if (proxyConfig.enabled && proxyConfig.template && targetDockerForAlias) {
+                      return formatProxyUrl(proxyConfig.template, targetDockerForAlias.name, targetDockerForAlias.port);
+                    }
+                    return targetDockerForAlias?.webui || (targetDockerForAlias?.port ? `http://${serverHost || 'IP'}:${targetDockerForAlias.port}` : '未检测到默认访问地址');
+                  }
+                  if (val.startsWith('http://') || val.startsWith('https://')) {
+                    return val;
+                  }
+                  if (proxyConfig.template) {
+                    return formatProxyUrl(proxyConfig.template, val, targetDockerForAlias?.port);
+                  }
+                  return `简称: ${val} (需在【设置】开启反代模板后方可拼接)`;
+                })()}
+              </Text>
+            </View>
+
+            <View style={styles.aliasModalBtns}>
+              {dockerAliases[targetDockerForAlias?.name] ? (
+                <TouchableOpacity
+                  style={[styles.aliasModalBtn, { backgroundColor: 'rgba(239, 68, 68, 0.15)', marginRight: 8 }]}
+                  onPress={handleClearAlias}
+                >
+                  <Text style={[styles.aliasModalBtnText, { color: colors.red }]}>恢复默认</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                style={[styles.aliasModalBtn, { backgroundColor: colors.input, marginRight: 8 }]}
+                onPress={() => setAliasModalVisible(false)}
+              >
+                <Text style={[styles.aliasModalBtnText, { color: colors.sub }]}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.aliasModalBtn, { backgroundColor: colors.accent, flex: 1 }]}
+                onPress={handleSaveAlias}
+              >
+                <Text style={[styles.aliasModalBtnText, { color: '#ffffff' }]}>保存生效</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Modern Confirm Dialog */}
@@ -633,5 +866,115 @@ const createStyles = (colors) => StyleSheet.create({
   logLoadingText: {
     color: '#94a3b8',
     fontSize: 13,
+  },
+
+  webUiRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+  },
+  webUiTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.accent,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  webUiTagCustom: {
+    backgroundColor: colors.purple,
+  },
+  webUiTagText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  aliasEditBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.input,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  aliasEditBtnText: {
+    fontSize: 11,
+  },
+  modalOverlayCenter: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  aliasModalBox: {
+    width: '100%',
+    maxWidth: 380,
+    borderRadius: 20,
+    padding: 22,
+    alignItems: 'center',
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+  },
+  dialogIconBadge: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  aliasModalTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+  aliasModalSub: {
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  aliasModalInput: {
+    width: '100%',
+    height: 44,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    fontSize: 14,
+    marginBottom: 12,
+  },
+  previewBox: {
+    width: '100%',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 18,
+  },
+  previewLabel: {
+    fontSize: 11,
+    marginBottom: 2,
+  },
+  previewUrl: {
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  aliasModalBtns: {
+    flexDirection: 'row',
+    width: '100%',
+  },
+  aliasModalBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  aliasModalBtnText: {
+    fontSize: 14,
+    fontWeight: 'bold',
   },
 });
