@@ -462,25 +462,6 @@ export default function StorageDetailsScreen({ navigation }) {
             </View>
           </View>
 
-        {/* 实时读写速率 */}
-        <View style={styles.diskIoRow}>
-          <View style={styles.diskIoItem}>
-            <ArrowDown size={11} color={colors.networkDown} style={{ marginRight: 3 }} />
-            <Text style={styles.diskIoLabel}>读取: </Text>
-            <Text style={[styles.diskIoValue, { color: colors.networkDown }]}>
-              {formatDiskSpeed(curSpeed.read)}
-            </Text>
-          </View>
-          <View style={styles.diskIoDivider} />
-          <View style={styles.diskIoItem}>
-            <ArrowUp size={11} color={colors.networkUp} style={{ marginRight: 3 }} />
-            <Text style={styles.diskIoLabel}>写入: </Text>
-            <Text style={[styles.diskIoValue, { color: colors.networkUp }]}>
-              {formatDiskSpeed(curSpeed.write)}
-            </Text>
-          </View>
-        </View>
-
           {/* 盘体温度 */}
           <View style={styles.metricGridItem}>
             <Text style={styles.metricGridLabel}>盘体温度</Text>
@@ -515,6 +496,25 @@ export default function StorageDetailsScreen({ navigation }) {
                 {numErrors} 次
               </Text>
             </View>
+          </View>
+        </View>
+
+        {/* 独立一行：实时读写速率 (读为上箭头，写为下箭头) */}
+        <View style={styles.diskIoRow}>
+          <View style={styles.diskIoItem}>
+            <ArrowUp size={11} color={colors.networkDown} style={{ marginRight: 3 }} />
+            <Text style={styles.diskIoLabel}>读取: </Text>
+            <Text style={[styles.diskIoValue, { color: colors.networkDown }]}>
+              {formatDiskSpeed(curSpeed.read)}
+            </Text>
+          </View>
+          <View style={styles.diskIoDivider} />
+          <View style={styles.diskIoItem}>
+            <ArrowDown size={11} color={colors.networkUp} style={{ marginRight: 3 }} />
+            <Text style={styles.diskIoLabel}>写入: </Text>
+            <Text style={[styles.diskIoValue, { color: colors.networkUp }]}>
+              {formatDiskSpeed(curSpeed.write)}
+            </Text>
           </View>
         </View>
 

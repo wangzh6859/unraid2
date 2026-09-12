@@ -17,7 +17,7 @@ import {
   removeDockerAlias, resolveDockerWebUrl,
 } from '../utils/dockerWebUiManager';
 
-export default function DockerDetailsScreen() {
+export default function DockerDetailsScreen({ route }) {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
@@ -30,7 +30,15 @@ export default function DockerDetailsScreen() {
   const [updatingDocker, setUpdatingDocker] = useState(null);
 
   // 顶部分段切换：独立容器 vs Compose 堆栈
-  const [dockerMode, setDockerMode] = useState('containers'); // 'containers' | 'compose' | 'apps'
+  const [dockerMode, setDockerMode] = useState('containers');
+  useEffect(() => {
+    if (route?.params?.initialMode) {
+      setDockerMode(route.params.initialMode);
+      if (route.params.initialMode === 'apps') {
+        fetchCaApps();
+      }
+    }
+  }, [route?.params?.initialMode]); // 'containers' | 'compose' | 'apps'
   const [checkingUpdates, setCheckingUpdates] = useState(false);
 
   // 社区应用市场 (Community Applications) 状态
@@ -173,8 +181,29 @@ export default function DockerDetailsScreen() {
     setServerUrl(savedUrl || '');
   };
 
+  
+  // 每 12 小时静默自动检查 Docker 容器更新
+  const checkDockerUpdatesAuto = async () => {
+    try {
+      const lastCheck = await AsyncStorage.getItem('@last_docker_update_check_time');
+      const now = Date.now();
+      if (!lastCheck || (now - parseInt(lastCheck, 10)) > 12 * 3600 * 1000) {
+        const savedUrl = await AsyncStorage.getItem('@server_url');
+        const savedToken = await AsyncStorage.getItem('@api_token');
+        if (savedUrl && savedToken) {
+          await AsyncStorage.setItem('@last_docker_update_check_time', String(now));
+          fetch(`${savedUrl}/api.php?token=${savedToken}&action=check_docker_updates`)
+            .then(r => r.json())
+            .then(() => fetchDockerData())
+            .catch(() => {});
+        }
+      }
+    } catch (e) {}
+  };
+
   useFocusEffect(
     useCallback(() => {
+      checkDockerUpdatesAuto();
       let isActive = true;
       let timerId = null;
       const pollData = async () => {
@@ -837,14 +866,14 @@ export default function DockerDetailsScreen() {
 
   return (
     <View style={styles.container}>
-      {/* 顶部分段切换：独立容器 vs Compose 堆栈 */}
+      {/* 顶部分段切换：独立容器 vs Compose 堆栈 vs 应用市场 */}
       <View style={styles.segmentContainer}>
         <TouchableOpacity
           style={[styles.segmentBtn, dockerMode === 'containers' && styles.segmentBtnActive]}
           onPress={() => setDockerMode('containers')}
           activeOpacity={0.8}
         >
-          <Box size={14} color={dockerMode === 'containers' ? '#ffffff' : colors.sub} style={{ marginRight: 6 }} />
+          <Box size={14} color={dockerMode === 'containers' ? '#ffffff' : colors.sub} style={{ marginRight: 5 }} />
           <Text style={[styles.segmentBtnText, dockerMode === 'containers' && styles.segmentBtnTextActive]}>
             独立容器 ({dockers.length})
           </Text>
@@ -858,9 +887,23 @@ export default function DockerDetailsScreen() {
           }}
           activeOpacity={0.8}
         >
-          <Layers size={14} color={dockerMode === 'compose' ? '#ffffff' : colors.sub} style={{ marginRight: 6 }} />
+          <Layers size={14} color={dockerMode === 'compose' ? '#ffffff' : colors.sub} style={{ marginRight: 5 }} />
           <Text style={[styles.segmentBtnText, dockerMode === 'compose' && styles.segmentBtnTextActive]}>
-            Compose 堆栈 ({composeProjects.length})
+            Compose ({composeProjects.length})
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.segmentBtn, dockerMode === 'apps' && styles.segmentBtnActive]}
+          onPress={() => {
+            setDockerMode('apps');
+            if (caApps.length === 0) fetchCaApps();
+          }}
+          activeOpacity={0.8}
+        >
+          <ShoppingBag size={14} color={dockerMode === 'apps' ? '#ffffff' : colors.sub} style={{ marginRight: 5 }} />
+          <Text style={[styles.segmentBtnText, dockerMode === 'apps' && styles.segmentBtnTextActive]}>
+            应用市场
           </Text>
         </TouchableOpacity>
       </View>
@@ -1146,29 +1189,12 @@ export default function DockerDetailsScreen() {
                 statusFilter === 'updates' && styles.tabBtnTextActive,
                 updateCount > 0 && { color: '#f59e0b', fontWeight: 'bold' }
               ]}>
-                可更新 {updateCount}
+                有更新 {updateCount}
               </Text>
             </TouchableOpacity>
           </View>
 
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            {/* 检查更新按钮 */}
-            <TouchableOpacity
-              style={[styles.checkUpdatesBtn, checkingUpdates && { opacity: 0.7 }]}
-              onPress={handleCheckDockerUpdates}
-              disabled={checkingUpdates}
-              activeOpacity={0.8}
-            >
-              {checkingUpdates ? (
-                <ActivityIndicator size="small" color={colors.accent} style={{ marginRight: 4 }} />
-              ) : (
-                <RefreshCw size={12} color={colors.accent} style={{ marginRight: 4 }} />
-              )}
-              <Text style={[styles.checkUpdatesText, { color: colors.accent }]}>
-                {checkingUpdates ? '检查中' : '检查更新'}
-              </Text>
-            </TouchableOpacity>
-
             {/* 排序切换 */}
             <TouchableOpacity
               style={[styles.sortToggleBtn, { marginLeft: 6 }]}

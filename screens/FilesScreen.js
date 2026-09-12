@@ -467,7 +467,7 @@ export default function FilesScreen({ navigation }) {
       // and eliminates the fake 6MB/s spike and stuck progress delay!
       // -----------------------------------------------------------------------
       let nativeSucceeded = false;
-      const MAX_PHP_DIRECT = 2 * 1024 * 1024; // 2 MB limit for direct multipart
+      const MAX_PHP_DIRECT = 5 * 1024 * 1024; // 5 MB direct multipart threshold // 2 MB limit for direct multipart
 
       if (totalSize <= MAX_PHP_DIRECT) {
         backgroundTransferManager.updateForegroundProgress({
@@ -565,10 +565,7 @@ export default function FilesScreen({ navigation }) {
       // -----------------------------------------------------------------------
       // Strategy 2: High-Throughput Pipelined Chunk Engine (POST)
       // -----------------------------------------------------------------------
-      let CHUNK_SIZE = 2 * 1024 * 1024; // 2 MB per chunk
-      if (totalSize > 20 * 1024 * 1024) {
-        CHUNK_SIZE = 3.5 * 1024 * 1024; // 3.5 MB per chunk for larger files
-      }
+      let CHUNK_SIZE = 1 * 1024 * 1024; // 1 MB safe high-speed chunk, well within post_max_size limits
 
       const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
       let startChunk = taskItem.chunkIndex || 0;

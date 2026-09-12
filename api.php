@@ -177,7 +177,11 @@ function get_valid_tokens() {
     return $tokens;
 }
 
-$rawGlobalInput = @file_get_contents('php://input');
+$actionParam = isset($_GET['action']) ? $_GET['action'] : (isset($_POST['action']) ? $_POST['action'] : '');
+$rawGlobalInput = '';
+if ($actionParam !== 'file_upload' && $actionParam !== 'file_chunk') {
+    $rawGlobalInput = @file_get_contents('php://input');
+}
 $globalJsonInput = !empty($rawGlobalInput) ? @json_decode($rawGlobalInput, true) : null;
 
 function verify_auth() {
@@ -550,6 +554,93 @@ function get_server_mac() {
     return '';
 }
 
+
+function get_docker_updates_map() {
+    $dockerUpdatesMap = [];
+    $iniFile = '/var/local/emhttp/docker.ini';
+    if (!file_exists($iniFile)) {
+        return $dockerUpdatesMap;
+    }
+
+    // Method 1: parse_ini_file
+    $ini = @parse_ini_file($iniFile, true);
+    if (is_array($ini)) {
+        foreach ($ini as $cName => $sec) {
+            $isUpdate = (
+                (isset($sec['updated']) && ($sec['updated'] === 'false' || $sec['updated'] === 0 || $sec['updated'] === '0' || strtolower((string)$sec['updated']) === 'no')) ||
+                (isset($sec['update']) && ($sec['update'] === 'true' || $sec['update'] === 'yes' || $sec['update'] === 1 || $sec['update'] === '1' || stripos((string)$sec['update'], 'ready') !== false)) ||
+                (isset($sec['install']) && stripos((string)$sec['install'], 'update') !== false) ||
+                (isset($sec['status']) && stripos((string)$sec['status'], 'update') !== false)
+            );
+            if ($isUpdate) {
+                $dockerUpdatesMap[$cName] = true;
+                $dockerUpdatesMap[strtolower($cName)] = true;
+                $dockerUpdatesMap[ltrim($cName, '/')] = true;
+                if (!empty($sec['repository'])) {
+                    $dockerUpdatesMap[$sec['repository']] = true;
+                    $dockerUpdatesMap[strtolower($sec['repository'])] = true;
+                }
+            }
+        }
+    }
+
+    // Method 2: Robust Line-by-line regex fallback (handles unquoted/invalid INI characters)
+    $raw = @file_get_contents($iniFile);
+    if ($raw) {
+        $currSec = '';
+        $currSecRepo = '';
+        $currSecHasUpdate = false;
+
+        $lines = explode("\n", $raw);
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '' || $line[0] === ';') continue;
+
+            if (preg_match('/^\[(.*)\]$/', $line, $sm)) {
+                if ($currSec !== '' && $currSecHasUpdate) {
+                    $dockerUpdatesMap[$currSec] = true;
+                    $dockerUpdatesMap[strtolower($currSec)] = true;
+                    $dockerUpdatesMap[ltrim($currSec, '/')] = true;
+                    if ($currSecRepo !== '') {
+                        $dockerUpdatesMap[$currSecRepo] = true;
+                        $dockerUpdatesMap[strtolower($currSecRepo)] = true;
+                    }
+                }
+                $currSec = trim($sm[1]);
+                $currSecRepo = '';
+                $currSecHasUpdate = false;
+            } elseif (strpos($line, '=') !== false) {
+                list($key, $val) = explode('=', $line, 2);
+                $key = strtolower(trim($key));
+                $val = trim($val, " \t\n\r\0\x0B\"'");
+                if ($key === 'repository') {
+                    $currSecRepo = $val;
+                }
+                if ($key === 'updated' && in_array(strtolower($val), ['false', '0', 'no', 'update', 'available'])) {
+                    $currSecHasUpdate = true;
+                }
+                if ($key === 'update' && in_array(strtolower($val), ['true', '1', 'yes', 'update', 'ready'])) {
+                    $currSecHasUpdate = true;
+                }
+                if (($key === 'status' || $key === 'install') && stripos($val, 'update') !== false) {
+                    $currSecHasUpdate = true;
+                }
+            }
+        }
+        if ($currSec !== '' && $currSecHasUpdate) {
+            $dockerUpdatesMap[$currSec] = true;
+            $dockerUpdatesMap[strtolower($currSec)] = true;
+            $dockerUpdatesMap[ltrim($currSec, '/')] = true;
+            if ($currSecRepo !== '') {
+                $dockerUpdatesMap[$currSecRepo] = true;
+                $dockerUpdatesMap[strtolower($currSecRepo)] = true;
+            }
+        }
+    }
+
+    return $dockerUpdatesMap;
+}
+
 function handle_status() {
     // 1. CPU Usage
     $cpuUsage = 0;
@@ -791,28 +882,21 @@ $disks[] = [
         }
     }
 
-    $dockerUpdatesMap = [];
-    if (file_exists('/var/local/emhttp/docker.ini')) {
-        $ini = @parse_ini_file('/var/local/emhttp/docker.ini', true);
-        if (is_array($ini)) {
-            foreach ($ini as $cName => $sec) {
-                $isUpdate = (
-                    (isset($sec['updated']) && ($sec['updated'] === 'false' || $sec['updated'] === 0 || $sec['updated'] === '0')) ||
-                    (isset($sec['update']) && ($sec['update'] === 'true' || $sec['update'] === 'yes' || $sec['update'] === 1 || $sec['update'] === '1')) ||
-                    (isset($sec['install']) && stripos($sec['install'], 'update') !== false) ||
-                    (isset($sec['status']) && stripos($sec['status'], 'update') !== false)
-                );
-                if ($isUpdate) {
-                    $dockerUpdatesMap[$cName] = true;
-                    $dockerUpdatesMap[strtolower($cName)] = true;
-                    $dockerUpdatesMap[ltrim($cName, '/')] = true;
-                }
-            }
+    // 12-hour background silent update check
+    $lastCheckFile = '/tmp/unraid_last_docker_update_check.txt';
+    $lastCheckTime = file_exists($lastCheckFile) ? (int)@file_get_contents($lastCheckFile) : 0;
+    if ((time() - $lastCheckTime) > 43200) { // 12 hours
+        @file_put_contents($lastCheckFile, time());
+        $upScript = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate';
+        if (file_exists($upScript)) {
+            @exec("nohup {$upScript} check >/dev/null 2>&1 &");
         }
     }
+
+    $dockerUpdatesMap = get_docker_updates_map();
     
     $serverHost = !empty($_SERVER['HTTP_HOST']) ? preg_replace('/:.*$/', '', $_SERVER['HTTP_HOST']) : '192.168.1.1';
-    $dockerPs = @shell_exec('docker ps -a --format "{{.Names}}\t{{.Status}}\t{{.ID}}\t{{.Ports}}" 2>/dev/null');
+    $dockerPs = @shell_exec('docker ps -a --format "{{.Names}}\t{{.Status}}\t{{.ID}}\t{{.Ports}}\t{{.Image}}" 2>/dev/null');
     if ($dockerPs) {
         $lines = explode("\n", trim($dockerPs));
         foreach ($lines as $line) {
@@ -822,6 +906,7 @@ $disks[] = [
                 $cleanName = ltrim($cName, '/');
                 $cId = isset($cols[2]) ? trim($cols[2]) : '';
                 $cPortsRaw = isset($cols[3]) ? trim($cols[3]) : '';
+                $cImage = isset($cols[4]) ? trim($cols[4]) : '';
                 $cStatus = (strpos($cols[1], 'Up') === 0) ? 'running' : 'stopped';
                 
                 // Parse primary web port & WebUI URL
@@ -854,7 +939,13 @@ $disks[] = [
                     'ports' => $cPortsRaw,
                     'port' => $primaryPort,
                     'webui' => $webuiUrl,
-                    'update_available' => !empty($dockerUpdatesMap[$cleanName]) || !empty($dockerUpdatesMap[$cName]) || !empty($dockerUpdatesMap[strtolower($cleanName)]),
+                    'update_available' => (
+                    !empty($dockerUpdatesMap[$cleanName]) ||
+                    !empty($dockerUpdatesMap[$cName]) ||
+                    !empty($dockerUpdatesMap[strtolower($cleanName)]) ||
+                    (!empty($cImage) && !empty($dockerUpdatesMap[$cImage])) ||
+                    (!empty($cImage) && !empty($dockerUpdatesMap[strtolower($cImage)]))
+                ),
                 ];
             }
         }
@@ -3001,32 +3092,16 @@ function handle_check_docker_updates() {
         $out = @shell_exec('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check 2>&1');
     }
 
-    // Re-read docker.ini
-    $updatesCount = 0;
-    $updates = [];
-    if (file_exists('/var/local/emhttp/docker.ini')) {
-        $ini = @parse_ini_file('/var/local/emhttp/docker.ini', true);
-        if (is_array($ini)) {
-            foreach ($ini as $cName => $sec) {
-                $isUpdate = (
-                    (isset($sec['updated']) && ($sec['updated'] === 'false' || $sec['updated'] === 0 || $sec['updated'] === '0')) ||
-                    (isset($sec['update']) && ($sec['update'] === 'true' || $sec['update'] === 'yes' || $sec['update'] === 1 || $sec['update'] === '1')) ||
-                    (isset($sec['install']) && stripos($sec['install'], 'update') !== false) ||
-                    (isset($sec['status']) && stripos($sec['status'], 'update') !== false)
-                );
-                if ($isUpdate) {
-                    $updatesCount++;
-                    $updates[] = $cName;
-                }
-            }
-        }
-    }
+    @file_put_contents('/tmp/unraid_last_docker_update_check.txt', time());
+
+    // Re-read docker updates map
+    $dockerUpdatesMap = get_docker_updates_map();
+    $updatesCount = count($dockerUpdatesMap);
 
     json_output([
         'status' => 'success',
-        'message' => $updatesCount > 0 ? "检测完成，发现 {$updatesCount} 个容器有新版本可用！" : '检测完成，所有容器已是最新版本。',
+        'message' => $updatesCount > 0 ? "检测完成，发现可用更新！" : '检测完成，所有容器已是最新版本。',
         'updates_count' => $updatesCount,
-        'update_containers' => $updates,
         'output' => trim($out)
     ]);
 }

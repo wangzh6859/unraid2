@@ -6,7 +6,7 @@ import {
 } from 'react-native';
 import Svg, { Path, Circle, Defs, LinearGradient, Stop, G, Rect } from 'react-native-svg';
 import {
-  Cpu, Database, HardDrive, Box, Monitor, Wifi, Zap, Server, Key,
+  ShoppingBag, Cpu, Database, HardDrive, Box, Monitor, Wifi, Zap, Server, Key,
   ShieldCheck, AlertCircle, Play, Pause, Square, FileText, Search,
   RefreshCw, Copy, Check, X, ArrowDown, ArrowUp, ExternalLink, Power,
   ChevronRight, RefreshCcw, Layers, Terminal, Bell, Clock, AlertTriangle, Info, CheckCircle2 } from 'lucide-react-native';
@@ -1040,11 +1040,11 @@ export default function DashboardScreen({ navigation }) {
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 10 }}>
-              <ArrowDown size={11} color={colors.networkDown} style={{ marginRight: 2 }} />
+              <ArrowUp size={11} color={colors.networkDown} style={{ marginRight: 2 }} />
               <Text style={{ fontSize: 11, color: colors.networkDown, fontFamily: 'monospace' }}>读 {formatSpeed(diskIoSpeed.read)}</Text>
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <ArrowUp size={11} color={colors.networkUp} style={{ marginRight: 2 }} />
+              <ArrowDown size={11} color={colors.networkUp} style={{ marginRight: 2 }} />
               <Text style={{ fontSize: 11, color: colors.networkUp, fontFamily: 'monospace' }}>写 {formatSpeed(diskIoSpeed.write)}</Text>
             </View>
           </View>
@@ -1146,6 +1146,16 @@ export default function DashboardScreen({ navigation }) {
           >
             <Text style={styles.dockerSummaryNum}>{dockers.running || 0}</Text>
             <Text style={styles.dockerSummaryLabel}>运行中</Text>
+          </TouchableOpacity>
+
+          {/* 社区应用市场快捷入口 */}
+          <TouchableOpacity
+            style={[styles.dockerSummaryTile, { backgroundColor: isDark ? 'rgba(168, 85, 247, 0.15)' : '#f3e8ff' }]}
+            onPress={() => navigation.navigate('容器', { initialMode: 'apps' })}
+            activeOpacity={0.8}
+          >
+            <ShoppingBag size={18} color="#a855f7" style={{ marginBottom: 4 }} />
+            <Text style={[styles.dockerSummaryLabel, { color: '#a855f7', fontWeight: 'bold' }]}>应用市场</Text>
           </TouchableOpacity>
 
           {/* 常用容器磁贴 */}
@@ -1475,6 +1485,24 @@ export default function DashboardScreen({ navigation }) {
 // Stylesheet (Dynamic Theme Driven)
 // -------------------------------------------------------------
 const createStyles = (colors, isDark) => StyleSheet.create({
+  compactGpuCard: {
+    backgroundColor: colors.card,
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  compactGpuHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  compactGpuTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+  },
   gpuVendorBadge: {
     paddingHorizontal: 8,
     paddingVertical: 3,
