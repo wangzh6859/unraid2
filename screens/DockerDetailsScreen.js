@@ -1422,10 +1422,23 @@ export default function DockerDetailsScreen({ route }) {
 
                     
                     {docker.update_available && (
-                      <View style={[styles.updateBadge, { backgroundColor: 'rgba(245, 158, 11, 0.2)', borderWidth: 1, borderColor: '#f59e0b' }]}>
-                        <ArrowUp size={11} color="#f59e0b" style={{ marginRight: 3 }} />
-                        <Text style={[styles.updateBadgeText, { color: '#f59e0b', fontWeight: 'bold' }]}>有新版本</Text>
-                      </View>
+                      <TouchableOpacity
+                        style={styles.updateBadge}
+                        onPress={() => handleUpdateDocker(docker.name)}
+                        disabled={updatingDocker === docker.name}
+                        activeOpacity={0.7}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        accessibilityLabel="升级容器"
+                      >
+                        {updatingDocker === docker.name ? (
+                          <ActivityIndicator size="small" color="#f59e0b" style={{ marginRight: 4 }} />
+                        ) : (
+                          <ArrowUp size={11} color="#f59e0b" style={{ marginRight: 3 }} />
+                        )}
+                        <Text style={styles.updateBadgeText}>
+                          {updatingDocker === docker.name ? '升级中...' : '有新版本 · 升级'}
+                        </Text>
+                      </TouchableOpacity>
                     )}
 
                     {docker.port ? (
@@ -1502,24 +1515,6 @@ export default function DockerDetailsScreen({ route }) {
                       <RotateCw size={14} color={colors.sub} />
                     </TouchableOpacity>
                   ) : null}
-
-                  
-                  {docker.update_available && (
-                    <TouchableOpacity
-                      style={styles.updatePillBtn}
-                      onPress={() => handleUpdateDocker(docker.name)}
-                      disabled={updatingDocker === docker.name}
-                      activeOpacity={0.7}
-                      accessibilityLabel="升级容器"
-                    >
-                      {updatingDocker === docker.name ? (
-                        <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 4 }} />
-                      ) : (
-                        <ArrowUp size={12} color="#ffffff" style={{ marginRight: 4 }} />
-                      )}
-                      <Text style={styles.updatePillText}>升级</Text>
-                    </TouchableOpacity>
-                  )}
 
                   <TouchableOpacity
                     style={[styles.circleActionBtn, { backgroundColor: isRunning ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)' }]}
@@ -2601,16 +2596,16 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     fontWeight: 'bold',
   },
 
-  // 容器更新徽章
+  // 容器更新徽章 (可直接点击升级)
   updateBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
+    backgroundColor: 'rgba(245, 158, 11, 0.16)',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
     borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
+    borderColor: '#f59e0b',
   },
   updateBadgeText: {
     fontSize: 10,

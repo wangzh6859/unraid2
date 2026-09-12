@@ -2296,6 +2296,12 @@ function handle_file_write() {
 }
 
 function handle_file_upload() {
+    @set_time_limit(0);
+    @ini_set('max_execution_time', '0');
+    @ini_set('max_input_time', '0');
+    @ini_set('memory_limit', '512M');
+    @ignore_user_abort(true);
+
     $rawPath = isset($_GET['path']) ? $_GET['path'] : (isset($_POST['path']) ? $_POST['path'] : ALLOWED_ROOT);
     $targetDir = sanitize_path($rawPath);
     
@@ -2408,6 +2414,7 @@ function handle_file_upload() {
 
         $bytesWritten = 0;
         while (!feof($in)) {
+            @set_time_limit(0);
             $buff = fread($in, 262144);
             if ($buff === false || $buff === '') {
                 break;
@@ -2418,6 +2425,7 @@ function handle_file_upload() {
             }
             $bytesWritten += $w;
         }
+        @fflush($out);
         @fclose($in);
         @fclose($out);
 

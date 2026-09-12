@@ -187,7 +187,10 @@ export default function FilesScreen({ navigation }) {
     if (csrfTokenRef.current) return csrfTokenRef.current;
     const cleanUrl = (baseUrl || '').replace(/\/+$/, '');
     try {
-      const res = await fetch(`${cleanUrl}/api.php?token=${encodeURIComponent(token)}&action=csrf_token`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1500);
+      const res = await fetch(`${cleanUrl}/api.php?token=${encodeURIComponent(token)}&action=csrf_token`, { signal: controller.signal });
+      clearTimeout(timeoutId);
       const data = await res.json();
       if (data && data.csrf_token) {
         setCsrfToken(data.csrf_token);
@@ -439,298 +442,91 @@ export default function FilesScreen({ navigation }) {
       const activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
       const csrfQuery = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
 
-      // -----------------------------------------------------------------------
-      // Strategy 1: Fast Native Binary Streaming via FileSystem.createUploadTask
-      // ONLY for small files (< 5MB) and ONLY when starting from scratch (chunkIndex === 0).
-      // For files >= 5MB, single-request upload risks proxy/PHP 60s timeout, so we use Resumable Chunks.
-      // -----------------------------------------------------------------------
-      const canUseNativeStream = totalSize < 5 * 1024 * 1024 && (!taskItem.chunkIndex || taskItem.chunkIndex === 0);
-      let nativeSucceeded = false;
-
-      if (canUseNativeStream) {
-        const uploadUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}`;
-
-        let lastReportTime = Date.now();
-        let lastReportBytes = 0;
-
-        try {
-          const uploadTask = FileSystem.createUploadTask(
-            uploadUrl,
-            fileUri,
-            {
-              headers: {
-                'Content-Type': 'application/octet-stream',
-                'X-API-Token': apiToken,
-                ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
-              },
-              httpMethod: 'POST',
-              uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-            },
-            (progressData) => {
-              const totalSent = progressData.totalBytesSent || 0;
-              const totalExp = progressData.totalBytesExpectedToSend || totalSize;
-              const now = Date.now();
-              const elapsed = (now - lastReportTime) / 1000;
-
-              if (elapsed >= 0.4 || totalSent >= totalExp) {
-                const speedBytes = elapsed > 0 ? (totalSent - lastReportBytes) / elapsed : 0;
-                lastReportTime = now;
-                lastReportBytes = totalSent;
-                const spdStr = `${formatBytesFixed(speedBytes)}/s`;
-                const progressPct = totalExp > 0 ? Math.min(99, Math.round((totalSent / totalExp) * 100)) : 0;
-                const szStr = `${formatBytesFixed(totalSent)} / ${formatBytesFixed(totalExp)}`;
-
-                setTransfers(prev => prev.map(t => (t.id === taskId ? {
-                  ...t,
-                  status: 'running',
-                  progress: progressPct,
-                  transferredBytes: totalSent,
-                  totalBytes: totalExp,
-                  sizeText: szStr,
-                  speedDisplay: spdStr,
-                } : t)));
-
-                backgroundTransferManager.updateForegroundProgress({
-                  name: taskItem.name,
-                  progress: progressPct,
-                  speedStr: spdStr,
-                  sizeText: szStr,
-                });
-              }
-            }
-          );
-
-          activeTasksRef.current[taskId].uploadTask = uploadTask;
-          const res = await uploadTask.uploadAsync();
-
-          if (res && res.status >= 200 && res.status < 300) {
-            let parsed = null;
-            try { parsed = JSON.parse(res.body); } catch (_) {}
-            if (!parsed || parsed.status === 'success') {
-              nativeSucceeded = true;
-            }
-          }
-        } catch (nativeErr) {
-          console.log('[FilesScreen] Native stream upload failed, continuing to chunk engine:', nativeErr);
-        }
-
-        if (nativeSucceeded) {
-          delete activeTasksRef.current[taskId];
-          if (taskItem.uri && taskItem.uri.startsWith(FileSystem.cacheDirectory + 'up_')) {
-            FileSystem.deleteAsync(taskItem.uri, { idempotent: true }).catch(() => {});
-          }
-          const savedPath = `${taskItem.targetPath}/${taskItem.name}`;
-          setTransfers(prev => {
-            const next = prev.map(t => (t.id === taskId ? {
-              ...t,
-              status: 'success',
-              progress: 100,
-              transferredBytes: totalSize,
-              totalBytes: totalSize,
-              sizeText: `${formatBytesFixed(totalSize)} / ${formatBytesFixed(totalSize)}`,
-              speedDisplay: '已完成',
-            } : t));
-            saveTransfersQueue(next);
-            return next;
-          });
-          loadDirectory(cleanBaseUrl, apiToken, currentPath);
-          showConfirm({
-            type: 'success',
-            title: '上传成功',
-            message: `文件已成功写入 Unraid 存储：\n${savedPath}`,
-            confirmText: '好的',
-            showCancel: false,
-          });
-          backgroundTransferManager.notifyTransferEnded(taskId, 'success', {
-            name: taskItem.name,
-            sizeText: formatBytesFixed(totalSize),
-          });
-          return;
-        }
-      }
-
-      // -----------------------------------------------------------------------
-      // Strategy 2: Resumable 2MB Pipelined Chunk Engine (Lightweight POST Stream)
-      // Completely solves reverse proxy 60s timeout, memory bloat, and resume from drops!
-      // -----------------------------------------------------------------------
-      const CHUNK_SIZE = 2 * 1024 * 1024; // 2 MB per chunk
-      const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
-      let startChunk = taskItem.chunkIndex || 0;
-      if (startChunk >= totalChunks) startChunk = 0;
-
-      const initialBytes = startChunk * CHUNK_SIZE;
-      const initialPct = totalSize > 0 ? Math.min(99, Math.round((initialBytes / totalSize) * 100)) : 0;
-
-      backgroundTransferManager.updateForegroundProgress({
-        name: taskItem.name,
-        progress: initialPct,
-        speedStr: startChunk > 0 ? '断点续传中...' : '传输中...',
-        sizeText: `${formatBytesFixed(initialBytes)} / ${formatBytesFixed(totalSize)}`,
-        force: true,
-      });
-
+      // Immediately set initial running state
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
         status: 'running',
-        progress: (t.progress !== undefined && t.progress > 0) ? t.progress : initialPct,
-        transferredBytes: (t.transferredBytes !== undefined && t.transferredBytes > 0) ? t.transferredBytes : initialBytes,
+        progress: 0,
+        transferredBytes: 0,
         totalBytes: totalSize,
-        sizeText: `${formatBytesFixed((t.transferredBytes !== undefined && t.transferredBytes > 0) ? t.transferredBytes : initialBytes)} / ${formatBytesFixed(totalSize)}`,
-        speedDisplay: startChunk > 0 ? '断点续传中...' : '传输中...',
+        sizeText: `0 B / ${formatBytesFixed(totalSize)}`,
+        speedDisplay: '正在连接...',
       } : t)));
 
-      let lastTime = Date.now();
-      let lastBytes = startChunk * CHUNK_SIZE;
-      let currentSpeedStr = '';
+      // -----------------------------------------------------------------------
+      // Native High-Speed Binary Streaming via FileSystem.createUploadTask
+      // Directly streams raw bytes from native storage to api.php (php://input).
+      // Provides real-time native callbacks with zero JS memory overhead.
+      // -----------------------------------------------------------------------
+      const uploadUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}`;
 
-      const readChunkAsync = async (chunkIdx) => {
-        const off = chunkIdx * CHUNK_SIZE;
-        if (off >= totalSize) return '';
-        const len = Math.min(CHUNK_SIZE, totalSize - off);
-        if (len <= 0) return '';
-        try {
-          return await FileSystem.readAsStringAsync(fileUri, {
-            encoding: FileSystem.EncodingType.Base64,
-            position: off,
-            length: len,
-          });
-        } catch (readErr) {
-          console.log(`[FilesScreen] Read chunk ${chunkIdx} error:`, readErr);
-          return '';
-        }
-      };
+      let lastReportTime = Date.now();
+      let lastReportBytes = 0;
+      let currentSpeedDisplay = '正在上传...';
 
-      let nextChunkPromise = readChunkAsync(startChunk);
+      const uploadTask = FileSystem.createUploadTask(
+        uploadUrl,
+        fileUri,
+        {
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-API-Token': apiToken,
+            ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
+          },
+          httpMethod: 'POST',
+          uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+        },
+        (progressData) => {
+          const totalSent = progressData.totalBytesSent || 0;
+          const totalExp = progressData.totalBytesExpectedToSend || totalSize;
+          const now = Date.now();
+          const elapsed = (now - lastReportTime) / 1000;
 
-      for (let i = startChunk; i < totalChunks; i++) {
-        if (activeTasksRef.current[taskId]?.cancelled || abortController.signal.aborted) {
-          delete activeTasksRef.current[taskId];
-          return;
-        }
+          if (elapsed >= 0.3 || totalSent >= totalExp) {
+            const speedBytes = elapsed > 0 ? (totalSent - lastReportBytes) / elapsed : 0;
+            lastReportTime = now;
+            lastReportBytes = totalSent;
+            const spdStr = speedBytes > 0 ? `${formatBytesFixed(speedBytes)}/s` : currentSpeedDisplay;
+            currentSpeedDisplay = spdStr;
+            const progressPct = totalExp > 0 ? Math.min(99, Math.round((totalSent / totalExp) * 100)) : 0;
+            const szStr = `${formatBytesFixed(totalSent)} / ${formatBytesFixed(totalExp)}`;
 
-        const offset = i * CHUNK_SIZE;
-        const length = Math.min(CHUNK_SIZE, totalSize - offset);
+            setTransfers(prev => prev.map(t => (t.id === taskId ? {
+              ...t,
+              status: 'running',
+              progress: progressPct,
+              transferredBytes: totalSent,
+              totalBytes: totalExp,
+              sizeText: szStr,
+              speedDisplay: spdStr,
+            } : t)));
 
-        let base64Chunk = await nextChunkPromise;
-        if (!base64Chunk && length > 0) {
-          base64Chunk = await readChunkAsync(i);
-        }
-
-        if (activeTasksRef.current[taskId]?.cancelled || abortController.signal.aborted) {
-          delete activeTasksRef.current[taskId];
-          return;
-        }
-
-        // Pipeline pre-read next chunk while uploading current chunk
-        if (i + 1 < totalChunks) {
-          nextChunkPromise = readChunkAsync(i + 1);
-        } else {
-          nextChunkPromise = null;
-        }
-
-        const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_chunk` +
-          `&path=${encodeURIComponent(taskItem.targetPath)}` +
-          `&filename=${encodeURIComponent(taskItem.name)}` +
-          `&chunk_index=${i}` +
-          `&total_chunks=${totalChunks}` +
-          `&offset=${offset}` +
-          `&total_size=${totalSize}` +
-          `&is_base64=1`;
-
-        let chunkSuccess = false;
-        let chunkAttempt = 0;
-        let lastErr = null;
-
-        while (!chunkSuccess && chunkAttempt < 5) {
-          if (activeTasksRef.current[taskId]?.cancelled || abortController.signal.aborted) {
-            delete activeTasksRef.current[taskId];
-            return;
-          }
-          chunkAttempt++;
-          try {
-            const res = await fetch(chunkUrl, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'text/plain',
-                'Accept': 'application/json',
-                'X-API-Token': apiToken,
-                'X-Base64': '1',
-                ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
-              },
-              body: base64Chunk,
-              signal: abortController.signal,
+            backgroundTransferManager.updateForegroundProgress({
+              name: taskItem.name,
+              progress: progressPct,
+              speedStr: spdStr,
+              sizeText: szStr,
             });
-
-            const resText = await res.text();
-            if (!res.ok || !resText || !resText.trim()) {
-              throw new Error(`HTTP ${res.status}: ${resText ? resText.slice(0, 100) : '服务端未响应'}`);
-            }
-
-            const resData = JSON.parse(resText);
-            if (resData.status !== 'success') {
-              throw new Error(resData.message || '分片写入失败');
-            }
-            chunkSuccess = true;
-          } catch (err) {
-            if (activeTasksRef.current[taskId]?.cancelled || abortController.signal.aborted || err.name === 'AbortError' || (err.message && err.message.includes('abort'))) {
-              delete activeTasksRef.current[taskId];
-              return;
-            }
-            lastErr = err;
-            if (chunkAttempt < 5) {
-              await new Promise(resolve => setTimeout(resolve, 600 * chunkAttempt));
-            }
           }
         }
+      );
 
-        if (!chunkSuccess) {
-          throw new Error(lastErr ? `分片 ${i + 1}/${totalChunks} 上传失败: ${lastErr.message}` : '分片上传失败');
+      activeTasksRef.current[taskId].uploadTask = uploadTask;
+      const res = await uploadTask.uploadAsync();
+
+      if (res && res.status >= 200 && res.status < 300) {
+        let parsed = null;
+        try { parsed = JSON.parse(res.body); } catch (_) {}
+        if (parsed && parsed.status === 'error') {
+          throw new Error(parsed.message || '服务端写入文件失败');
         }
-
-        const currentBytes = offset + length;
-        const now = Date.now();
-        const timeDiff = (now - lastTime) / 1000;
-
-        if (timeDiff >= 0.35 || !currentSpeedStr) {
-          const bytesDiff = currentBytes - lastBytes;
-          if (timeDiff > 0 && bytesDiff > 0) {
-            const currentSpeed = bytesDiff / timeDiff;
-            currentSpeedStr = `${formatBytesFixed(currentSpeed)}/s`;
-          }
-          lastTime = now;
-          lastBytes = currentBytes;
-        }
-
-        const pct = totalSize > 0 ? Math.min(99, Math.round((currentBytes / totalSize) * 100)) : 100;
-
-        setTransfers(prev => {
-          const next = prev.map(t => {
-            if (t.id === taskId) {
-              return {
-                ...t,
-                status: 'running',
-                chunkIndex: i + 1,
-                progress: pct,
-                transferredBytes: currentBytes,
-                totalBytes: totalSize,
-                sizeText: `${formatBytesFixed(currentBytes)} / ${formatBytesFixed(totalSize)}`,
-                speedDisplay: currentSpeedStr || '传输中...',
-              };
-            }
-            return t;
-          });
-          if (i % 2 === 0 || i === totalChunks - 1) {
-            saveTransfersQueue(next);
-          }
-          return next;
-        });
-
-        backgroundTransferManager.updateForegroundProgress({
-          name: taskItem.name,
-          progress: pct,
-          speedStr: currentSpeedStr,
-          sizeText: `${formatBytesFixed(currentBytes)} / ${formatBytesFixed(totalSize)}`,
-        });
+      } else {
+        let errorMsg = `HTTP ${res ? res.status : '未知错误'}`;
+        try {
+          const parsed = JSON.parse(res.body);
+          if (parsed && parsed.message) errorMsg = parsed.message;
+        } catch (_) {}
+        throw new Error(errorMsg);
       }
 
       delete activeTasksRef.current[taskId];
@@ -787,7 +583,7 @@ export default function FilesScreen({ navigation }) {
           const next = prev.map(t => (t.id === taskId ? {
             ...t,
             status: 'error',
-            speedDisplay: '中断(可续传)',
+            speedDisplay: '上传失败(点击重试)',
           } : t));
           saveTransfersQueue(next);
           return next;
@@ -795,7 +591,7 @@ export default function FilesScreen({ navigation }) {
         showConfirm({
           type: 'warning',
           title: '上传中断',
-          message: `传输已暂存当前断点进度，可点击右侧续传按钮继续：\n${err.message || '网络连接超时'}`,
+          message: `上传未能完成，可点击列表右侧重试按钮重新传输：\n${err.message || '网络连接超时或中断'}`,
           confirmText: '知道了',
           showCancel: false,
         });
@@ -809,6 +605,9 @@ export default function FilesScreen({ navigation }) {
       const task = activeTasksRef.current[taskId];
       if (task) {
         task.cancelled = true;
+        if (task.uploadTask && typeof task.uploadTask.cancelAsync === 'function') {
+          task.uploadTask.cancelAsync().catch(() => {});
+        }
         try {
           task.abortController.abort();
         } catch (_) {}
