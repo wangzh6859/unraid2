@@ -272,11 +272,20 @@ export default function DockerDetailsScreen({ route }) {
       if (!savedUrl || !savedToken) return;
 
       const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=check_docker_updates`);
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
-      await fetchDockerData();
+      // 重新拉取 status 接口，获取最新容器列表与 update_available 状态
+      const statusRes = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=status`);
+      const statusData = await statusRes.json().catch(() => ({}));
+      let foundCount = 0;
+      if (statusData && statusData.dockers && Array.isArray(statusData.dockers.list)) {
+        setDockers(statusData.dockers.list);
+        foundCount = statusData.dockers.list.filter(d => !!d.update_available).length;
+      }
+      if (foundCount === 0 && (data.update_count > 0 || data.updates_count > 0)) {
+        foundCount = data.update_count || data.updates_count;
+      }
 
-      const foundCount = data.update_count || 0;
       showConfirm({
         type: 'info',
         title: '更新检查完成',

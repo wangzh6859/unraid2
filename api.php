@@ -1,4 +1,9 @@
 <?php
+@ini_set('max_execution_time', '0');
+@ini_set('max_input_time', '0');
+@ini_set('memory_limit', '512M');
+@set_time_limit(0);
+@ignore_user_abort(true);
 // Auto-forward to flash copy if user uploaded to /boot (flash)
 if (file_exists('/boot/api.php') && realpath(__FILE__) !== realpath('/boot/api.php') && filesize('/boot/api.php') > 1000) {
     require '/boot/api.php';
@@ -636,48 +641,96 @@ function get_docker_updates_map() {
         }
     }
 
-    // Method 3: Scan Unraid notification files in /tmp/notifications/unread/ and /tmp/notifications/archive/
-    $notifDirs = ['/tmp/notifications/unread', '/tmp/notifications/archive'];
+    // Method 3: Scan Unraid notification files in /tmp/notifications/
+    $notifDirs = ['/tmp/notifications/unread', '/tmp/notifications/archive', '/tmp/notifications/descriptions', '/tmp/notifications'];
+    $ignoreWords = ['docker', 'container', 'image', 'for', 'of', 'all', 'a', 'an', 'the', 'is', 'available', 'update', 'updates', 'version', 'new', 'notice', 'tower', 'server', 'unraid'];
+
+    $registerCandidate = function($cand) use (&$dockerUpdatesMap, $ignoreWords) {
+        $cand = trim($cand, " \t\n\r\0\x0B.:'\"[]()<>");
+        if (empty($cand) || in_array(strtolower($cand), $ignoreWords) || strlen($cand) < 2) {
+            return;
+        }
+        $dockerUpdatesMap[$cand] = true;
+        $dockerUpdatesMap[strtolower($cand)] = true;
+        $dockerUpdatesMap[ltrim($cand, '/')] = true;
+        $dockerUpdatesMap[strtolower(ltrim($cand, '/'))] = true;
+        $baseName = basename($cand);
+        if (!empty($baseName) && !in_array(strtolower($baseName), $ignoreWords)) {
+            $dockerUpdatesMap[$baseName] = true;
+            $dockerUpdatesMap[strtolower($baseName)] = true;
+        }
+        if (strpos($cand, ':') !== false) {
+            $noTag = explode(':', $cand)[0];
+            if (!empty($noTag) && !in_array(strtolower($noTag), $ignoreWords)) {
+                $dockerUpdatesMap[$noTag] = true;
+                $dockerUpdatesMap[strtolower($noTag)] = true;
+            }
+        }
+    };
+
     foreach ($notifDirs as $ndir) {
         if (!is_dir($ndir)) continue;
         $nfiles = @scandir($ndir);
         if (!$nfiles) continue;
         foreach ($nfiles as $nf) {
             if ($nf === '.' || $nf === '..') continue;
-            $ncontent = @file_get_contents("{$ndir}/{$nf}");
+            $filePath = "{$ndir}/{$nf}";
+            if (is_dir($filePath)) continue;
+            $ncontent = @file_get_contents($filePath);
             if (!$ncontent) continue;
 
-            // Pattern A: "Docker container update available for <name>"
-            if (preg_match_all('/(?:Docker\s+(?:container|image)\s+update\s+available\s+for|update\s+available\s+for(?:\s+container)?|container\s+update\s+available:?)\s+([a-zA-Z0-9_\-\.\/]+)/i', $ncontent, $matches)) {
-                foreach ($matches[1] as $cName) {
-                    $cName = trim($cName, " \t\n\r\0\x0B.:");
-                    if (!empty($cName) && !in_array(strtolower($cName), ['docker', 'container', 'image', 'for', 'all', 'a'])) {
-                        $dockerUpdatesMap[$cName] = true;
-                        $dockerUpdatesMap[strtolower($cName)] = true;
-                        $dockerUpdatesMap[ltrim($cName, '/')] = true;
-                    }
+            $cleanContent = strip_tags($ncontent);
+
+            // Pattern 1: Standard Unraid notification format: "A new version of <name> is available" / "An update for <name> is available"
+            if (preg_match_all('/(?:A\s+new\s+version\s+of|An?\s+update\s+(?:is\s+)?available\s+for|New\s+version\s+(?:available\s+)?for)\s+([a-zA-Z0-9_\-\.\/]+)/i', $cleanContent, $m1)) {
+                foreach ($m1[1] as $c) {
+                    $registerCandidate($c);
                 }
             }
 
-            // Pattern B: Chinese Unraid notices
-            if (preg_match_all('/(?:容器|镜像)\s*[\[【]?([a-zA-Z0-9_\-\.\/]+)[\]】]?\s*(?:有新版本|有可用更新|可更新|更新可用)/u', $ncontent, $cmatches)) {
-                foreach ($cmatches[1] as $cName) {
-                    $cName = trim($cName, " \t\n\r\0\x0B.:");
-                    if (!empty($cName)) {
-                        $dockerUpdatesMap[$cName] = true;
-                        $dockerUpdatesMap[strtolower($cName)] = true;
-                        $dockerUpdatesMap[ltrim($cName, '/')] = true;
-                    }
+            // Pattern 2: "Version update of <name>" / "Version update for <name>"
+            if (preg_match_all('/(?:Version\s+update\s+(?:available\s+)?(?:of|for))\s+([a-zA-Z0-9_\-\.\/]+)/i', $cleanContent, $m2)) {
+                foreach ($m2[1] as $c) {
+                    $registerCandidate($c);
                 }
             }
 
-            // Pattern C: Notification subject / description
-            if (preg_match('/(?:subject|title|description|message)=.*?(?:update available for|有可用更新|容器更新)[^\w]*([a-zA-Z0-9_\-\.\/]+)/i', $ncontent, $m2)) {
-                $cName = trim($m2[1], " \t\n\r\0\x0B.:");
-                if (!empty($cName) && !in_array(strtolower($cName), ['docker', 'container', 'image', 'for', 'all', 'a'])) {
-                    $dockerUpdatesMap[$cName] = true;
-                    $dockerUpdatesMap[strtolower($cName)] = true;
-                    $dockerUpdatesMap[ltrim($cName, '/')] = true;
+            // Pattern 3: "Docker container update available for <name>" / "container update available: <name>"
+            if (preg_match_all('/(?:Docker\s+(?:container|image)\s+update\s+available\s+for|update\s+available\s+for(?:\s+container)?|container\s+update\s+available:?)\s+([a-zA-Z0-9_\-\.\/]+)/i', $cleanContent, $m3)) {
+                foreach ($m3[1] as $c) {
+                    $registerCandidate($c);
+                }
+            }
+
+            // Pattern 4: "<name> update is available" / "<name> has an update available"
+            if (preg_match_all('/([a-zA-Z0-9_\-\.\/]+)\s+(?:has\s+an?\s+update\s+available|update\s+is\s+available)/i', $cleanContent, $m4)) {
+                foreach ($m4[1] as $c) {
+                    $registerCandidate($c);
+                }
+            }
+
+            // Pattern 5: Chinese Unraid notices
+            if (preg_match_all('/(?:容器|镜像)\s*[\[【“"\']?([a-zA-Z0-9_\-\.\/]+)[\]】”"\']?\s*(?:有新版本|有可用更新|可更新|更新可用|存在更新)/u', $cleanContent, $m5)) {
+                foreach ($m5[1] as $c) {
+                    $registerCandidate($c);
+                }
+            }
+            if (preg_match_all('/([a-zA-Z0-9_\-\.\/]+)\s*(?:有新版本|有可用更新|存在更新)/u', $cleanContent, $m5b)) {
+                foreach ($m5b[1] as $c) {
+                    $registerCandidate($c);
+                }
+            }
+
+            // Pattern 6: Line-by-line inspection of subject/title/message
+            $lines = explode("\n", $cleanContent);
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if (empty($line)) continue;
+                if (preg_match('/^(?:subject|title|description|message)\s*=\s*(.*)$/i', $line, $lm)) {
+                    $val = trim($lm[1]);
+                    if (preg_match('/(?:Version\s+update\s+of|A\s+new\s+version\s+of|update\s+available\s+for|update\s+of)\s+([a-zA-Z0-9_\-\.\/]+)/i', $val, $vm)) {
+                        $registerCandidate($vm[1]);
+                    }
                 }
             }
         }
@@ -2394,6 +2447,11 @@ function handle_file_upload() {
  * writes into file at specified offset, bypassing PHP post_max_size limits.
  */
 function handle_file_chunk() {
+    @set_time_limit(0);
+    @ini_set('max_execution_time', '0');
+    @ini_set('max_input_time', '0');
+    @ini_set('memory_limit', '512M');
+    @ignore_user_abort(true);
     try {
         log_upload_debug("handle_file_chunk entered");
         $payload = [];
@@ -2415,12 +2473,20 @@ function handle_file_chunk() {
         } else {
             $rawInput = file_get_contents('php://input');
             $payload = json_decode($rawInput, true);
-            if (!is_array($payload)) {
+            if (is_array($payload)) {
+                $base64Data = isset($payload['data']) ? $payload['data'] : '';
+                $binaryData = ($base64Data !== '') ? base64_decode($base64Data) : '';
+                log_upload_debug("chunk_mode: json_base64, rawLen=" . strlen((string)$rawInput) . " binLen=" . strlen($binaryData));
+            } else {
                 $payload = array_merge($_GET, $_POST);
+                if (!empty($_GET['is_base64']) || !empty($_POST['is_base64']) || !empty($_SERVER['HTTP_X_BASE64'])) {
+                    $binaryData = base64_decode($rawInput);
+                    log_upload_debug("chunk_mode: raw_base64_stream, rawLen=" . strlen((string)$rawInput) . " binLen=" . strlen($binaryData));
+                } else {
+                    $binaryData = $rawInput;
+                    log_upload_debug("chunk_mode: raw_binary_stream, len=" . strlen($binaryData));
+                }
             }
-            $base64Data = isset($payload['data']) ? $payload['data'] : '';
-            $binaryData = ($base64Data !== '') ? base64_decode($base64Data) : '';
-            log_upload_debug("chunk_mode: json_base64, rawLen=" . strlen((string)$rawInput) . " binLen=" . strlen($binaryData));
         }
 
         $rawPath = isset($payload['path']) ? $payload['path'] : (isset($_POST['path']) ? $_POST['path'] : (isset($_GET['path']) ? $_GET['path'] : ALLOWED_ROOT));
@@ -3145,6 +3211,9 @@ function get_gpu_telemetry() {
 }
 
 function handle_check_docker_updates() {
+    @set_time_limit(180);
+    @ini_set('max_execution_time', '180');
+
     $out = '';
     $scripts = [
         '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check',
@@ -3166,11 +3235,43 @@ function handle_check_docker_updates() {
 
     // Re-read docker updates map
     $dockerUpdatesMap = get_docker_updates_map();
-    $updatesCount = count($dockerUpdatesMap);
+
+    // Accurately count unique containers that have updates available
+    $updatesCount = 0;
+    $rawDocker = @shell_exec('docker ps -a --format "{{.Names}}\t{{.Image}}" 2>/dev/null');
+    if ($rawDocker) {
+        $lines = explode("\n", trim($rawDocker));
+        foreach ($lines as $line) {
+            $parts = explode("\t", trim($line));
+            $cName = isset($parts[0]) ? ltrim(trim($parts[0]), '/') : '';
+            $cImage = isset($parts[1]) ? trim($parts[1]) : '';
+            if (empty($cName)) continue;
+            $hasUpdate = (
+                !empty($dockerUpdatesMap[$cName]) ||
+                !empty($dockerUpdatesMap[strtolower($cName)]) ||
+                (!empty($cImage) && !empty($dockerUpdatesMap[$cImage])) ||
+                (!empty($cImage) && !empty($dockerUpdatesMap[strtolower($cImage)]))
+            );
+            if ($hasUpdate) {
+                $updatesCount++;
+            }
+        }
+    }
+
+    if ($updatesCount === 0 && !empty($dockerUpdatesMap)) {
+        $unique = [];
+        foreach (array_keys($dockerUpdatesMap) as $k) {
+            $k = strtolower($k);
+            if (strpos($k, '/') === false && strpos($k, ':') === false) {
+                $unique[$k] = true;
+            }
+        }
+        $updatesCount = count($unique);
+    }
 
     json_output([
         'status' => 'success',
-        'message' => $updatesCount > 0 ? "检测完成，发现可用更新！" : '检测完成，所有容器已是最新版本。',
+        'message' => $updatesCount > 0 ? "检测完成，发现 {$updatesCount} 个容器有可用更新！" : '检测完成，所有容器已是最新版本。',
         'updates_count' => $updatesCount,
         'update_count' => $updatesCount,
         'output' => trim($out)
