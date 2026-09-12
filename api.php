@@ -4,11 +4,7 @@
 @ini_set('memory_limit', '512M');
 @set_time_limit(0);
 @ignore_user_abort(true);
-// Auto-forward to flash copy if user uploaded to /boot (flash)
-if (file_exists('/boot/api.php') && realpath(__FILE__) !== realpath('/boot/api.php') && filesize('/boot/api.php') > 1000) {
-    require '/boot/api.php';
-    exit;
-}
+
 
 /**
  * Unraid Mobile Manager - Unified Backend API (api.php)
@@ -125,6 +121,9 @@ set_exception_handler(function($ex) {
 
 // Comprehensive shutdown handler: if script terminates prematurely or with fatal error, ALWAYS return JSON
 register_shutdown_function(function() {
+    if (!empty($GLOBALS['__api_response_sent'])) {
+        return;
+    }
     $err = error_get_last();
     if ($err !== null && in_array($err['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR])) {
         while (ob_get_level() > 0) {
@@ -208,6 +207,24 @@ function verify_auth() {
 
     $validTokens = get_valid_tokens();
     if (empty($reqToken) || !in_array($reqToken, $validTokens, true)) {
+        // If accessed directly from a browser without token, show a friendly guide page instead of raw 401
+        $accept = isset($_SERVER['HTTP_ACCEPT']) ? $_SERVER['HTTP_ACCEPT'] : '';
+        if (strpos($accept, 'text/html') !== false && empty($reqToken)) {
+            $GLOBALS['__api_response_sent'] = true;
+            header('Content-Type: text/html; charset=utf-8');
+            http_response_code(200);
+            $host = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'IP:端口';
+            echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Unraid API 正常运行中</title><style>body{font-family:system-ui,sans-serif;background:#111827;color:#f3f4f6;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0} .card{background:#1f2937;padding:32px;border-radius:16px;max-width:520px;box-shadow:0 10px 25px rgba(0,0,0,0.5)} h1{color:#10b981;font-size:22px;margin-top:0} code{background:#374151;padding:2px 8px;border-radius:4px;color:#f59e0b} a{color:#3b82f6;text-decoration:none} a:hover{text-decoration:underline}</style></head><body>';
+            echo '<div class="card"><h1>✅ Unraid API 服务运行正常！</h1>';
+            echo '<p>您正在访问 Unraid Mobile Manager 后端 API 接口。</p>';
+            echo '<p>📱 <b>手机 App 连接配置：</b></p>';
+            echo '<ul><li><b>服务器地址：</b> <code>http://' . htmlspecialchars($host) . '</code></li><li><b>API Token：</b> <code>unraid2026</code></li></ul>';
+            echo '<p>🔗 <b>API 测试链接：</b><br><a href="?token=unraid2026&action=status">点击此处测试获取系统状态数据 (JSON) &rarr;</a></p>';
+            echo '</div></body></html>';
+            exit;
+        }
+
+        $GLOBALS['__api_response_sent'] = true;
         header('Content-Type: application/json; charset=utf-8');
         http_response_code(401);
         echo json_encode([
@@ -456,6 +473,7 @@ switch ($action) {
 // Helper Output Function
 // -------------------------------------------------------------
 function json_output($data, $code = 200) {
+    $GLOBALS['__api_response_sent'] = true;
     while (ob_get_level() > 0) {
         @ob_end_clean();
     }
