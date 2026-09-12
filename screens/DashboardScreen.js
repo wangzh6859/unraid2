@@ -96,6 +96,9 @@ export default function DashboardScreen({ navigation }) {
   // 实时网速与历史波形缓存
   const prevNetwork = useRef({ rx: 0, tx: 0, time: 0 });
   const [netSpeed, setNetSpeed] = useState({ down: '0.0', up: '0.0' });
+  // 实时硬盘阵列读写速度
+  const prevStorageIo = useRef({ read: 0, write: 0, time: 0 });
+  const [diskIoSpeed, setDiskIoSpeed] = useState({ read: 0, write: 0 });
   const [downWaveHistory, setDownWaveHistory] = useState([1.2, 2.4, 1.8, 4.2, 2.0, 3.5, 4.8, 3.2]);
   const [upWaveHistory, setUpWaveHistory] = useState([0.4, 0.8, 0.5, 1.2, 0.9, 0.6, 0.9, 0.7]);
 
@@ -230,7 +233,26 @@ export default function DashboardScreen({ navigation }) {
 
       if (data.stats) setStats(prev => ({ ...prev, ...data.stats }));
       if (data.gpu) setGpu(data.gpu);
-      if (data.storage) setStorage(data.storage);
+      if (data.storage) {
+        setStorage(data.storage);
+        const now = Date.now();
+        if (prevStorageIo.current.time > 0) {
+          const timeDiff = (now - prevStorageIo.current.time) / 1000;
+          const rDiff = (data.storage.total_read_bytes || 0) - prevStorageIo.current.read;
+          const wDiff = (data.storage.total_write_bytes || 0) - prevStorageIo.current.write;
+          if (timeDiff > 0 && rDiff >= 0 && wDiff >= 0) {
+            setDiskIoSpeed({
+              read: parseFloat((rDiff / timeDiff / 1024).toFixed(1)),
+              write: parseFloat((wDiff / timeDiff / 1024).toFixed(1)),
+            });
+          }
+        }
+        prevStorageIo.current = {
+          read: data.storage.total_read_bytes || 0,
+          write: data.storage.total_write_bytes || 0,
+          time: now,
+        };
+      }
       if (data.dockers) setDockers(data.dockers);
       if (data.vms) setVms(data.vms);
       if (data.parity) setParity(data.parity);
@@ -859,6 +881,102 @@ export default function DashboardScreen({ navigation }) {
         </View>
       </View>
 
+      
+      {/* 2.5 GPU 硬件加速卡片 (检测到独立显卡或核心显卡时渲染) */}
+      {gpu && gpu.name && gpu.name !== '未配置独立显卡' && gpu.name !== 'N/A' ? (
+        <View style={styles.card}>
+          <View style={styles.cardHeaderRow}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+              <Zap size={17} color={colors.accent} style={{ marginRight: 8 }} />
+              <Text style={styles.cardTitle} numberOfLines={1}>GPU 硬件加速</Text>
+            </View>
+            <View style={[styles.gpuVendorBadge, {
+              backgroundColor: gpu.vendor === 'NVIDIA' ? 'rgba(34, 197, 94, 0.15)' :
+                               gpu.vendor === 'INTEL' ? 'rgba(56, 189, 248, 0.15)' :
+                               gpu.vendor === 'AMD' ? 'rgba(239, 68, 68, 0.15)' :
+                               'rgba(148, 163, 184, 0.15)'
+            }]}>
+              <Text style={[styles.gpuVendorText, {
+                color: gpu.vendor === 'NVIDIA' ? '#22c55e' :
+                       gpu.vendor === 'INTEL' ? '#38bdf8' :
+                       gpu.vendor === 'AMD' ? '#ef4444' :
+                       colors.sub
+              }]}>
+                {gpu.vendor || 'GPU'}
+              </Text>
+            </View>
+          </View>
+
+          <View style={{ marginTop: 6, marginBottom: 10 }}>
+            <Text style={{ fontSize: 13, fontWeight: '600', color: colors.textStrong }} numberOfLines={1}>
+              {gpu.name}
+            </Text>
+            {gpu.driver && gpu.driver !== 'N/A' ? (
+              <Text style={{ fontSize: 11, color: colors.sub, marginTop: 2 }}>
+                驱动: {gpu.driver}
+              </Text>
+            ) : null}
+          </View>
+
+          {/* GPU 利用率进度条 */}
+          <View style={{ marginBottom: 12 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+              <Text style={{ fontSize: 12, color: colors.sub }}>负载利用率</Text>
+              <Text style={{ fontSize: 12, fontWeight: '700', color: colors.accent, fontFamily: 'monospace' }}>
+                {(gpu.usage || 0).toFixed(0)}%
+              </Text>
+            </View>
+            <View style={{ height: 6, backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#e2e8f0', borderRadius: 3, overflow: 'hidden' }}>
+              <View style={{
+                height: '100%',
+                width: `${Math.min(100, Math.max(0, gpu.usage || 0))}%`,
+                backgroundColor: (gpu.usage || 0) > 85 ? colors.tempWarm : colors.accent,
+                borderRadius: 3
+              }} />
+            </View>
+          </View>
+
+          {/* 详细指标小磁贴 (温度 / 显存 / 频率 / 功耗) */}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {gpu.temp !== null && gpu.temp !== undefined ? (
+              <View style={[styles.gpuMetricPill, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc' }]}>
+                <Text style={{ fontSize: 10, color: colors.sub }}>核心温度</Text>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: gpu.temp > 75 ? colors.tempWarm : colors.textStrong, fontFamily: 'monospace', marginTop: 2 }}>
+                  {gpu.temp}°C
+                </Text>
+              </View>
+            ) : null}
+
+            {gpu.vram_used !== null && gpu.vram_used !== undefined && gpu.vram_total ? (
+              <View style={[styles.gpuMetricPill, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc' }]}>
+                <Text style={{ fontSize: 10, color: colors.sub }}>显存占用</Text>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: colors.textStrong, fontFamily: 'monospace', marginTop: 2 }}>
+                  {(gpu.vram_used / 1024).toFixed(1)} / {(gpu.vram_total / 1024).toFixed(1)} GB
+                </Text>
+              </View>
+            ) : null}
+
+            {gpu.clock_mhz !== null && gpu.clock_mhz !== undefined ? (
+              <View style={[styles.gpuMetricPill, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc' }]}>
+                <Text style={{ fontSize: 10, color: colors.sub }}>运行频率</Text>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: colors.textStrong, fontFamily: 'monospace', marginTop: 2 }}>
+                  {gpu.clock_mhz} MHz
+                </Text>
+              </View>
+            ) : null}
+
+            {gpu.power_w !== null && gpu.power_w !== undefined ? (
+              <View style={[styles.gpuMetricPill, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc' }]}>
+                <Text style={{ fontSize: 10, color: colors.sub }}>实时功耗</Text>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: colors.textStrong, fontFamily: 'monospace', marginTop: 2 }}>
+                  {gpu.power_w} W
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
+
       {/* 3. 实时网络吞吐卡片 (双轨平滑波浪曲线) */}
       <View style={styles.card}>
         <View style={styles.cardHeaderRow}>
@@ -920,9 +1038,26 @@ export default function DashboardScreen({ navigation }) {
             <HardDrive size={17} color={colors.accent} style={{ marginRight: 8 }} />
             <Text style={styles.cardTitle}>存储 Array</Text>
           </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 10 }}>
+              <ArrowDown size={11} color={colors.networkDown} style={{ marginRight: 2 }} />
+              <Text style={{ fontSize: 11, color: colors.networkDown, fontFamily: 'monospace' }}>读 {formatSpeed(diskIoSpeed.read)}</Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <ArrowUp size={11} color={colors.networkUp} style={{ marginRight: 2 }} />
+              <Text style={{ fontSize: 11, color: colors.networkUp, fontFamily: 'monospace' }}>写 {formatSpeed(diskIoSpeed.write)}</Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, marginBottom: 8 }}>
           <Text style={styles.storageCapacityMeta}>
             {formatBytes(storage.total_used)} / {formatBytes(storage.total_size)} ({storage.percentage}%)
           </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={styles.moreLinkText}>磁盘详情</Text>
+            <ChevronRight size={13} color={colors.sub} />
+          </View>
         </View>
 
         {/* 奇偶校验中指示 */}
@@ -1340,6 +1475,25 @@ export default function DashboardScreen({ navigation }) {
 // Stylesheet (Dynamic Theme Driven)
 // -------------------------------------------------------------
 const createStyles = (colors, isDark) => StyleSheet.create({
+  gpuVendorBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  gpuVendorText: {
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  gpuMetricPill: {
+    flex: 1,
+    minWidth: 70,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   container: {
     flex: 1,
     backgroundColor: colors.bg,

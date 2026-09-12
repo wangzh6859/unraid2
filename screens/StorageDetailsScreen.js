@@ -1,14 +1,12 @@
-import React, { useState, useCallback, useMemo } from 'react';
-import {
-  StyleSheet, Text, View, ScrollView, ActivityIndicator, TouchableOpacity,
+import React, { useState, useCallback, useMemo, useRef } from 'react';
+import { StyleSheet, Text, View, ScrollView, ActivityIndicator, TouchableOpacity,
   Platform
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   HardDrive, Server, ShieldCheck, ThumbsUp, ThumbsDown, Thermometer,
-  ChevronRight, Play, Pause, Square, Shield, Zap, AlertTriangle, CheckCircle2
-} from 'lucide-react-native';
+  ChevronRight, Play, Pause, Square, Shield, Zap, AlertTriangle, CheckCircle2, ArrowDown, ArrowUp } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 
@@ -17,6 +15,8 @@ export default function StorageDetailsScreen({ navigation }) {
   const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
   const [disks, setDisks] = useState([]);
+  const prevDiskIo = useRef({});
+  const [diskSpeeds, setDiskSpeeds] = useState({});
   const [loading, setLoading] = useState(true);
   const [parityLoading, setParityLoading] = useState(false);
   const [parity, setParity] = useState({
@@ -65,6 +65,15 @@ export default function StorageDetailsScreen({ navigation }) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
+  const formatDiskSpeed = (bytesPerSec) => {
+    const b = parseFloat(bytesPerSec) || 0;
+    if (b <= 0) return '0 B/s';
+    const k = 1024;
+    const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+    const i = Math.floor(Math.log(b) / Math.log(k));
+    return parseFloat((b / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
+
   const fetchStorageData = async () => {
     try {
       const savedUrl = await AsyncStorage.getItem('@server_url');
@@ -72,7 +81,32 @@ export default function StorageDetailsScreen({ navigation }) {
       if (!savedUrl || !savedToken) return;
       const response = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=status`);
       const data = await response.json();
-      if (data.storage && data.storage.disks) setDisks(data.storage.disks);
+      if (data.storage && data.storage.disks) {
+        const now = Date.now();
+        const updatedSpeeds = { ...diskSpeeds };
+        data.storage.disks.forEach(d => {
+          const key = d.device || d.name;
+          const prev = prevDiskIo.current[key];
+          if (prev && prev.time > 0) {
+            const timeDiff = (now - prev.time) / 1000;
+            if (timeDiff > 0.5 && timeDiff < 30) {
+              const rDiff = (d.read_bytes || 0) - prev.read;
+              const wDiff = (d.write_bytes || 0) - prev.write;
+              updatedSpeeds[key] = {
+                read: rDiff > 0 ? rDiff / timeDiff : 0,
+                write: wDiff > 0 ? wDiff / timeDiff : 0,
+              };
+            }
+          }
+          prevDiskIo.current[key] = {
+            read: d.read_bytes || 0,
+            write: d.write_bytes || 0,
+            time: now,
+          };
+        });
+        setDiskSpeeds(updatedSpeeds);
+        setDisks(data.storage.disks);
+      }
       if (data.parity) setParity(data.parity);
     } catch (error) {
       console.log(error);
@@ -370,6 +404,7 @@ export default function StorageDetailsScreen({ navigation }) {
     const freeSize = disk.free !== undefined ? disk.free : Math.max(0, totalSize - usedSize);
     const numErrors = disk.num_errors || 0;
     const fsType = disk.fs_type ? String(disk.fs_type).toUpperCase() : '';
+    const curSpeed = diskSpeeds[disk.device || disk.name] || { read: 0, write: 0 };
 
     return (
       <TouchableOpacity
@@ -426,6 +461,25 @@ export default function StorageDetailsScreen({ navigation }) {
               <Text style={styles.metricGridValue}>{isStandby ? '休眠' : '活动'}</Text>
             </View>
           </View>
+
+        {/* 实时读写速率 */}
+        <View style={styles.diskIoRow}>
+          <View style={styles.diskIoItem}>
+            <ArrowDown size={11} color={colors.networkDown} style={{ marginRight: 3 }} />
+            <Text style={styles.diskIoLabel}>读取: </Text>
+            <Text style={[styles.diskIoValue, { color: colors.networkDown }]}>
+              {formatDiskSpeed(curSpeed.read)}
+            </Text>
+          </View>
+          <View style={styles.diskIoDivider} />
+          <View style={styles.diskIoItem}>
+            <ArrowUp size={11} color={colors.networkUp} style={{ marginRight: 3 }} />
+            <Text style={styles.diskIoLabel}>写入: </Text>
+            <Text style={[styles.diskIoValue, { color: colors.networkUp }]}>
+              {formatDiskSpeed(curSpeed.write)}
+            </Text>
+          </View>
+        </View>
 
           {/* 盘体温度 */}
           <View style={styles.metricGridItem}>
@@ -809,6 +863,36 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     paddingHorizontal: 6,
     marginTop: 10,
     justifyContent: 'space-between',
+  },
+  diskIoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.03)' : '#f8fafc',
+    borderRadius: 8,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    marginTop: 8,
+  },
+  diskIoItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  diskIoLabel: {
+    fontSize: 11,
+    color: colors.sub,
+    marginRight: 2,
+  },
+  diskIoValue: {
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+  },
+  diskIoDivider: {
+    width: 1,
+    height: 12,
+    backgroundColor: colors.cardBorder,
+    marginHorizontal: 8,
   },
   metricGridItem: {
     flex: 1,

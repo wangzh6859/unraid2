@@ -317,6 +317,14 @@ switch ($action) {
         handle_update_docker();
         break;
 
+    case 'check_docker_updates':
+        handle_check_docker_updates();
+        break;
+
+    case 'ca_apps':
+        handle_ca_apps();
+        break;
+
     case 'compose_list':
         handle_compose_list();
         break;
@@ -592,15 +600,11 @@ function handle_status() {
         }
     }
 
-    // 3. GPU Usage (NVIDIA or Intel)
-    $gpuData = ['name' => 'N/A', 'usage' => 0];
-    $nvidiaSmi = @shell_exec('nvidia-smi --query-gpu=name,utilization.gpu --format=csv,noheader,nounits 2>/dev/null');
-    if ($nvidiaSmi && trim($nvidiaSmi) !== '') {
-        $parts = explode(',', trim($nvidiaSmi));
-        if (count($parts) >= 2) {
-            $gpuData = ['name' => trim($parts[0]), 'usage' => (float)trim($parts[1])];
-        }
-    }
+        // 3. Comprehensive GPU Telemetry (NVIDIA, Intel iGPU, AMD, gpustat)
+    $gpuData = get_gpu_telemetry();
+    $diskIoMap = get_disk_io_stats();
+    $totalArrayReadBytes = 0;
+    $totalArrayWriteBytes = 0;
 
     // 4. Storage & Disks
     $disks = [];
@@ -638,7 +642,13 @@ function handle_status() {
                     $temp = (isset($d['temp']) && is_numeric($d['temp'])) ? (int)$d['temp'] : null;
                     $isSpunDown = (isset($d['spundown']) && $d['spundown'] == 1);
                     $smartStatus = (!empty($d['status']) && stripos($d['status'], 'OK') !== false) ? 'Normal' : 'Error';
-                    $disks[] = [
+                    $devName = !empty($d['device']) ? $d['device'] : '';
+                    $devIo = isset($diskIoMap[$devName]) ? $diskIoMap[$devName] : null;
+                    $rB = $devIo ? $devIo['read_bytes'] : 0;
+                    $wB = $devIo ? $devIo['write_bytes'] : 0;
+                    $totalArrayReadBytes += $rB;
+                    $totalArrayWriteBytes += $wB;
+$disks[] = [
                         'name' => $dName,
                         'device' => $d['device'],
                         'size' => $size,
@@ -651,7 +661,9 @@ function handle_status() {
                         'num_errors' => isset($d['numErrors']) ? (int)$d['numErrors'] : 0,
                         'fs_type' => isset($d['fsType']) ? $d['fsType'] : '',
                         'free' => 0,
-                        'is_parity' => true
+                        'is_parity' => true,
+                        'read_bytes' => $rB,
+                        'write_bytes' => $wB
                     ];
                 }
             }
@@ -703,7 +715,12 @@ function handle_status() {
                         $smartStatus = 'Normal';
                     }
 
-                    $disks[] = [
+                    $devIo = !empty($dev) && isset($diskIoMap[$dev]) ? $diskIoMap[$dev] : null;
+                    $rB = $devIo ? $devIo['read_bytes'] : 0;
+                    $wB = $devIo ? $devIo['write_bytes'] : 0;
+                    $totalArrayReadBytes += $rB;
+                    $totalArrayWriteBytes += $wB;
+$disks[] = [
                         'name' => $name,
                         'device' => $dev,
                         'mount' => $mount,
@@ -717,7 +734,9 @@ function handle_status() {
                         'smart_status' => $smartStatus,
                         'num_errors' => ($uInfo && isset($uInfo['numErrors'])) ? (int)$uInfo['numErrors'] : 0,
                         'fs_type' => ($uInfo && isset($uInfo['fsType'])) ? $uInfo['fsType'] : '',
-                        'is_parity' => false
+                        'is_parity' => false,
+                        'read_bytes' => $rB,
+                        'write_bytes' => $wB
                     ];
                 }
             }
@@ -777,15 +796,21 @@ function handle_status() {
         $ini = @parse_ini_file('/var/local/emhttp/docker.ini', true);
         if (is_array($ini)) {
             foreach ($ini as $cName => $sec) {
-                if (isset($sec['updated']) && ($sec['updated'] === 'false' || $sec['updated'] === 0 || $sec['updated'] === '0')) {
+                $isUpdate = (
+                    (isset($sec['updated']) && ($sec['updated'] === 'false' || $sec['updated'] === 0 || $sec['updated'] === '0')) ||
+                    (isset($sec['update']) && ($sec['update'] === 'true' || $sec['update'] === 'yes' || $sec['update'] === 1 || $sec['update'] === '1')) ||
+                    (isset($sec['install']) && stripos($sec['install'], 'update') !== false) ||
+                    (isset($sec['status']) && stripos($sec['status'], 'update') !== false)
+                );
+                if ($isUpdate) {
                     $dockerUpdatesMap[$cName] = true;
-                } elseif (isset($sec['update']) && ($sec['update'] === 'true' || $sec['update'] === 1 || $sec['update'] === '1')) {
-                    $dockerUpdatesMap[$cName] = true;
+                    $dockerUpdatesMap[strtolower($cName)] = true;
+                    $dockerUpdatesMap[ltrim($cName, '/')] = true;
                 }
             }
         }
     }
-
+    
     $serverHost = !empty($_SERVER['HTTP_HOST']) ? preg_replace('/:.*$/', '', $_SERVER['HTTP_HOST']) : '192.168.1.1';
     $dockerPs = @shell_exec('docker ps -a --format "{{.Names}}\t{{.Status}}\t{{.ID}}\t{{.Ports}}" 2>/dev/null');
     if ($dockerPs) {
@@ -829,7 +854,7 @@ function handle_status() {
                     'ports' => $cPortsRaw,
                     'port' => $primaryPort,
                     'webui' => $webuiUrl,
-                    'update_available' => !empty($dockerUpdatesMap[$cleanName]) || !empty($dockerUpdatesMap[$cName]),
+                    'update_available' => !empty($dockerUpdatesMap[$cleanName]) || !empty($dockerUpdatesMap[$cName]) || !empty($dockerUpdatesMap[strtolower($cleanName)]),
                 ];
             }
         }
@@ -979,6 +1004,8 @@ function handle_status() {
             'percentage' => $storagePercentage,
             'total_used' => $totalArrayUsed,
             'total_size' => $totalArraySize,
+            'total_read_bytes' => $totalArrayReadBytes,
+            'total_write_bytes' => $totalArrayWriteBytes,
             'disks' => $disks
         ],
         'dockers' => [
@@ -2725,5 +2752,626 @@ function handle_file_compress() {
         'zip_path' => $outZipPath,
         'zip_name' => $zipName
     ]);
+}
+
+
+// -------------------------------------------------------------
+// ENHANCED HARDWARE & APPLICATION HELPERS
+// -------------------------------------------------------------
+
+function get_disk_io_stats() {
+    $stats = [];
+    $raw = @file_get_contents('/proc/diskstats');
+    if ($raw) {
+        foreach (explode("\n", trim($raw)) as $line) {
+            $cols = preg_split('/\s+/', trim($line));
+            if (count($cols) >= 14) {
+                $dev = $cols[2];
+                if (preg_match('/^(loop|ram|sr)/', $dev)) continue;
+                $sectorsRead = (float)$cols[5];
+                $sectorsWritten = (float)$cols[9];
+                $stats[$dev] = [
+                    'read_bytes' => $sectorsRead * 512,
+                    'write_bytes' => $sectorsWritten * 512,
+                ];
+            }
+        }
+    }
+    return $stats;
+}
+
+function get_gpu_telemetry() {
+    $gpuData = [
+        'name' => '未配置独立显卡',
+        'vendor' => 'N/A',
+        'usage' => 0,
+        'temp' => null,
+        'vram_used' => null,
+        'vram_total' => null,
+        'vram_pct' => 0,
+        'power_w' => null,
+        'clock_mhz' => null,
+        'max_clock_mhz' => null,
+        'driver' => 'N/A'
+    ];
+
+    // 1. Check Unraid GPU Statistics plugin cached JSON (/tmp/gpustat.json)
+    if (file_exists('/tmp/gpustat.json')) {
+        $raw = @file_get_contents('/tmp/gpustat.json');
+        if ($raw) {
+            $json = @json_decode($raw, true);
+            if (is_array($json) && !empty($json)) {
+                $firstGpu = isset($json[0]) ? $json[0] : (isset($json['gpus'][0]) ? $json['gpus'][0] : $json);
+                if (!empty($firstGpu['model']) || !empty($firstGpu['name'])) {
+                    $mName = !empty($firstGpu['model']) ? $firstGpu['model'] : $firstGpu['name'];
+                    $gpuData['name'] = $mName;
+                    $gpuData['vendor'] = !empty($firstGpu['vendor']) ? $firstGpu['vendor'] : (stripos($mName, 'NVIDIA') !== false ? 'NVIDIA' : (stripos($mName, 'Intel') !== false ? 'Intel' : 'AMD'));
+                    $gpuData['usage'] = isset($firstGpu['util']) ? (float)$firstGpu['util'] : (isset($firstGpu['usage']) ? (float)$firstGpu['usage'] : 0);
+                    $gpuData['temp'] = isset($firstGpu['temp']) ? (int)$firstGpu['temp'] : null;
+                    if (isset($firstGpu['memused']) && isset($firstGpu['memtotal'])) {
+                        $gpuData['vram_used'] = (int)$firstGpu['memused'];
+                        $gpuData['vram_total'] = (int)$firstGpu['memtotal'];
+                        $gpuData['vram_pct'] = $gpuData['vram_total'] > 0 ? round(($gpuData['vram_used'] / $gpuData['vram_total']) * 100, 1) : 0;
+                    }
+                    if (isset($firstGpu['power'])) $gpuData['power_w'] = (float)$firstGpu['power'];
+                    if (isset($firstGpu['clock'])) $gpuData['clock_mhz'] = (int)$firstGpu['clock'];
+                    $gpuData['driver'] = 'gpustat';
+                    return $gpuData;
+                }
+            }
+        }
+    }
+
+    // 2. Check NVIDIA GPU via nvidia-smi
+    $nvidiaOut = @shell_exec('nvidia-smi --query-gpu=name,utilization.gpu,temperature.gpu,memory.used,memory.total,power.draw,clocks.current.graphics,clocks.max.graphics --format=csv,noheader,nounits 2>/dev/null');
+    if (empty($nvidiaOut)) {
+        $nvidiaOut = @shell_exec('/usr/local/bin/nvidia-smi --query-gpu=name,utilization.gpu,temperature.gpu,memory.used,memory.total,power.draw,clocks.current.graphics,clocks.max.graphics --format=csv,noheader,nounits 2>/dev/null');
+    }
+    if ($nvidiaOut && trim($nvidiaOut) !== '') {
+        $lines = explode("\n", trim($nvidiaOut));
+        if (!empty($lines[0])) {
+            $parts = array_map('trim', explode(',', $lines[0]));
+            if (count($parts) >= 2 && !empty($parts[0])) {
+                $gpuData['name'] = $parts[0];
+                $gpuData['vendor'] = 'NVIDIA';
+                $gpuData['usage'] = isset($parts[1]) ? (float)$parts[1] : 0;
+                $gpuData['temp'] = (isset($parts[2]) && is_numeric($parts[2])) ? (int)$parts[2] : null;
+                $vUsed = (isset($parts[3]) && is_numeric($parts[3])) ? (float)$parts[3] : 0;
+                $vTotal = (isset($parts[4]) && is_numeric($parts[4])) ? (float)$parts[4] : 0;
+                if ($vTotal > 0) {
+                    $gpuData['vram_used'] = (int)$vUsed;
+                    $gpuData['vram_total'] = (int)$vTotal;
+                    $gpuData['vram_pct'] = round(($vUsed / $vTotal) * 100, 1);
+                }
+                if (isset($parts[5]) && is_numeric($parts[5])) $gpuData['power_w'] = round((float)$parts[5], 1);
+                if (isset($parts[6]) && is_numeric($parts[6])) $gpuData['clock_mhz'] = (int)$parts[6];
+                if (isset($parts[7]) && is_numeric($parts[7])) $gpuData['max_clock_mhz'] = (int)$parts[7];
+                $gpuData['driver'] = 'nvidia';
+                return $gpuData;
+            }
+        }
+    }
+
+    // 3. Check Intel iGPU (QuickSync / i915) via sysfs and lspci
+    $drmCards = glob('/sys/class/drm/card*');
+    if ($drmCards) {
+        foreach ($drmCards as $card) {
+            if (preg_match('/renderD\d+$/', $card)) continue;
+            $vendorFile = "{$card}/device/vendor";
+            if (file_exists($vendorFile)) {
+                $vendorHex = trim(@file_get_contents($vendorFile));
+                if (stripos($vendorHex, '0x8086') !== false) {
+                    $intelName = '';
+                    $lspci = @shell_exec("lspci -nn -d 8086: 2>/dev/null | grep -iE 'vga|display|3d'");
+                    if ($lspci) {
+                        if (preg_match('/:\s*(.+?)(?:\s*\(rev|\s*\[[0-9a-f]{4}:)/i', $lspci, $m)) {
+                            $intelName = trim($m[1]);
+                        } else {
+                            $intelName = trim(explode("\n", $lspci)[0]);
+                        }
+                    }
+                    if (!$intelName) $intelName = 'Intel® 核芯显卡 (iGPU)';
+                    $intelName = preg_replace('/^Intel Corporation\s+/i', 'Intel® ', $intelName);
+
+                    // Read frequency
+                    $curFreq = 0;
+                    $maxFreq = 0;
+                    $minFreq = 0;
+                    $freqFiles = [
+                        "{$card}/gt_cur_freq_mhz",
+                        "{$card}/device/drm/{$card}/gt_cur_freq_mhz",
+                    ];
+                    foreach ($freqFiles as $ff) {
+                        if (file_exists($ff)) { $curFreq = (int)trim(@file_get_contents($ff)); break; }
+                    }
+                    $maxFreqFiles = [
+                        "{$card}/gt_max_freq_mhz",
+                        "{$card}/device/drm/{$card}/gt_max_freq_mhz",
+                    ];
+                    foreach ($maxFreqFiles as $ff) {
+                        if (file_exists($ff)) { $maxFreq = (int)trim(@file_get_contents($ff)); break; }
+                    }
+                    $minFreqFiles = [
+                        "{$card}/gt_min_freq_mhz",
+                        "{$card}/device/drm/{$card}/gt_min_freq_mhz",
+                    ];
+                    foreach ($minFreqFiles as $ff) {
+                        if (file_exists($ff)) { $minFreq = (int)trim(@file_get_contents($ff)); break; }
+                    }
+
+                    $usage = 0;
+                    if ($curFreq > 0 && $maxFreq > $minFreq) {
+                        $usage = round((($curFreq - $minFreq) / ($maxFreq - $minFreq)) * 100, 1);
+                        $usage = max(0, min(100, $usage));
+                    }
+
+                    $temp = null;
+                    $hwmon = glob("{$card}/device/hwmon/hwmon*/temp1_input");
+                    if ($hwmon && file_exists($hwmon[0])) {
+                        $tRaw = (int)trim(@file_get_contents($hwmon[0]));
+                        if ($tRaw > 0) $temp = round($tRaw / 1000);
+                    }
+
+                    $gpuData['name'] = $intelName;
+                    $gpuData['vendor'] = 'Intel';
+                    $gpuData['usage'] = $usage;
+                    $gpuData['temp'] = $temp;
+                    $gpuData['clock_mhz'] = $curFreq > 0 ? $curFreq : null;
+                    $gpuData['max_clock_mhz'] = $maxFreq > 0 ? $maxFreq : null;
+                    $gpuData['driver'] = 'i915';
+                    return $gpuData;
+                }
+            }
+        }
+    }
+
+    // 4. Check AMD GPU via amdgpu sysfs
+    if ($drmCards) {
+        foreach ($drmCards as $card) {
+            if (preg_match('/renderD\d+$/', $card)) continue;
+            $vendorFile = "{$card}/device/vendor";
+            if (file_exists($vendorFile)) {
+                $vendorHex = trim(@file_get_contents($vendorFile));
+                if (stripos($vendorHex, '0x1002') !== false) {
+                    $amdName = '';
+                    $lspci = @shell_exec("lspci -nn -d 1002: 2>/dev/null | grep -iE 'vga|display|3d'");
+                    if ($lspci) {
+                        if (preg_match('/:\s*(.+?)(?:\s*\(rev|\s*\[[0-9a-f]{4}:)/i', $lspci, $m)) {
+                            $amdName = trim($m[1]);
+                        }
+                    }
+                    if (!$amdName) $amdName = 'AMD Radeon™ 显卡';
+
+                    $busyFile = "{$card}/device/gpu_busy_percent";
+                    $usage = file_exists($busyFile) ? (float)trim(@file_get_contents($busyFile)) : 0;
+
+                    $temp = null;
+                    $hwmon = glob("{$card}/device/hwmon/hwmon*/temp1_input");
+                    if ($hwmon && file_exists($hwmon[0])) {
+                        $tRaw = (int)trim(@file_get_contents($hwmon[0]));
+                        if ($tRaw > 0) $temp = round($tRaw / 1000);
+                    }
+
+                    $vramUsed = null;
+                    $vramTotal = null;
+                    $vUsedFile = "{$card}/device/mem_info_vram_used";
+                    $vTotalFile = "{$card}/device/mem_info_vram_total";
+                    if (file_exists($vUsedFile) && file_exists($vTotalFile)) {
+                        $vramUsed = round((float)trim(@file_get_contents($vUsedFile)) / (1024 * 1024));
+                        $vramTotal = round((float)trim(@file_get_contents($vTotalFile)) / (1024 * 1024));
+                    }
+
+                    $gpuData['name'] = $amdName;
+                    $gpuData['vendor'] = 'AMD';
+                    $gpuData['usage'] = max(0, min(100, $usage));
+                    $gpuData['temp'] = $temp;
+                    $gpuData['vram_used'] = $vramUsed;
+                    $gpuData['vram_total'] = $vramTotal;
+                    $gpuData['vram_pct'] = ($vramTotal > 0) ? round(($vramUsed / $vramTotal) * 100, 1) : 0;
+                    $gpuData['driver'] = 'amdgpu';
+                    return $gpuData;
+                }
+            }
+        }
+    }
+
+    // 5. Generic display fallback via lspci
+    $genLspci = @shell_exec("lspci 2>/dev/null | grep -iE 'vga compatible controller|3d controller|display controller'");
+    if ($genLspci && trim($genLspci) !== '') {
+        $firstLine = explode("\n", trim($genLspci))[0];
+        if (preg_match('/:\s*(.+)$/', $firstLine, $m)) {
+            $model = trim($m[1]);
+            $vendor = (stripos($model, 'Intel') !== false) ? 'Intel' : ((stripos($model, 'NVIDIA') !== false) ? 'NVIDIA' : ((stripos($model, 'AMD') !== false || stripos($model, 'ATI') !== false) ? 'AMD' : 'Display'));
+            $gpuData['name'] = $model;
+            $gpuData['vendor'] = $vendor;
+            $gpuData['driver'] = 'generic';
+            return $gpuData;
+        }
+    }
+
+    return $gpuData;
+}
+
+function handle_check_docker_updates() {
+    $script = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate';
+    $out = '';
+    if (file_exists($script)) {
+        $out = @shell_exec("{$script} check 2>&1");
+    } else {
+        $out = @shell_exec('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check 2>&1');
+    }
+
+    // Re-read docker.ini
+    $updatesCount = 0;
+    $updates = [];
+    if (file_exists('/var/local/emhttp/docker.ini')) {
+        $ini = @parse_ini_file('/var/local/emhttp/docker.ini', true);
+        if (is_array($ini)) {
+            foreach ($ini as $cName => $sec) {
+                $isUpdate = (
+                    (isset($sec['updated']) && ($sec['updated'] === 'false' || $sec['updated'] === 0 || $sec['updated'] === '0')) ||
+                    (isset($sec['update']) && ($sec['update'] === 'true' || $sec['update'] === 'yes' || $sec['update'] === 1 || $sec['update'] === '1')) ||
+                    (isset($sec['install']) && stripos($sec['install'], 'update') !== false) ||
+                    (isset($sec['status']) && stripos($sec['status'], 'update') !== false)
+                );
+                if ($isUpdate) {
+                    $updatesCount++;
+                    $updates[] = $cName;
+                }
+            }
+        }
+    }
+
+    json_output([
+        'status' => 'success',
+        'message' => $updatesCount > 0 ? "检测完成，发现 {$updatesCount} 个容器有新版本可用！" : '检测完成，所有容器已是最新版本。',
+        'updates_count' => $updatesCount,
+        'update_containers' => $updates,
+        'output' => trim($out)
+    ]);
+}
+
+function handle_ca_apps() {
+    $cat = isset($_GET['category']) ? trim($_GET['category']) : 'all';
+    $search = isset($_GET['search']) ? trim($_GET['search']) : (isset($_GET['q']) ? trim($_GET['q']) : '');
+
+    $apps = [];
+
+    // 1. Attempt to read Unraid Community Applications local cache
+    $caCacheFile = '/tmp/community.applications/tempFiles/templates.json';
+    if (file_exists($caCacheFile)) {
+        $raw = @file_get_contents($caCacheFile);
+        if ($raw) {
+            $decoded = @json_decode($raw, true);
+            if (is_array($decoded)) {
+                foreach ($decoded as $item) {
+                    if (empty($item['Name']) && empty($item['name'])) continue;
+                    $name = !empty($item['Name']) ? $item['Name'] : $item['name'];
+                    $repo = !empty($item['Repository']) ? $item['Repository'] : (!empty($item['repository']) ? $item['repository'] : '');
+                    $desc = !empty($item['Overview']) ? $item['Overview'] : (!empty($item['description']) ? $item['description'] : '');
+                    $icon = !empty($item['Icon']) ? $item['Icon'] : (!empty($item['icon']) ? $item['icon'] : '');
+                    $category = !empty($item['Category']) ? $item['Category'] : (!empty($item['category']) ? $item['category'] : 'Tools:');
+                    $author = !empty($item['Author']) ? $item['Author'] : (!empty($item['author']) ? $item['author'] : 'Community');
+
+                    $apps[] = [
+                        'id' => md5($name . $repo),
+                        'name' => $name,
+                        'author' => $author,
+                        'repository' => $repo,
+                        'overview' => strip_tags($desc),
+                        'icon' => $icon,
+                        'category' => $category,
+                    ];
+                }
+            }
+        }
+    }
+
+    // 2. If CA cache is empty, provide curated high-quality Unraid Docker apps catalog
+    if (empty($apps)) {
+        $apps = get_default_curated_apps();
+    }
+
+    // Filter by search query
+    if (!empty($search)) {
+        $q = mb_strtolower($search, 'UTF-8');
+        $apps = array_values(array_filter($apps, function($a) use ($q) {
+            return (
+                stripos($a['name'], $q) !== false ||
+                stripos($a['overview'], $q) !== false ||
+                stripos($a['author'], $q) !== false ||
+                stripos($a['category'], $q) !== false
+            );
+        }));
+    }
+
+    // Filter by category
+    if ($cat !== 'all') {
+        $apps = array_values(array_filter($apps, function($a) use ($cat) {
+            $c = strtolower($a['category']);
+            if ($cat === 'media') return stripos($c, 'media') !== false || stripos($c, 'video') !== false || stripos($c, 'audio') !== false;
+            if ($cat === 'download') return stripos($c, 'download') !== false || stripos($c, 'torrent') !== false;
+            if ($cat === 'cloud') return stripos($c, 'cloud') !== false || stripos($c, 'backup') !== false || stripos($c, 'sync') !== false;
+            if ($cat === 'network') return stripos($c, 'network') !== false || stripos($c, 'proxy') !== false || stripos($c, 'vpn') !== false;
+            if ($cat === 'smarthome') return stripos($c, 'home') !== false || stripos($c, 'iot') !== false;
+            if ($cat === 'tools') return stripos($c, 'tool') !== false || stripos($c, 'system') !== false;
+            return true;
+        }));
+    }
+
+    json_output([
+        'status' => 'success',
+        'total' => count($apps),
+        'apps' => $apps
+    ]);
+}
+
+function get_default_curated_apps() {
+    return [
+        [
+            'id' => 'nextcloud',
+            'name' => 'Nextcloud',
+            'author' => 'linuxserver',
+            'repository' => 'lscr.io/linuxserver/nextcloud:latest',
+            'category' => 'Cloud:Backup',
+            'category_label' => '私有云盘',
+            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/nextcloud-logo.png',
+            'overview' => '行业领先的安全私有云存储中心，支持文件同步、在线文档、多端相册备份及企业级安全协作。',
+            'default_port' => 443
+        ],
+        [
+            'id' => 'plex',
+            'name' => 'Plex Media Server',
+            'author' => 'linuxserver',
+            'repository' => 'lscr.io/linuxserver/plex:latest',
+            'category' => 'Media:Video',
+            'category_label' => '影音媒体',
+            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/plex-logo.png',
+            'overview' => '全球广泛使用的影音服务器，自动刮削电影电视海报字幕，支持全平台硬件实时转码与远程推流。',
+            'default_port' => 32400
+        ],
+        [
+            'id' => 'jellyfin',
+            'name' => 'Jellyfin',
+            'author' => 'linuxserver',
+            'repository' => 'lscr.io/linuxserver/jellyfin:latest',
+            'category' => 'Media:Video',
+            'category_label' => '影音媒体',
+            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/jellyfin-logo.png',
+            'overview' => '100% 自由开源且零订阅的家庭影院媒体中枢，原生支持 Intel QuickSync 及硬件级 HDR 色调映射。',
+            'default_port' => 8096
+        ],
+        [
+            'id' => 'emby',
+            'name' => 'Emby Server',
+            'author' => 'emby',
+            'repository' => 'emby/embyserver:latest',
+            'category' => 'Media:Video',
+            'category_label' => '影音媒体',
+            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/emby-icon.png',
+            'overview' => '性能强悍的个人媒体服务器，支持精细化的多用户权限控制、Live TV 电视录制与流畅硬件转码。',
+            'default_port' => 8096
+        ],
+        [
+            'id' => 'qbittorrent',
+            'name' => 'qBittorrent',
+            'author' => 'linuxserver',
+            'repository' => 'lscr.io/linuxserver/qbittorrent:latest',
+            'category' => 'Download:Torrent',
+            'category_label' => '下载工具',
+            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/qbittorrent-logo.png',
+            'overview' => 'PT/BT 下载神器，内置完善的 WebUI 界面、RSS 订阅自动下载、限速调度与高级种子分类管理。',
+            'default_port' => 8080
+        ],
+        [
+            'id' => 'transmission',
+            'name' => 'Transmission',
+            'author' => 'linuxserver',
+            'repository' => 'lscr.io/linuxserver/transmission:latest',
+            'category' => 'Download:Torrent',
+            'category_label' => '下载工具',
+            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/transmission-logo.png',
+            'overview' => '超轻量级 BT 客户端，内存开销极小，极其适合 24 小时低功耗保种与海量种子挂机。',
+            'default_port' => 9091
+        ],
+        [
+            'id' => 'nginx-proxy-manager',
+            'name' => 'Nginx Proxy Manager',
+            'author' => 'jc21',
+            'repository' => 'jc21/nginx-proxy-manager:latest',
+            'category' => 'Network:Proxy',
+            'category_label' => '网络安全',
+            'icon' => 'https://raw.githubusercontent.com/NginxProxyManager/nginx-proxy-manager/develop/frontend/images/logo.png',
+            'overview' => '极简优雅的反向代理控制面板，支持一键自动申请部署 Let\'s Encrypt SSL 免费泛域名证书与访问控制。',
+            'default_port' => 81
+        ],
+        [
+            'id' => 'adguardhome',
+            'name' => 'AdGuard Home',
+            'author' => 'adguard',
+            'repository' => 'adguard/adguardhome:latest',
+            'category' => 'Network:Security',
+            'category_label' => '网络安全',
+            'icon' => 'https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/client/src/assets/logo.svg',
+            'overview' => '局域网全网级 DNS 广告拦截与隐私卫士，支持 DoH / DoT 加密解析、父母控制与全设备跟踪保护。',
+            'default_port' => 3000
+        ],
+        [
+            'id' => 'vaultwarden',
+            'name' => 'Vaultwarden',
+            'author' => 'dani-garcia',
+            'repository' => 'vaultwarden/server:latest',
+            'category' => 'Network:Security',
+            'category_label' => '网络安全',
+            'icon' => 'https://raw.githubusercontent.com/dani-garcia/vaultwarden/main/resources/vaultwarden-icon.svg',
+            'overview' => '基于 Rust 轻量重构的 Bitwarden 开源密码管理器后端，安全保管账号密码、二步验证码与信用卡信息。',
+            'default_port' => 80
+        ],
+        [
+            'id' => 'homeassistant',
+            'name' => 'Home Assistant',
+            'author' => 'homeassistant',
+            'repository' => 'ghcr.io/home-assistant/home-assistant:stable',
+            'category' => 'Home:IoT',
+            'category_label' => '智能家居',
+            'icon' => 'https://brands.home-assistant.io/homeassistant/icon.png',
+            'overview' => '全球第一的开源智能家居控制中心，整合米家、Apple HomeKit、Matter、Zigbee 与各类传感器联动。',
+            'default_port' => 8123
+        ],
+        [
+            'id' => 'uptime-kuma',
+            'name' => 'Uptime Kuma',
+            'author' => 'louislam',
+            'repository' => 'louislam/uptime-kuma:latest',
+            'category' => 'Tools:System',
+            'category_label' => '系统工具',
+            'icon' => 'https://raw.githubusercontent.com/louislam/uptime-kuma/master/public/icon.svg',
+            'overview' => '高颜值自建服务运行状态监控站，支持 HTTP、TCP、Ping、DNS 探针，并提供多通道异常消息推送。',
+            'default_port' => 3001
+        ],
+        [
+            'id' => 'immich',
+            'name' => 'Immich',
+            'author' => 'immich-app',
+            'repository' => 'ghcr.io/immich-app/immich-server:release',
+            'category' => 'Cloud:Backup',
+            'category_label' => '私有云盘',
+            'icon' => 'https://immich.app/img/immich-logo.svg',
+            'overview' => '高性能自建相册备份方案（Google Photos 完美替代品），原生移动端极速自动备份、AI 人脸与目标识别。',
+            'default_port' => 2283
+        ],
+        [
+            'id' => 'photoprism',
+            'name' => 'PhotoPrism',
+            'author' => 'photoprism',
+            'repository' => 'photoprism/photoprism:latest',
+            'category' => 'Cloud:Backup',
+            'category_label' => '私有云盘',
+            'icon' => 'https://raw.githubusercontent.com/photoprism/photoprism/develop/assets/static/img/app/favicon.png',
+            'overview' => '基于 TensorFlow AI 图像驱动的个人相册引擎，支持自动地图定位、人脸归类及时间线浏览。',
+            'default_port' => 2342
+        ],
+        [
+            'id' => 'tailscale',
+            'name' => 'Tailscale',
+            'author' => 'tailscale',
+            'repository' => 'tailscale/tailscale:latest',
+            'category' => 'Network:VPN',
+            'category_label' => '网络安全',
+            'icon' => 'https://tailscale.com/favicon.ico',
+            'overview' => '基于 WireGuard 协议构建的安全零配置虚拟局域网（Mesh VPN），轻松实现异地多设备点对点直连。',
+            'default_port' => 41641
+        ],
+        [
+            'id' => 'cloudflared',
+            'name' => 'Cloudflare Tunnel',
+            'author' => 'cloudflare',
+            'repository' => 'cloudflare/cloudflared:latest',
+            'category' => 'Network:Proxy',
+            'category_label' => '网络安全',
+            'icon' => 'https://www.cloudflare.com/favicon.ico',
+            'overview' => '无需公网 IP 与路由端口映射，安全将 Unraid 内网服务无缝发布穿透到全球互联网。',
+            'default_port' => 80
+        ],
+        [
+            'id' => 'portainer',
+            'name' => 'Portainer CE',
+            'author' => 'portainer',
+            'repository' => 'portainer/portainer-ce:latest',
+            'category' => 'Tools:System',
+            'category_label' => '系统工具',
+            'icon' => 'https://raw.githubusercontent.com/portainer/portainer/develop/app/assets/ico/favicon.ico',
+            'overview' => '强大的轻量级 Docker 图形化管理容器仪表板，便捷管理镜像、网络、数据卷与多节点集群。',
+            'default_port' => 9000
+        ],
+        [
+            'id' => 'homarr',
+            'name' => 'Homarr',
+            'author' => 'ajnart',
+            'repository' => 'ghcr.io/ajnart/homarr:latest',
+            'category' => 'Tools:System',
+            'category_label' => '系统工具',
+            'icon' => 'https://homarr.dev/img/logo.png',
+            'overview' => '现代美观的定制化 NAS 导航主页，深度集成 Docker、qBittorrent、Plex 实时状态小组件。',
+            'default_port' => 7575
+        ],
+        [
+            'id' => 'homepage',
+            'name' => 'Homepage',
+            'author' => 'gethomepage',
+            'repository' => 'ghcr.io/gethomepage/homepage:latest',
+            'category' => 'Tools:System',
+            'category_label' => '系统工具',
+            'icon' => 'https://gethomepage.dev/img/logo.png',
+            'overview' => '极简高效且高度可定制的自建导航面板，以 YAML 驱动，支持 100+ 项流行自建服务集成。',
+            'default_port' => 3000
+        ],
+        [
+            'id' => 'calibre-web',
+            'name' => 'Calibre-Web',
+            'author' => 'linuxserver',
+            'repository' => 'lscr.io/linuxserver/calibre-web:latest',
+            'category' => 'Media:Books',
+            'category_label' => '影音媒体',
+            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/calibre-web-logo.png',
+            'overview' => '干净整洁的私人在线数字图书馆，支持在线阅读 EPUB/PDF、图书元数据刮削及一键推送到 Kindle。',
+            'default_port' => 8083
+        ],
+        [
+            'id' => 'audiobookshelf',
+            'name' => 'Audiobookshelf',
+            'author' => 'advplyr',
+            'repository' => 'ghcr.io/advplyr/audiobookshelf:latest',
+            'category' => 'Media:Audio',
+            'category_label' => '影音媒体',
+            'icon' => 'https://raw.githubusercontent.com/advplyr/audiobookshelf/master/client/static/icon.png',
+            'overview' => '专为有声读物与播客打造的流媒体服务器，支持多端收听进度自动云同步与离线章节下载。',
+            'default_port' => 13378
+        ],
+        [
+            'id' => 'navidrome',
+            'name' => 'Navidrome',
+            'author' => 'deluan',
+            'repository' => 'deluan/navidrome:latest',
+            'category' => 'Media:Audio',
+            'category_label' => '影音媒体',
+            'icon' => 'https://raw.githubusercontent.com/navidrome/navidrome/master/resources/logo-192x192.png',
+            'overview' => '轻量超速的个人音乐流媒体服务器，完美兼容 Subsonic 移动客户端协议，支持无损 FLAC 串流。',
+            'default_port' => 4533
+        ],
+        [
+            'id' => 'stirling-pdf',
+            'name' => 'Stirling-PDF',
+            'author' => 'frooodle',
+            'repository' => 'frooodle/s-pdf:latest',
+            'category' => 'Tools:Productivity',
+            'category_label' => '系统工具',
+            'icon' => 'https://raw.githubusercontent.com/Frooodle/Stirling-PDF/main/src/main/resources/static/favicon.ico',
+            'overview' => '功能强大的本地离线 PDF 多功能工具箱，支持合并、拆分、OCR 识别、旋转、密码保护与页面提取。',
+            'default_port' => 8080
+        ],
+        [
+            'id' => 'it-tools',
+            'name' => 'IT-Tools',
+            'author' => 'corentinth',
+            'repository' => 'corentinth/it-tools:latest',
+            'category' => 'Tools:Productivity',
+            'category_label' => '系统工具',
+            'icon' => 'https://it-tools.tech/favicon-32x32.png',
+            'overview' => '开发人员与系统运维的百宝箱应用集合，包含编解码、时间戳转换、二维码生成、哈希比对等数十项实用工具。',
+            'default_port' => 80
+        ],
+        [
+            'id' => 'syncthing',
+            'name' => 'Syncthing',
+            'author' => 'linuxserver',
+            'repository' => 'lscr.io/linuxserver/syncthing:latest',
+            'category' => 'Cloud:Sync',
+            'category_label' => '私有云盘',
+            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/syncthing-logo.png',
+            'overview' => '持续点对点去中心化加密同步工具，无需中继服务器，安全保护多台电脑与手机间的数据一致性。',
+            'default_port' => 8384
+        ]
+    ];
 }
 

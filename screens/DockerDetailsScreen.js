@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  StyleSheet, Text, View, ScrollView, ActivityIndicator, TouchableOpacity,
+  Image, StyleSheet, Text, View, ScrollView, ActivityIndicator, TouchableOpacity,
   Modal, TextInput, Pressable, Platform, Linking, KeyboardAvoidingView,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import {
-  Cpu, Database, RotateCw, Play, Power, Terminal, ExternalLink,
+  ShoppingBag, Cpu, Database, RotateCw, Play, Power, Terminal, ExternalLink,
   Search, Copy, Check, X, RefreshCw, Globe, Sliders, Box, Layers,
   ChevronDown, ArrowUpDown, Filter, Sparkles, ArrowUp, FileCode, Plus, CheckCircle2, AlertTriangle, AlertCircle, Trash2, Folder } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
@@ -25,12 +25,29 @@ export default function DockerDetailsScreen() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'running' | 'stopped'
-  const [sortRule, setSortRule] = useState('status'); // 'status' | 'name' | 'cpu'
+  const [sortRule, setSortRule] = useState('name'); // 'name' | 'status' | 'cpu' // 'status' | 'name' | 'cpu'
   const [openingDocker, setOpeningDocker] = useState(null);
   const [updatingDocker, setUpdatingDocker] = useState(null);
 
   // 顶部分段切换：独立容器 vs Compose 堆栈
-  const [dockerMode, setDockerMode] = useState('containers'); // 'containers' | 'compose'
+  const [dockerMode, setDockerMode] = useState('containers'); // 'containers' | 'compose' | 'apps'
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+
+  // 社区应用市场 (Community Applications) 状态
+  const [caApps, setCaApps] = useState([]);
+  const [caLoading, setCaLoading] = useState(false);
+  const [caSearch, setCaSearch] = useState('');
+  const [caCategory, setCaCategory] = useState('all');
+
+  const CA_CATEGORIES = [
+    { id: 'all', label: '全部' },
+    { id: 'media', label: '影音媒体' },
+    { id: 'download', label: '下载工具' },
+    { id: 'cloud', label: '私有云盘' },
+    { id: 'network', label: '网络安全' },
+    { id: 'smarthome', label: '智能家居' },
+    { id: 'tools', label: '系统工具' },
+  ];
 
   // Docker Compose 状态
   const [composeProjects, setComposeProjects] = useState([]);
@@ -216,6 +233,89 @@ export default function DockerDetailsScreen() {
   };
 
   
+  
+  // 手动检查 Docker 容器更新
+  const handleCheckDockerUpdates = async () => {
+    try {
+      setCheckingUpdates(true);
+      const savedUrl = await AsyncStorage.getItem('@server_url');
+      const savedToken = await AsyncStorage.getItem('@api_token');
+      if (!savedUrl || !savedToken) return;
+
+      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=check_docker_updates`);
+      const data = await res.json();
+
+      await fetchDockerData();
+
+      const foundCount = data.update_count || 0;
+      showConfirm({
+        type: 'info',
+        title: '更新检查完成',
+        message: foundCount > 0
+          ? `共发现 ${foundCount} 个容器有新版本可用。已为您在列表中标记「可更新」。`
+          : '当前所有 Docker 容器均已为最新版本，暂无可用更新。',
+        confirmText: '好的',
+        showCancel: false,
+      });
+    } catch (err) {
+      showConfirm({
+        type: 'danger',
+        title: '检查更新失败',
+        message: '连接服务器或执行更新检测脚本异常，请稍后再试。',
+        confirmText: '确定',
+        showCancel: false,
+      });
+    } finally {
+      setCheckingUpdates(false);
+    }
+  };
+
+  // 获取社区应用列表
+  const fetchCaApps = async (cat = caCategory, q = caSearch) => {
+    try {
+      setCaLoading(true);
+      const savedUrl = await AsyncStorage.getItem('@server_url');
+      const savedToken = await AsyncStorage.getItem('@api_token');
+      if (!savedUrl || !savedToken) return;
+
+      const url = `${savedUrl}/api.php?token=${savedToken}&action=ca_apps&category=${encodeURIComponent(cat)}&q=${encodeURIComponent(q)}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.status === 'success' && Array.isArray(data.apps)) {
+        setCaApps(data.apps);
+      }
+    } catch (e) {
+      console.log('fetchCaApps error:', e);
+    } finally {
+      setCaLoading(false);
+    }
+  };
+
+  // 部署社区应用
+  const handleDeployApp = async (app) => {
+    try {
+      const savedUrl = await AsyncStorage.getItem('@server_url');
+      const cleanUrl = savedUrl ? savedUrl.replace(/\/api\.php.*$/, '').replace(/\/+$/, '') : '';
+      const templateDirectUrl = `${cleanUrl}/Docker/AddContainer?xmlTemplate=default:${encodeURIComponent(app.repository)}`;
+
+      showConfirm({
+        type: 'info',
+        title: `部署「${app.name}」`,
+        message: `镜像仓库: ${app.repository}\n推荐端口: ${app.default_port || '默认配置'}\n\n是否打开 Unraid 官方容器模板进行路径与端口配置？`,
+        confirmText: '打开模板配置',
+        cancelText: '取消',
+        showCancel: true,
+        onConfirm: () => {
+          Linking.openURL(templateDirectUrl).catch(() => {
+            Linking.openURL(cleanUrl);
+          });
+        },
+      });
+    } catch (e) {
+      console.log(e);
+    }
+  };
+
   // 容器升级操作
   const handleUpdateDocker = (name) => {
     showConfirm({
@@ -674,6 +774,7 @@ export default function DockerDetailsScreen() {
 
   // 聚合指标计算
   const runningCount = useMemo(() => dockers.filter(d => d.status === 'running').length, [dockers]);
+  const updateCount = useMemo(() => dockers.filter(d => d.update_available).length, [dockers]);
   const stoppedCount = useMemo(() => dockers.length - runningCount, [dockers, runningCount]);
   const totalCpuAgg = useMemo(() => {
     let sum = 0;
@@ -703,6 +804,8 @@ export default function DockerDetailsScreen() {
       list = list.filter(d => d.status === 'running');
     } else if (statusFilter === 'stopped') {
       list = list.filter(d => d.status !== 'running');
+    } else if (statusFilter === 'updates') {
+      list = list.filter(d => d.update_available);
     }
 
     if (searchQuery.trim()) {
@@ -1034,21 +1137,52 @@ export default function DockerDetailsScreen() {
                 已停止 {stoppedCount}
               </Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tabBtn, statusFilter === 'updates' && styles.tabBtnActive, updateCount > 0 && styles.tabBtnUpdateActive]}
+              onPress={() => setStatusFilter('updates')}
+            >
+              <Text style={[
+                styles.tabBtnText,
+                statusFilter === 'updates' && styles.tabBtnTextActive,
+                updateCount > 0 && { color: '#f59e0b', fontWeight: 'bold' }
+              ]}>
+                可更新 {updateCount}
+              </Text>
+            </TouchableOpacity>
           </View>
 
-          {/* 排序切换 */}
-          <TouchableOpacity
-            style={styles.sortToggleBtn}
-            onPress={() => {
-              const next = sortRule === 'status' ? 'cpu' : sortRule === 'cpu' ? 'name' : 'status';
-              setSortRule(next);
-            }}
-          >
-            <ArrowUpDown size={12} color={colors.sub} style={{ marginRight: 4 }} />
-            <Text style={styles.sortToggleText}>
-              {sortRule === 'status' ? '按状态' : sortRule === 'cpu' ? '按CPU' : '按名称'}
-            </Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {/* 检查更新按钮 */}
+            <TouchableOpacity
+              style={[styles.checkUpdatesBtn, checkingUpdates && { opacity: 0.7 }]}
+              onPress={handleCheckDockerUpdates}
+              disabled={checkingUpdates}
+              activeOpacity={0.8}
+            >
+              {checkingUpdates ? (
+                <ActivityIndicator size="small" color={colors.accent} style={{ marginRight: 4 }} />
+              ) : (
+                <RefreshCw size={12} color={colors.accent} style={{ marginRight: 4 }} />
+              )}
+              <Text style={[styles.checkUpdatesText, { color: colors.accent }]}>
+                {checkingUpdates ? '检查中' : '检查更新'}
+              </Text>
+            </TouchableOpacity>
+
+            {/* 排序切换 */}
+            <TouchableOpacity
+              style={[styles.sortToggleBtn, { marginLeft: 6 }]}
+              onPress={() => {
+                const next = sortRule === 'name' ? 'status' : sortRule === 'status' ? 'cpu' : 'name';
+                setSortRule(next);
+              }}
+            >
+              <ArrowUpDown size={12} color={colors.sub} style={{ marginRight: 4 }} />
+              <Text style={styles.sortToggleText}>
+                {sortRule === 'name' ? '按名称' : sortRule === 'status' ? '按状态' : '按CPU'}
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -1094,9 +1228,9 @@ export default function DockerDetailsScreen() {
 
                     
                     {docker.update_available && (
-                      <View style={styles.updateBadge}>
-                        <ArrowUp size={10} color="#f59e0b" style={{ marginRight: 2 }} />
-                        <Text style={styles.updateBadgeText}>可更新</Text>
+                      <View style={[styles.updateBadge, { backgroundColor: 'rgba(245, 158, 11, 0.2)', borderWidth: 1, borderColor: '#f59e0b' }]}>
+                        <ArrowUp size={11} color="#f59e0b" style={{ marginRight: 3 }} />
+                        <Text style={[styles.updateBadgeText, { color: '#f59e0b', fontWeight: 'bold' }]}>有新版本</Text>
                       </View>
                     )}
 
@@ -1178,17 +1312,18 @@ export default function DockerDetailsScreen() {
                   
                   {docker.update_available && (
                     <TouchableOpacity
-                      style={[styles.circleActionBtn, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}
+                      style={styles.updatePillBtn}
                       onPress={() => handleUpdateDocker(docker.name)}
                       disabled={updatingDocker === docker.name}
                       activeOpacity={0.7}
                       accessibilityLabel="升级容器"
                     >
                       {updatingDocker === docker.name ? (
-                        <ActivityIndicator size="small" color="#f59e0b" />
+                        <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 4 }} />
                       ) : (
-                        <ArrowUp size={14} color="#f59e0b" />
+                        <ArrowUp size={12} color="#ffffff" style={{ marginRight: 4 }} />
                       )}
+                      <Text style={styles.updatePillText}>升级</Text>
                     </TouchableOpacity>
                   )}
 
@@ -1599,6 +1734,150 @@ export default function DockerDetailsScreen() {
 }
 
 const createStyles = (colors, isDark) => StyleSheet.create({
+  tabBtnUpdateActive: {
+    borderColor: '#f59e0b',
+  },
+  checkUpdatesBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: isDark ? 'rgba(56, 189, 248, 0.12)' : 'rgba(56, 189, 248, 0.08)',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    marginRight: 4,
+  },
+  checkUpdatesText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  updatePillBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f59e0b',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    marginRight: 6,
+  },
+  updatePillText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  categoryScroll: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  categoryPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9',
+    marginRight: 6,
+  },
+  categoryPillActive: {
+    backgroundColor: colors.accent,
+  },
+  categoryPillText: {
+    fontSize: 12,
+    color: colors.sub,
+    fontWeight: '600',
+  },
+  categoryPillTextActive: {
+    color: '#ffffff',
+    fontWeight: '700',
+  },
+  appCard: {
+    backgroundColor: colors.card,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  appCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  appIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#f8fafc',
+  },
+  appIconFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  appIconFallbackText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  appNameText: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+    flex: 1,
+    marginRight: 8,
+  },
+  appCategoryBadge: {
+    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  appCategoryText: {
+    fontSize: 11,
+    color: colors.accent,
+    fontWeight: '600',
+  },
+  appAuthorText: {
+    fontSize: 12,
+    color: colors.sub,
+    marginTop: 2,
+  },
+  appOverviewText: {
+    fontSize: 13,
+    color: colors.text,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  appFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.cardBorder,
+  },
+  appRepoTag: {
+    flex: 1,
+    marginRight: 12,
+  },
+  appRepoText: {
+    fontSize: 11,
+    color: colors.sub,
+    fontFamily: 'monospace',
+  },
+  appInstallBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.accent,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 10,
+  },
+  appInstallBtnText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#ffffff',
+  },
+
   container: {
     flex: 1,
     backgroundColor: colors.bg,
