@@ -1331,8 +1331,8 @@ function handle_update_docker() {
 
     // 3. If container belongs to a Docker Compose stack, use docker compose
     if (!$updated) {
-        $composeWorkingDir = trim(@shell_exec("docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' {$escaped} 2>/dev/null"));
-        $composeService = trim(@shell_exec("docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' {$escaped} 2>/dev/null"));
+        $composeWorkingDir = trim(@shell_exec('docker inspect --format \'{{index .Config.Labels "com.docker.compose.project.working_dir"}}\' ' . $escaped . ' 2>/dev/null'));
+        $composeService = trim(@shell_exec('docker inspect --format \'{{index .Config.Labels "com.docker.compose.service"}}\' ' . $escaped . ' 2>/dev/null'));
         if (!empty($composeWorkingDir) && is_dir($composeWorkingDir)) {
             $composeCmd = get_compose_cmd();
             $svcArg = !empty($composeService) ? escapeshellarg($composeService) : '';
@@ -1376,15 +1376,28 @@ function handle_update_docker() {
         if (file_exists($iniFile)) {
             $rawIni = @file_get_contents($iniFile);
             if ($rawIni) {
-                $pattern = '/(\\[' . preg_quote($cleanTarget, '/') . '\\][^\\[]*)/i';
-                if (preg_match($pattern, $rawIni, $pm)) {
-                    $sec = $pm[1];
-                    $sec = preg_replace('/updated\\s*=\\s*["\']?[^"\'\\r\\n]+["\']?/i', 'updated="true"', $sec);
-                    $sec = preg_replace('/update\\s*=\\s*["\']?[^"\'\\r\\n]+["\']?/i', 'update="false"', $sec);
-                    $sec = preg_replace('/status\\s*=\\s*["\']?[^"\'\\r\\n]+["\']?/i', 'status=""', $sec);
-                    $rawIni = str_replace($pm[1], $sec, $rawIni);
-                    @file_put_contents($iniFile, $rawIni);
+                $iniLines = explode("\n", $rawIni);
+                $outIniLines = [];
+                $inTargetSec = false;
+                foreach ($iniLines as $iLine) {
+                    $trimL = trim($iLine);
+                    if (strpos($trimL, '[') === 0 && substr($trimL, -1) === ']') {
+                        $sName = substr($trimL, 1, -1);
+                        $inTargetSec = ($sName === $cleanTarget || ltrim($sName, '/') === $cleanTarget || strtolower($sName) === strtolower($cleanTarget));
+                    } elseif ($inTargetSec && strpos($iLine, '=') !== false) {
+                        $parts = explode('=', $iLine, 2);
+                        $kTrim = strtolower(trim($parts[0]));
+                        if ($kTrim === 'updated') {
+                            $iLine = 'updated="true"';
+                        } elseif ($kTrim === 'update') {
+                            $iLine = 'update="false"';
+                        } elseif ($kTrim === 'status') {
+                            $iLine = 'status=""';
+                        }
+                    }
+                    $outIniLines[] = $iLine;
                 }
+                @file_put_contents($iniFile, implode("\n", $outIniLines));
             }
         }
 
