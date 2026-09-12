@@ -462,6 +462,8 @@ export default function FilesScreen({ navigation }) {
 
       let lastReportTime = Date.now();
       let lastReportBytes = 0;
+      let lastPositiveSpeedTime = Date.now();
+      let smoothedSpeed = 0;
       let currentSpeedDisplay = '正在上传...';
 
       const uploadTask = FileSystem.createUploadTask(
@@ -482,11 +484,54 @@ export default function FilesScreen({ navigation }) {
           const now = Date.now();
           const elapsed = (now - lastReportTime) / 1000;
 
-          if (elapsed >= 0.3 || totalSent >= totalExp) {
-            const speedBytes = elapsed > 0 ? (totalSent - lastReportBytes) / elapsed : 0;
+          // 1. Transmission over network finished (all bytes delivered to server)
+          if (totalSent >= totalExp && totalExp > 0) {
+            const szStr = `${formatBytesFixed(totalSent)} / ${formatBytesFixed(totalExp)} · 传输完毕`;
+            const syncMsg = '服务器落盘同步中...';
+            currentSpeedDisplay = syncMsg;
+            setTransfers(prev => prev.map(t => (t.id === taskId ? {
+              ...t,
+              status: 'running',
+              progress: 99,
+              transferredBytes: totalSent,
+              totalBytes: totalExp,
+              sizeText: szStr,
+              speedDisplay: syncMsg,
+            } : t)));
+
+            backgroundTransferManager.updateForegroundProgress({
+              name: taskItem.name,
+              progress: 99,
+              speedStr: syncMsg,
+              sizeText: szStr,
+            });
+            return;
+          }
+
+          // 2. Sample speed with Exponential Moving Average (EMA) smoothing
+          if (elapsed >= 0.4) {
+            const bytesDelta = totalSent - lastReportBytes;
+            const instantSpeed = bytesDelta > 0 ? (bytesDelta / elapsed) : 0;
             lastReportTime = now;
             lastReportBytes = totalSent;
-            const spdStr = speedBytes > 0 ? `${formatBytesFixed(speedBytes)}/s` : currentSpeedDisplay;
+
+            if (instantSpeed > 0) {
+              // EMA smoothing: 35% new measurement, 65% rolling historical average
+              smoothedSpeed = smoothedSpeed > 0 ? (0.35 * instantSpeed + 0.65 * smoothedSpeed) : instantSpeed;
+              lastPositiveSpeedTime = now;
+            } else {
+              // Graceful decay during TCP ACK delays or storage commit pauses
+              const stallSec = (now - lastPositiveSpeedTime) / 1000;
+              if (stallSec > 2.0) {
+                smoothedSpeed = 0;
+              } else {
+                smoothedSpeed = smoothedSpeed * 0.8;
+              }
+            }
+
+            const spdStr = smoothedSpeed > 300
+              ? `${formatBytesFixed(smoothedSpeed)}/s`
+              : (instantSpeed > 0 ? `${formatBytesFixed(instantSpeed)}/s` : (smoothedSpeed > 0 ? `${formatBytesFixed(smoothedSpeed)}/s` : '传输中...'));
             currentSpeedDisplay = spdStr;
             const progressPct = totalExp > 0 ? Math.min(99, Math.round((totalSent / totalExp) * 100)) : 0;
             const szStr = `${formatBytesFixed(totalSent)} / ${formatBytesFixed(totalExp)}`;

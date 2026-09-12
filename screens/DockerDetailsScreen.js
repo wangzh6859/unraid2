@@ -359,16 +359,22 @@ export default function DockerDetailsScreen({ route }) {
     showConfirm({
       type: 'warning',
       title: '升级容器',
-      message: `确定要拉取最新镜像并重新创建容器「${name}」吗？\n升级过程中容器将会短暂离线。`,
+      message: `确定要拉取最新镜像并重新创建容器「${name}」吗？\n拉取镜像与重建容器通常需要 1 至 3 分钟，升级过程中容器将短暂离线。`,
       confirmText: '立即升级',
       cancelText: '取消',
       showCancel: true,
       onConfirm: async () => {
         setUpdatingDocker(name);
+        const controller = new AbortController();
+        const timeoutTimer = setTimeout(() => controller.abort(), 360000); // 6 minutes timeout for image pull
         try {
           const savedUrl = await AsyncStorage.getItem('@server_url');
           const savedToken = await AsyncStorage.getItem('@api_token');
-          const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=update_docker&target=${encodeURIComponent(name)}`);
+          const res = await fetch(
+            `${savedUrl}/api.php?token=${savedToken}&action=update_docker&target=${encodeURIComponent(name)}`,
+            { signal: controller.signal }
+          );
+          clearTimeout(timeoutTimer);
           const data = await res.json();
           if (data.status === 'success') {
             showConfirm({
@@ -378,21 +384,26 @@ export default function DockerDetailsScreen({ route }) {
               confirmText: '好的',
               showCancel: false,
             });
-            fetchDockerData();
+            await fetchDockerData();
+            setTimeout(() => fetchDockerData(), 2500);
           } else {
             showConfirm({
               type: 'error',
               title: '升级失败',
-              message: data.message || '更新过程遇到错误',
+              message: data.message || '升级未能完成，未检测到容器重新创建',
               confirmText: '确定',
               showCancel: false,
             });
           }
         } catch (e) {
+          clearTimeout(timeoutTimer);
+          const isTimeout = e.name === 'AbortError' || (e.message && e.message.includes('abort'));
           showConfirm({
             type: 'warning',
-            title: '网络异常',
-            message: e.message || '网络连接超时',
+            title: isTimeout ? '升级超时' : '请求异常',
+            message: isTimeout 
+              ? '镜像拉取时间较长已超过6分钟。Unraid 服务端仍在后台继续升级，请稍后刷新容器列表查看状态。' 
+              : (e.message || '网络连接异常'),
             confirmText: '确定',
             showCancel: false,
           });

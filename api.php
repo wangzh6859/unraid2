@@ -1261,43 +1261,179 @@ function handle_docker_logs() {
 // -------------------------------------------------------------
 // Docker Container Update / Upgrade
 // -------------------------------------------------------------
+// Docker Container Update / Upgrade
+// -------------------------------------------------------------
 function handle_update_docker() {
+    @set_time_limit(600);
+    @ini_set('max_execution_time', '600');
+    @ignore_user_abort(true);
+
     $target = isset($_GET['target']) ? trim($_GET['target']) : '';
     if (empty($target)) {
         json_output(['status' => 'error', 'message' => 'Missing target docker container'], 400);
     }
     
-    // 1. If Unraid official updater is available
+    $cleanTarget = ltrim($target, '/');
+    $escaped = escapeshellarg($cleanTarget);
+
+    // Retrieve container details before update
+    $oldId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escaped} 2>/dev/null"));
+    $oldImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
+    $imageName = trim(@shell_exec("docker inspect --format '{{.Config.Image}}' {$escaped} 2>/dev/null"));
+
+    if (empty($oldId)) {
+        // Retry with original raw target
+        $rawEscaped = escapeshellarg($target);
+        $oldId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$rawEscaped} 2>/dev/null"));
+        $oldImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$rawEscaped} 2>/dev/null"));
+        $imageName = trim(@shell_exec("docker inspect --format '{{.Config.Image}}' {$rawEscaped} 2>/dev/null"));
+        if (!empty($oldId)) {
+            $cleanTarget = $target;
+            $escaped = $rawEscaped;
+        }
+    }
+
+    if (empty($oldId)) {
+        json_output(['status' => 'error', 'message' => "未在系统中找到容器 [{$cleanTarget}]"], 404);
+    }
+
+    $updaterOut = '';
+    $updated = false;
+
+    // 1. Try Unraid Dynamix Docker Manager "dockerupdate update <target>" (Note: "update", NOT "apply"!)
     $unraidUpdater = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate';
     if (file_exists($unraidUpdater)) {
-        $cmd = $unraidUpdater . ' apply ' . escapeshellarg($target);
-        $out = @shell_exec($cmd . ' 2>&1');
-        json_output([
-            'status' => 'success',
-            'message' => "已触发容器 [{$target}] 原生升级任务",
-            'output' => trim($out)
-        ]);
+        $cmd = "{$unraidUpdater} update " . escapeshellarg($cleanTarget);
+        $updaterOut .= @shell_exec("{$cmd} 2>&1") . "\n";
     }
 
-    // 2. Fallback: inspect image and recreate/restart
-    $escaped = escapeshellarg($target);
-    $imgRaw = @shell_exec("docker inspect --format '{{.Config.Image}}' {$escaped} 2>/dev/null");
-    $image = trim($imgRaw);
-    if (!empty($image)) {
-        $pullOut = @shell_exec("docker pull " . escapeshellarg($image) . " 2>&1");
-        $restartOut = @shell_exec("docker restart {$escaped} 2>&1");
-        json_output([
-            'status' => 'success',
-            'message' => "已拉取镜像 [{$image}] 并重启容器 [{$target}]",
-            'output' => trim($pullOut . "\n" . $restartOut)
-        ]);
+    // Check if container was recreated with a new container ID or image
+    $newId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escaped} 2>/dev/null"));
+    $newImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
+    if (!empty($newId) && ($newId !== $oldId || $newImgId !== $oldImgId)) {
+        $updated = true;
     }
 
-    json_output(['status' => 'error', 'message' => "未找到容器 [{$target}] 镜像信息"], 404);
+    // 2. Try Unraid Dynamix docker wrapper script "/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/docker update <target>"
+    if (!$updated) {
+        $dynamixDocker = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/docker';
+        if (file_exists($dynamixDocker)) {
+            $cmd2 = "{$dynamixDocker} update " . escapeshellarg($cleanTarget);
+            $updaterOut .= @shell_exec("{$cmd2} 2>&1") . "\n";
+
+            $newId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escaped} 2>/dev/null"));
+            $newImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
+            if (!empty($newId) && ($newId !== $oldId || $newImgId !== $oldImgId)) {
+                $updated = true;
+            }
+        }
+    }
+
+    // 3. If container belongs to a Docker Compose stack, use docker compose
+    if (!$updated) {
+        $composeWorkingDir = trim(@shell_exec("docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' {$escaped} 2>/dev/null"));
+        $composeService = trim(@shell_exec("docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' {$escaped} 2>/dev/null"));
+        if (!empty($composeWorkingDir) && is_dir($composeWorkingDir)) {
+            $composeCmd = get_compose_cmd();
+            $svcArg = !empty($composeService) ? escapeshellarg($composeService) : '';
+            $cmdCompose = "cd " . escapeshellarg($composeWorkingDir) . " && {$composeCmd} pull {$svcArg} 2>&1 && {$composeCmd} up -d {$svcArg} 2>&1";
+            $updaterOut .= @shell_exec($cmdCompose) . "\n";
+
+            $newId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escaped} 2>/dev/null"));
+            $newImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
+            if (!empty($newId) && ($newId !== $oldId || $newImgId !== $oldImgId)) {
+                $updated = true;
+            }
+        }
+    }
+
+    // 4. Standalone fallback: pull image and re-invoke updater
+    if (!$updated && !empty($imageName)) {
+        $pullOut = @shell_exec("docker pull " . escapeshellarg($imageName) . " 2>&1");
+        $updaterOut .= $pullOut . "\n";
+
+        $latestPulledImgId = trim(@shell_exec("docker inspect --format '{{.Id}}' " . escapeshellarg($imageName) . " 2>/dev/null"));
+
+        if (file_exists($unraidUpdater)) {
+            $retryOut = @shell_exec("{$unraidUpdater} update " . escapeshellarg($cleanTarget) . " 2>&1");
+            $updaterOut .= $retryOut . "\n";
+            $newId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escaped} 2>/dev/null"));
+            $newImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
+            if (!empty($newId) && ($newId !== $oldId || $newImgId !== $oldImgId)) {
+                $updated = true;
+            }
+        }
+
+        // If local image already matches latest remote registry image digest
+        if (!$updated && !empty($latestPulledImgId) && $latestPulledImgId === $oldImgId) {
+            $updated = true;
+        }
+    }
+
+    if ($updated) {
+        // Clean up Unraid docker.ini entry to mark updated
+        $iniFile = '/var/local/emhttp/docker.ini';
+        if (file_exists($iniFile)) {
+            $rawIni = @file_get_contents($iniFile);
+            if ($rawIni) {
+                $pattern = '/(\\[' . preg_quote($cleanTarget, '/') . '\\][^\\[]*)/i';
+                if (preg_match($pattern, $rawIni, $pm)) {
+                    $sec = $pm[1];
+                    $sec = preg_replace('/updated\\s*=\\s*["\']?[^"\'\\r\\n]+["\']?/i', 'updated="true"', $sec);
+                    $sec = preg_replace('/update\\s*=\\s*["\']?[^"\'\\r\\n]+["\']?/i', 'update="false"', $sec);
+                    $sec = preg_replace('/status\\s*=\\s*["\']?[^"\'\\r\\n]+["\']?/i', 'status=""', $sec);
+                    $rawIni = str_replace($pm[1], $sec, $rawIni);
+                    @file_put_contents($iniFile, $rawIni);
+                }
+            }
+        }
+
+        // Archive / remove unread notification in /tmp/notifications/unread/
+        $notifDir = '/tmp/notifications/unread';
+        if (is_dir($notifDir)) {
+            $nfiles = @scandir($notifDir);
+            if ($nfiles) {
+                foreach ($nfiles as $nf) {
+                    if ($nf === '.' || $nf === '..') continue;
+                    $nfp = "{$notifDir}/{$nf}";
+                    if (is_file($nfp)) {
+                        $nfc = @file_get_contents($nfp);
+                        if ($nfc && (stripos($nfc, $cleanTarget) !== false || stripos($nf, $cleanTarget) !== false)) {
+                            $archiveDir = '/tmp/notifications/archive';
+                            if (is_dir($archiveDir)) {
+                                @rename($nfp, "{$archiveDir}/{$nf}");
+                            } else {
+                                @unlink($nfp);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Trigger background check to refresh Unraid WebGUI status
+        if (file_exists('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate')) {
+            @exec("nohup /usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check >/dev/null 2>&1 &");
+        }
+
+        json_output([
+            'status' => 'success',
+            'message' => "容器 [{$cleanTarget}] 升级成功！已更新至最新版本。",
+            'details' => [
+                'old_id' => substr($oldId, 0, 12),
+                'new_id' => !empty($newId) ? substr($newId, 0, 12) : substr($oldId, 0, 12),
+                'output' => trim($updaterOut)
+            ]
+        ]);
+    } else {
+        json_output([
+            'status' => 'error',
+            'message' => "容器升级未能完成：未检测到新容器创建或配置未变动。\n" . trim(substr($updaterOut, 0, 400)),
+            'output' => trim($updaterOut)
+        ], 500);
+    }
 }
 
-// -------------------------------------------------------------
-// Docker Compose Stack Management
 // -------------------------------------------------------------
 function get_compose_cmd() {
     static $cmd = null;
@@ -2412,22 +2548,36 @@ function handle_file_upload() {
             json_output(['status' => 'error', 'message' => 'Failed to open destination file for writing: ' . $destPath], 500);
         }
 
+        if (function_exists('stream_set_chunk_size')) {
+            @stream_set_chunk_size($in, 524288);
+            @stream_set_chunk_size($out, 524288);
+        }
+        if (function_exists('stream_set_write_buffer')) {
+            @stream_set_write_buffer($out, 0);
+        }
+
         $bytesWritten = 0;
-        while (!feof($in)) {
-            @set_time_limit(0);
-            $buff = fread($in, 262144);
-            if ($buff === false || $buff === '') {
-                break;
+        if (function_exists('stream_copy_to_stream')) {
+            $bytesWritten = @stream_copy_to_stream($in, $out);
+        }
+        if ($bytesWritten === 0 || $bytesWritten === false) {
+            $bytesWritten = 0;
+            while (!feof($in)) {
+                @set_time_limit(0);
+                $buff = fread($in, 524288);
+                if ($buff === false || $buff === '') {
+                    break;
+                }
+                $w = fwrite($out, $buff);
+                if ($w === false) {
+                    break;
+                }
+                $bytesWritten += $w;
             }
-            $w = fwrite($out, $buff);
-            if ($w === false) {
-                break;
-            }
-            $bytesWritten += $w;
         }
         @fflush($out);
-        @fclose($in);
         @fclose($out);
+        @fclose($in);
 
         clearstatcache(true, $destPath);
         if ($bytesWritten === 0 || !file_exists($destPath) || filesize($destPath) === 0) {
