@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  Image, StyleSheet, Text, View, ScrollView, ActivityIndicator, TouchableOpacity,
+  Image, StyleSheet, Text, View, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity,
   Modal, TextInput, Pressable, Platform, Linking, KeyboardAvoidingView,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import {
-  ShoppingBag, Cpu, Database, RotateCw, Play, Power, Terminal, ExternalLink,
+  ShoppingBag, Download, Cpu, Database, RotateCw, Play, Power, Terminal, ExternalLink,
   Search, Copy, Check, X, RefreshCw, Globe, Sliders, Box, Layers,
   ChevronDown, ArrowUpDown, Filter, Sparkles, ArrowUp, FileCode, Plus, CheckCircle2, AlertTriangle, AlertCircle, Trash2, Folder } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
@@ -1104,6 +1104,138 @@ export default function DockerDetailsScreen({ route }) {
             )}
           </ScrollView>
         </View>
+      ) : dockerMode === 'apps' ? (
+        <View style={{ flex: 1 }}>
+          {/* 社区应用市场视图 */}
+          <View style={styles.filterSection}>
+            <View style={styles.searchBox}>
+              <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="搜索官方模板与社区应用..."
+                placeholderTextColor={colors.muted}
+                value={caSearch}
+                onChangeText={(t) => {
+                  setCaSearch(t);
+                  fetchCaApps(caCategory, t);
+                }}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              {caSearch ? (
+                <TouchableOpacity onPress={() => { setCaSearch(''); fetchCaApps(caCategory, ''); }}>
+                  <X size={15} color={colors.sub} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            {/* 分类快捷滑块 */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ marginTop: 10 }}
+              contentContainerStyle={{ gap: 8, paddingRight: 16 }}
+            >
+              {CA_CATEGORIES.map(cat => (
+                <TouchableOpacity
+                  key={cat.id}
+                  style={[
+                    styles.tabBtn,
+                    caCategory === cat.id && styles.tabBtnActive
+                  ]}
+                  onPress={() => {
+                    setCaCategory(cat.id);
+                    fetchCaApps(cat.id, caSearch);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[
+                    styles.tabBtnText,
+                    caCategory === cat.id && styles.tabBtnTextActive
+                  ]}>
+                    {cat.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+
+          {/* 应用卡片列表 */}
+          {caLoading && caApps.length === 0 ? (
+            <View style={styles.center}>
+              <ActivityIndicator size="large" color={colors.accent} />
+              <Text style={styles.loadingText}>正在获取社区应用市场清单...</Text>
+            </View>
+          ) : (
+            <ScrollView
+              contentContainerStyle={styles.content}
+              showsVerticalScrollIndicator={false}
+              refreshControl={
+                <RefreshControl
+                  refreshing={caLoading}
+                  onRefresh={() => fetchCaApps(caCategory, caSearch)}
+                  colors={[colors.accent]}
+                  tintColor={colors.accent}
+                />
+              }
+            >
+              {caApps.map((app, index) => (
+                <View key={app.id || index} style={styles.dockerCard}>
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                    {app.icon ? (
+                      <Image
+                        source={{ uri: app.icon }}
+                        style={styles.appIcon}
+                        resizeMode="contain"
+                      />
+                    ) : (
+                      <View style={[styles.appIconFallback, { backgroundColor: 'rgba(56, 189, 248, 0.12)' }]}>
+                        <ShoppingBag size={22} color={colors.accent} />
+                      </View>
+                    )}
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Text style={styles.appNameText} numberOfLines={1}>{app.name}</Text>
+                        <View style={styles.appCategoryBadge}>
+                          <Text style={styles.appCategoryText}>{app.category || 'Tools'}</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.appAuthorText} numberOfLines={1}>作者: {app.author || '社区精选'}</Text>
+                    </View>
+                  </View>
+
+                  {app.overview ? (
+                    <Text style={[styles.appOverviewText, { marginTop: 10 }]} numberOfLines={3}>
+                      {app.overview}
+                    </Text>
+                  ) : null}
+
+                  <View style={styles.appFooterRow}>
+                    <View style={styles.appRepoTag}>
+                      <Text style={styles.appRepoText} numberOfLines={1}>{app.repository}</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.appInstallBtn}
+                      onPress={() => handleDeployApp(app)}
+                      activeOpacity={0.8}
+                    >
+                      <Download size={13} color="#ffffff" style={{ marginRight: 4 }} />
+                      <Text style={styles.appInstallBtnText}>一键部署</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+
+              {caApps.length === 0 && !caLoading && (
+                <View style={styles.emptyContainer}>
+                  <ShoppingBag size={42} color={colors.muted} style={{ marginBottom: 12 }} />
+                  <Text style={styles.emptyTitle}>暂无匹配应用</Text>
+                  <Text style={styles.emptySub}>未搜索到相关应用模板，请尝试更换关键词或分类。</Text>
+                </View>
+              )}
+            </ScrollView>
+          )}
+        </View>
       ) : (
         <View style={{ flex: 1 }}>
 
@@ -1155,7 +1287,11 @@ export default function DockerDetailsScreen({ route }) {
         </View>
 
         <View style={styles.filterRow}>
-          <View style={styles.tabsRow}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.filterScrollContainer}
+          >
             <TouchableOpacity
               style={[styles.tabBtn, statusFilter === 'all' && styles.tabBtnActive]}
               onPress={() => setStatusFilter('all')}
@@ -1164,6 +1300,7 @@ export default function DockerDetailsScreen({ route }) {
                 全部 {dockers.length}
               </Text>
             </TouchableOpacity>
+
             <TouchableOpacity
               style={[styles.tabBtn, statusFilter === 'running' && styles.tabBtnActive]}
               onPress={() => setStatusFilter('running')}
@@ -1172,6 +1309,7 @@ export default function DockerDetailsScreen({ route }) {
                 运行中 {runningCount}
               </Text>
             </TouchableOpacity>
+
             <TouchableOpacity
               style={[styles.tabBtn, statusFilter === 'stopped' && styles.tabBtnActive]}
               onPress={() => setStatusFilter('stopped')}
@@ -1180,8 +1318,13 @@ export default function DockerDetailsScreen({ route }) {
                 已停止 {stoppedCount}
               </Text>
             </TouchableOpacity>
+
             <TouchableOpacity
-              style={[styles.tabBtn, statusFilter === 'updates' && styles.tabBtnActive, updateCount > 0 && styles.tabBtnUpdateActive]}
+              style={[
+                styles.tabBtn,
+                statusFilter === 'updates' && styles.tabBtnActive,
+                updateCount > 0 && styles.tabBtnUpdateActive
+              ]}
               onPress={() => setStatusFilter('updates')}
             >
               <Text style={[
@@ -1192,23 +1335,39 @@ export default function DockerDetailsScreen({ route }) {
                 有更新 {updateCount}
               </Text>
             </TouchableOpacity>
-          </View>
 
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {/* 检查更新按钮 */}
+            <TouchableOpacity
+              style={[styles.tabBtn, styles.checkUpdateBtn]}
+              onPress={handleCheckDockerUpdates}
+              disabled={checkingUpdates}
+              activeOpacity={0.7}
+            >
+              {checkingUpdates ? (
+                <ActivityIndicator size="small" color="#f59e0b" style={{ marginRight: 4 }} />
+              ) : (
+                <RefreshCw size={12} color="#f59e0b" style={{ marginRight: 4 }} />
+              )}
+              <Text style={[styles.tabBtnText, { color: '#f59e0b', fontWeight: '600' }]}>
+                {checkingUpdates ? '正在检测...' : '检查更新'}
+              </Text>
+            </TouchableOpacity>
+
             {/* 排序切换 */}
             <TouchableOpacity
-              style={[styles.sortToggleBtn, { marginLeft: 6 }]}
+              style={styles.sortToggleBtn}
               onPress={() => {
                 const next = sortRule === 'name' ? 'status' : sortRule === 'status' ? 'cpu' : 'name';
                 setSortRule(next);
               }}
+              activeOpacity={0.7}
             >
               <ArrowUpDown size={12} color={colors.sub} style={{ marginRight: 4 }} />
               <Text style={styles.sortToggleText}>
                 {sortRule === 'name' ? '按名称' : sortRule === 'status' ? '按状态' : '按CPU'}
               </Text>
             </TouchableOpacity>
-          </View>
+          </ScrollView>
         </View>
       </View>
 
@@ -1980,6 +2139,19 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     color: colors.textStrong,
     fontSize: 13,
     paddingVertical: 0,
+  },
+  filterScrollContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 2,
+    paddingRight: 16,
+  },
+  checkUpdateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderColor: 'rgba(245, 158, 11, 0.4)',
+    backgroundColor: isDark ? 'rgba(245, 158, 11, 0.1)' : '#fffbeb',
   },
   filterRow: {
     flexDirection: 'row',

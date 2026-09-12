@@ -882,96 +882,48 @@ export default function DashboardScreen({ navigation }) {
       </View>
 
       
-      {/* 2.5 GPU 硬件加速卡片 (检测到独立显卡或核心显卡时渲染) */}
+      {/* 2.5 GPU 硬件加速卡片 (紧凑单行 Bento 磁贴) */}
       {gpu && gpu.name && gpu.name !== '未配置独立显卡' && gpu.name !== 'N/A' ? (
-        <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
-              <Zap size={17} color={colors.accent} style={{ marginRight: 8 }} />
-              <Text style={styles.cardTitle} numberOfLines={1}>GPU 硬件加速</Text>
-            </View>
-            <View style={[styles.gpuVendorBadge, {
+        <View style={styles.miniGpuCard}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+            <Zap size={14} color={colors.accent} style={{ marginRight: 6 }} />
+            <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textStrong, marginRight: 6 }} numberOfLines={1}>
+              {gpu.clean_name || gpu.name}
+            </Text>
+            <View style={[styles.gpuMiniBadge, {
               backgroundColor: gpu.vendor === 'NVIDIA' ? 'rgba(34, 197, 94, 0.15)' :
                                gpu.vendor === 'INTEL' ? 'rgba(56, 189, 248, 0.15)' :
                                gpu.vendor === 'AMD' ? 'rgba(239, 68, 68, 0.15)' :
                                'rgba(148, 163, 184, 0.15)'
             }]}>
-              <Text style={[styles.gpuVendorText, {
+              <Text style={{
+                fontSize: 10,
+                fontWeight: '700',
                 color: gpu.vendor === 'NVIDIA' ? '#22c55e' :
                        gpu.vendor === 'INTEL' ? '#38bdf8' :
-                       gpu.vendor === 'AMD' ? '#ef4444' :
-                       colors.sub
-              }]}>
+                       gpu.vendor === 'AMD' ? '#ef4444' : colors.sub
+              }}>
                 {gpu.vendor || 'GPU'}
               </Text>
             </View>
           </View>
 
-          <View style={{ marginTop: 6, marginBottom: 10 }}>
-            <Text style={{ fontSize: 13, fontWeight: '600', color: colors.textStrong }} numberOfLines={1}>
-              {gpu.name}
-            </Text>
-            {gpu.driver && gpu.driver !== 'N/A' ? (
-              <Text style={{ fontSize: 11, color: colors.sub, marginTop: 2 }}>
-                驱动: {gpu.driver}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            {gpu.clock_mhz ? (
+              <Text style={{ fontSize: 11, color: colors.sub, fontFamily: 'monospace' }}>
+                {gpu.clock_mhz} MHz
               </Text>
             ) : null}
-          </View>
-
-          {/* GPU 利用率进度条 */}
-          <View style={{ marginBottom: 12 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ fontSize: 12, color: colors.sub }}>负载利用率</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={{ fontSize: 11, color: colors.sub, marginRight: 4 }}>负载</Text>
               <Text style={{ fontSize: 12, fontWeight: '700', color: colors.accent, fontFamily: 'monospace' }}>
                 {(gpu.usage || 0).toFixed(0)}%
               </Text>
             </View>
-            <View style={{ height: 6, backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#e2e8f0', borderRadius: 3, overflow: 'hidden' }}>
-              <View style={{
-                height: '100%',
-                width: `${Math.min(100, Math.max(0, gpu.usage || 0))}%`,
-                backgroundColor: (gpu.usage || 0) > 85 ? colors.tempWarm : colors.accent,
-                borderRadius: 3
-              }} />
-            </View>
-          </View>
-
-          {/* 详细指标小磁贴 (温度 / 显存 / 频率 / 功耗) */}
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {gpu.temp !== null && gpu.temp !== undefined ? (
-              <View style={[styles.gpuMetricPill, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc' }]}>
-                <Text style={{ fontSize: 10, color: colors.sub }}>核心温度</Text>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: gpu.temp > 75 ? colors.tempWarm : colors.textStrong, fontFamily: 'monospace', marginTop: 2 }}>
-                  {gpu.temp}°C
-                </Text>
-              </View>
-            ) : null}
-
-            {gpu.vram_used !== null && gpu.vram_used !== undefined && gpu.vram_total ? (
-              <View style={[styles.gpuMetricPill, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc' }]}>
-                <Text style={{ fontSize: 10, color: colors.sub }}>显存占用</Text>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: colors.textStrong, fontFamily: 'monospace', marginTop: 2 }}>
-                  {(gpu.vram_used / 1024).toFixed(1)} / {(gpu.vram_total / 1024).toFixed(1)} GB
-                </Text>
-              </View>
-            ) : null}
-
-            {gpu.clock_mhz !== null && gpu.clock_mhz !== undefined ? (
-              <View style={[styles.gpuMetricPill, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc' }]}>
-                <Text style={{ fontSize: 10, color: colors.sub }}>运行频率</Text>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: colors.textStrong, fontFamily: 'monospace', marginTop: 2 }}>
-                  {gpu.clock_mhz} MHz
-                </Text>
-              </View>
-            ) : null}
-
-            {gpu.power_w !== null && gpu.power_w !== undefined ? (
-              <View style={[styles.gpuMetricPill, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc' }]}>
-                <Text style={{ fontSize: 10, color: colors.sub }}>实时功耗</Text>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: colors.textStrong, fontFamily: 'monospace', marginTop: 2 }}>
-                  {gpu.power_w} W
-                </Text>
-              </View>
+              <Text style={{ fontSize: 11, fontWeight: '600', color: gpu.temp > 75 ? colors.tempWarm : colors.sub, fontFamily: 'monospace' }}>
+                {gpu.temp}°C
+              </Text>
             ) : null}
           </View>
         </View>
@@ -1792,6 +1744,23 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   },
 
   // Standard Card Style
+  miniGpuCard: {
+    backgroundColor: colors.card,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  gpuMiniBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+  },
   card: {
     backgroundColor: colors.card,
     borderRadius: 20,

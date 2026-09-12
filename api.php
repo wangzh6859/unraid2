@@ -558,88 +558,135 @@ function get_server_mac() {
 function get_docker_updates_map() {
     $dockerUpdatesMap = [];
     $iniFile = '/var/local/emhttp/docker.ini';
-    if (!file_exists($iniFile)) {
-        return $dockerUpdatesMap;
-    }
-
-    // Method 1: parse_ini_file
-    $ini = @parse_ini_file($iniFile, true);
-    if (is_array($ini)) {
-        foreach ($ini as $cName => $sec) {
-            $isUpdate = (
-                (isset($sec['updated']) && ($sec['updated'] === 'false' || $sec['updated'] === 0 || $sec['updated'] === '0' || strtolower((string)$sec['updated']) === 'no')) ||
-                (isset($sec['update']) && ($sec['update'] === 'true' || $sec['update'] === 'yes' || $sec['update'] === 1 || $sec['update'] === '1' || stripos((string)$sec['update'], 'ready') !== false)) ||
-                (isset($sec['install']) && stripos((string)$sec['install'], 'update') !== false) ||
-                (isset($sec['status']) && stripos((string)$sec['status'], 'update') !== false)
-            );
-            if ($isUpdate) {
-                $dockerUpdatesMap[$cName] = true;
-                $dockerUpdatesMap[strtolower($cName)] = true;
-                $dockerUpdatesMap[ltrim($cName, '/')] = true;
-                if (!empty($sec['repository'])) {
-                    $dockerUpdatesMap[$sec['repository']] = true;
-                    $dockerUpdatesMap[strtolower($sec['repository'])] = true;
-                }
-            }
-        }
-    }
-
-    // Method 2: Robust Line-by-line regex fallback (handles unquoted/invalid INI characters)
-    $raw = @file_get_contents($iniFile);
-    if ($raw) {
-        $currSec = '';
-        $currSecRepo = '';
-        $currSecHasUpdate = false;
-
-        $lines = explode("\n", $raw);
-        foreach ($lines as $line) {
-            $line = trim($line);
-            if ($line === '' || $line[0] === ';') continue;
-
-            if (preg_match('/^\[(.*)\]$/', $line, $sm)) {
-                if ($currSec !== '' && $currSecHasUpdate) {
-                    $dockerUpdatesMap[$currSec] = true;
-                    $dockerUpdatesMap[strtolower($currSec)] = true;
-                    $dockerUpdatesMap[ltrim($currSec, '/')] = true;
-                    if ($currSecRepo !== '') {
-                        $dockerUpdatesMap[$currSecRepo] = true;
-                        $dockerUpdatesMap[strtolower($currSecRepo)] = true;
+    if (file_exists($iniFile)) {
+        // Method 1: parse_ini_file
+        $ini = @parse_ini_file($iniFile, true);
+        if (is_array($ini)) {
+            foreach ($ini as $cName => $sec) {
+                $isUpdate = (
+                    (isset($sec['updated']) && ($sec['updated'] === 'false' || $sec['updated'] === 0 || $sec['updated'] === '0' || strtolower((string)$sec['updated']) === 'no')) ||
+                    (isset($sec['update']) && ($sec['update'] === 'true' || $sec['update'] === 'yes' || $sec['update'] === 1 || $sec['update'] === '1' || stripos((string)$sec['update'], 'ready') !== false)) ||
+                    (isset($sec['install']) && stripos((string)$sec['install'], 'update') !== false) ||
+                    (isset($sec['status']) && stripos((string)$sec['status'], 'update') !== false)
+                );
+                if ($isUpdate) {
+                    $dockerUpdatesMap[$cName] = true;
+                    $dockerUpdatesMap[strtolower($cName)] = true;
+                    $dockerUpdatesMap[ltrim($cName, '/')] = true;
+                    if (!empty($sec['repository'])) {
+                        $dockerUpdatesMap[$sec['repository']] = true;
+                        $dockerUpdatesMap[strtolower($sec['repository'])] = true;
                     }
                 }
-                $currSec = trim($sm[1]);
-                $currSecRepo = '';
-                $currSecHasUpdate = false;
-            } elseif (strpos($line, '=') !== false) {
-                list($key, $val) = explode('=', $line, 2);
-                $key = strtolower(trim($key));
-                $val = trim($val, " \t\n\r\0\x0B\"'");
-                if ($key === 'repository') {
-                    $currSecRepo = $val;
+            }
+        }
+
+        // Method 2: Robust Line-by-line regex fallback
+        $raw = @file_get_contents($iniFile);
+        if ($raw) {
+            $currSec = '';
+            $currSecRepo = '';
+            $currSecHasUpdate = false;
+
+            $lines = explode("\n", $raw);
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if ($line === '' || $line[0] === ';') continue;
+
+                if (preg_match('/^\[(.*)\]$/', $line, $sm)) {
+                    if ($currSec !== '' && $currSecHasUpdate) {
+                        $dockerUpdatesMap[$currSec] = true;
+                        $dockerUpdatesMap[strtolower($currSec)] = true;
+                        $dockerUpdatesMap[ltrim($currSec, '/')] = true;
+                        if ($currSecRepo !== '') {
+                            $dockerUpdatesMap[$currSecRepo] = true;
+                            $dockerUpdatesMap[strtolower($currSecRepo)] = true;
+                        }
+                    }
+                    $currSec = trim($sm[1]);
+                    $currSecRepo = '';
+                    $currSecHasUpdate = false;
+                } elseif (strpos($line, '=') !== false) {
+                    list($key, $val) = explode('=', $line, 2);
+                    $key = strtolower(trim($key));
+                    $val = trim($val, " \t\n\r\0\x0B\"'");
+                    if ($key === 'repository') {
+                        $currSecRepo = $val;
+                    }
+                    if ($key === 'updated' && in_array(strtolower($val), ['false', '0', 'no', 'update', 'available'])) {
+                        $currSecHasUpdate = true;
+                    }
+                    if ($key === 'update' && in_array(strtolower($val), ['true', '1', 'yes', 'update', 'ready'])) {
+                        $currSecHasUpdate = true;
+                    }
+                    if (($key === 'status' || $key === 'install') && stripos($val, 'update') !== false) {
+                        $currSecHasUpdate = true;
+                    }
                 }
-                if ($key === 'updated' && in_array(strtolower($val), ['false', '0', 'no', 'update', 'available'])) {
-                    $currSecHasUpdate = true;
-                }
-                if ($key === 'update' && in_array(strtolower($val), ['true', '1', 'yes', 'update', 'ready'])) {
-                    $currSecHasUpdate = true;
-                }
-                if (($key === 'status' || $key === 'install') && stripos($val, 'update') !== false) {
-                    $currSecHasUpdate = true;
+            }
+            if ($currSec !== '' && $currSecHasUpdate) {
+                $dockerUpdatesMap[$currSec] = true;
+                $dockerUpdatesMap[strtolower($currSec)] = true;
+                $dockerUpdatesMap[ltrim($currSec, '/')] = true;
+                if ($currSecRepo !== '') {
+                    $dockerUpdatesMap[$currSecRepo] = true;
+                    $dockerUpdatesMap[strtolower($currSecRepo)] = true;
                 }
             }
         }
-        if ($currSec !== '' && $currSecHasUpdate) {
-            $dockerUpdatesMap[$currSec] = true;
-            $dockerUpdatesMap[strtolower($currSec)] = true;
-            $dockerUpdatesMap[ltrim($currSec, '/')] = true;
-            if ($currSecRepo !== '') {
-                $dockerUpdatesMap[$currSecRepo] = true;
-                $dockerUpdatesMap[strtolower($currSecRepo)] = true;
+    }
+
+    // Method 3: Scan Unraid notification files in /tmp/notifications/unread/ and /tmp/notifications/archive/
+    $notifDirs = ['/tmp/notifications/unread', '/tmp/notifications/archive'];
+    foreach ($notifDirs as $ndir) {
+        if (!is_dir($ndir)) continue;
+        $nfiles = @scandir($ndir);
+        if (!$nfiles) continue;
+        foreach ($nfiles as $nf) {
+            if ($nf === '.' || $nf === '..') continue;
+            $ncontent = @file_get_contents("{$ndir}/{$nf}");
+            if (!$ncontent) continue;
+
+            // Pattern A: "Docker container update available for <name>"
+            if (preg_match_all('/(?:Docker\s+(?:container|image)\s+update\s+available\s+for|update\s+available\s+for(?:\s+container)?|container\s+update\s+available:?)\s+([a-zA-Z0-9_\-\.\/]+)/i', $ncontent, $matches)) {
+                foreach ($matches[1] as $cName) {
+                    $cName = trim($cName, " \t\n\r\0\x0B.:");
+                    if (!empty($cName) && !in_array(strtolower($cName), ['docker', 'container', 'image', 'for', 'all', 'a'])) {
+                        $dockerUpdatesMap[$cName] = true;
+                        $dockerUpdatesMap[strtolower($cName)] = true;
+                        $dockerUpdatesMap[ltrim($cName, '/')] = true;
+                    }
+                }
+            }
+
+            // Pattern B: Chinese Unraid notices
+            if (preg_match_all('/(?:容器|镜像)\s*[\[【]?([a-zA-Z0-9_\-\.\/]+)[\]】]?\s*(?:有新版本|有可用更新|可更新|更新可用)/u', $ncontent, $cmatches)) {
+                foreach ($cmatches[1] as $cName) {
+                    $cName = trim($cName, " \t\n\r\0\x0B.:");
+                    if (!empty($cName)) {
+                        $dockerUpdatesMap[$cName] = true;
+                        $dockerUpdatesMap[strtolower($cName)] = true;
+                        $dockerUpdatesMap[ltrim($cName, '/')] = true;
+                    }
+                }
+            }
+
+            // Pattern C: Notification subject / description
+            if (preg_match('/(?:subject|title|description|message)=.*?(?:update available for|有可用更新|容器更新)[^\w]*([a-zA-Z0-9_\-\.\/]+)/i', $ncontent, $m2)) {
+                $cName = trim($m2[1], " \t\n\r\0\x0B.:");
+                if (!empty($cName) && !in_array(strtolower($cName), ['docker', 'container', 'image', 'for', 'all', 'a'])) {
+                    $dockerUpdatesMap[$cName] = true;
+                    $dockerUpdatesMap[strtolower($cName)] = true;
+                    $dockerUpdatesMap[ltrim($cName, '/')] = true;
+                }
             }
         }
     }
 
     return $dockerUpdatesMap;
 }
+
+
 
 function handle_status() {
     // 1. CPU Usage
@@ -2307,8 +2354,16 @@ function handle_file_upload() {
         }
 
         $bytesWritten = 0;
-        while ($buff = fread($in, 65536)) {
-            $bytesWritten += fwrite($out, $buff);
+        while (!feof($in)) {
+            $buff = fread($in, 262144);
+            if ($buff === false || $buff === '') {
+                break;
+            }
+            $w = fwrite($out, $buff);
+            if ($w === false) {
+                break;
+            }
+            $bytesWritten += $w;
         }
         @fclose($in);
         @fclose($out);
@@ -2955,14 +3010,20 @@ function get_gpu_telemetry() {
                     $intelName = '';
                     $lspci = @shell_exec("lspci -nn -d 8086: 2>/dev/null | grep -iE 'vga|display|3d'");
                     if ($lspci) {
-                        if (preg_match('/:\s*(.+?)(?:\s*\(rev|\s*\[[0-9a-f]{4}:)/i', $lspci, $m)) {
-                            $intelName = trim($m[1]);
+                        // Priority 1: Extract model in square brackets e.g. [UHD Graphics 770] or [Iris Xe Graphics]
+                        if (preg_match('/\[([^\]]*(?:Graphics|Iris|HD|UHD|Arc)[^\]]*)\]/i', $lspci, $subM)) {
+                            $intelName = 'Intel® ' . trim($subM[1]);
+                        } elseif (preg_match('/:\s*Intel Corporation\s+(.+?)(?:\s*\(rev|\s*\[[0-9a-f]{4}:|$)/i', $lspci, $m)) {
+                            $intelName = 'Intel® ' . trim($m[1]);
                         } else {
-                            $intelName = trim(explode("\n", $lspci)[0]);
+                            $cleanL = preg_replace('/^[0-9a-f:.]+\s+[^:]+:\s*/i', '', trim(explode("\n", $lspci)[0]));
+                            $cleanL = preg_replace('/^Intel Corporation\s*/i', '', $cleanL);
+                            $cleanL = preg_replace('/\s*\(rev\s+[0-9a-f]+\)/i', '', $cleanL);
+                            $intelName = 'Intel® ' . trim($cleanL);
                         }
                     }
                     if (!$intelName) $intelName = 'Intel® 核芯显卡 (iGPU)';
-                    $intelName = preg_replace('/^Intel Corporation\s+/i', 'Intel® ', $intelName);
+                    $gpuData['clean_name'] = $intelName;
 
                     // Read frequency
                     $curFreq = 0;
@@ -3084,15 +3145,24 @@ function get_gpu_telemetry() {
 }
 
 function handle_check_docker_updates() {
-    $script = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate';
     $out = '';
-    if (file_exists($script)) {
-        $out = @shell_exec("{$script} check 2>&1");
-    } else {
+    $scripts = [
+        '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check',
+        '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/docker update',
+        'php /usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate.php'
+    ];
+    foreach ($scripts as $cmd) {
+        $bin = explode(' ', $cmd)[0];
+        if (file_exists($bin)) {
+            $out .= @shell_exec("{$cmd} 2>&1") . "\n";
+        }
+    }
+    if (empty(trim($out))) {
         $out = @shell_exec('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check 2>&1');
     }
 
     @file_put_contents('/tmp/unraid_last_docker_update_check.txt', time());
+    usleep(300000); // 300ms for file writes to flush
 
     // Re-read docker updates map
     $dockerUpdatesMap = get_docker_updates_map();
@@ -3102,6 +3172,7 @@ function handle_check_docker_updates() {
         'status' => 'success',
         'message' => $updatesCount > 0 ? "检测完成，发现可用更新！" : '检测完成，所有容器已是最新版本。',
         'updates_count' => $updatesCount,
+        'update_count' => $updatesCount,
         'output' => trim($out)
     ]);
 }
