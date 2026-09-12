@@ -468,6 +468,7 @@ export default function SettingsScreen({ navigation }) {
     const v = (serverInput || '').trim();
     if (serverEditField === 'url') {
       let cleanUrl = v;
+      cleanUrl = cleanUrl.replace(/\/api\.php\/?$/i, '');
       if (cleanUrl && !cleanUrl.startsWith('http')) cleanUrl = 'http://' + cleanUrl;
       if (cleanUrl.endsWith('/')) cleanUrl = cleanUrl.slice(0, -1);
       await AsyncStorage.setItem('@server_url', cleanUrl);

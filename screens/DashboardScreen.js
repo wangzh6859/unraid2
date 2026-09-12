@@ -500,6 +500,7 @@ export default function DashboardScreen({ navigation }) {
     }
 
     let cleanUrl = inputUrl.trim();
+    cleanUrl = cleanUrl.replace(/\/api\.php\/?$/i, '');
     if (!cleanUrl.startsWith('http')) cleanUrl = 'http://' + cleanUrl;
     if (cleanUrl.endsWith('/')) cleanUrl = cleanUrl.slice(0, -1);
 
