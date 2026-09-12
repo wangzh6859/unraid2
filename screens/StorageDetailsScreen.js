@@ -375,7 +375,7 @@ export default function StorageDetailsScreen({ navigation }) {
       <TouchableOpacity
         key={disk.device || disk.name || index}
         style={[styles.diskCard, numErrors > 0 && styles.diskCardError]}
-        onPress={() => navigation.navigate('SMART详情', { disk })}
+        onPress={() => navigation.navigate('SMART详情', { disk, device: disk.device, name: disk.name })}
         activeOpacity={0.7}
       >
         {/* 第一行：图标 + 名称 + 物理设备名 + 文件系统 + 校验徽章 + 箭头 */}

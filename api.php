@@ -564,14 +564,31 @@ function handle_status() {
 
     // 2. Memory Usage
     $memUsage = 0;
+    $memTotalBytes = 0;
+    $memAvailBytes = 0;
+    $memUsedBytes = 0;
     $meminfo = @file_get_contents('/proc/meminfo');
     if ($meminfo) {
         preg_match('/MemTotal:\s+(\d+)\s+kB/', $meminfo, $totalMatches);
         preg_match('/MemAvailable:\s+(\d+)\s+kB/', $meminfo, $availMatches);
-        if (isset($totalMatches[1]) && isset($availMatches[1])) {
-            $memTotal = $totalMatches[1];
-            $memAvail = $availMatches[1];
-            $memUsage = round((($memTotal - $memAvail) / $memTotal) * 100, 1);
+        preg_match('/MemFree:\s+(\d+)\s+kB/', $meminfo, $freeMatches);
+        preg_match('/Buffers:\s+(\d+)\s+kB/', $meminfo, $bufMatches);
+        preg_match('/^Cached:\s+(\d+)\s+kB/m', $meminfo, $cacheMatches);
+
+        $totalKb = isset($totalMatches[1]) ? (float)$totalMatches[1] : 0;
+        $availKb = isset($availMatches[1]) ? (float)$availMatches[1] : 0;
+        if ($availKb === 0.0 && isset($freeMatches[1])) {
+            $freeKb = (float)$freeMatches[1];
+            $bufKb = isset($bufMatches[1]) ? (float)$bufMatches[1] : 0;
+            $cacheKb = isset($cacheMatches[1]) ? (float)$cacheMatches[1] : 0;
+            $availKb = $freeKb + $bufKb + $cacheKb;
+        }
+
+        if ($totalKb > 0) {
+            $memTotalBytes = $totalKb * 1024;
+            $memAvailBytes = $availKb * 1024;
+            $memUsedBytes = max(0, $memTotalBytes - $memAvailBytes);
+            $memUsage = round(($memUsedBytes / $memTotalBytes) * 100, 1);
         }
     }
 
@@ -950,6 +967,9 @@ function handle_status() {
         'stats' => [
             'cpu' => $cpuUsage,
             'memory' => $memUsage,
+            'mem_total' => $memTotalBytes,
+            'mem_used' => $memUsedBytes,
+            'mem_avail' => $memAvailBytes,
             'cpu_temp' => $cpuTemp,
             'uptime' => $uptimeStr,
             'hostname' => $hostname
@@ -1629,9 +1649,14 @@ function handle_smart_info() {
     $rawTarget = isset($_GET['target']) ? trim($_GET['target']) : '';
     $rawName = isset($_GET['name']) ? trim($_GET['name']) : '';
     if (empty($rawTarget) && empty($rawName)) {
+        if (!empty($_GET['disk'])) $rawName = trim($_GET['disk']);
+        if (!empty($_GET['device'])) $rawTarget = trim($_GET['device']);
+    }
+    if (empty($rawTarget) && empty($rawName)) {
         json_output(['status' => 'error', 'message' => 'Missing disk device name'], 400);
     }
 
+    $rawTarget = str_replace('/dev/', '', $rawTarget);
     $targetStr = !empty($rawTarget) ? $rawTarget : $rawName;
     $dev = preg_replace('/[^a-zA-Z0-9_\-]/', '', $targetStr);
     $diskName = preg_replace('/[^a-zA-Z0-9_\-]/', '', $rawName);

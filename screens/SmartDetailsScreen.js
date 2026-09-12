@@ -75,6 +75,14 @@ export default function SmartDetailsScreen({ route }) {
     fetchSmart();
   }, [fetchSmart]);
 
+  const formatBytes = (bytes) => {
+    if (!bytes || bytes <= 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
   const formatCapacity = (capStr) => {
     if (!capStr) return '未知';
     const s = String(capStr).trim();
@@ -127,9 +135,9 @@ export default function SmartDetailsScreen({ route }) {
           <View style={styles.headerTitleRow}>
             <HardDrive size={22} color={colors.accent} style={{ marginRight: 8 }} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.diskTitle}>{name || '未知磁盘'}</Text>
+              <Text style={styles.diskTitle}>{name || disk.name || '未知磁盘'}</Text>
               <Text style={styles.deviceSubtitle}>
-                物理路径: /dev/{resolvedDev || device || '未知'} ({parsed?.device_type || '存储设备'})
+                物理路径: /dev/{resolvedDev || device || disk.device || '未知'} ({parsed?.device_type || (disk.fs_type ? disk.fs_type.toUpperCase() : '存储设备')})
               </Text>
             </View>
           </View>
@@ -190,7 +198,7 @@ export default function SmartDetailsScreen({ route }) {
                   <Text style={styles.gridLabel}>标称容量</Text>
                 </View>
                 <Text style={styles.gridValue} numberOfLines={1}>
-                  {formatCapacity(parsed.capacity)}
+                  {parsed?.capacity ? formatCapacity(parsed.capacity) : (disk.size ? formatBytes(disk.size) : '未知')}
                 </Text>
               </View>
             </View>
@@ -203,7 +211,7 @@ export default function SmartDetailsScreen({ route }) {
                   <Text style={styles.gridLabel}>当前温度</Text>
                 </View>
                 <Text style={[styles.gridValue, { color: parsed.temp ? colors.accent : colors.muted }]}>
-                  {parsed.temp ? `${parsed.temp} °C` : '待机 / 未知'}
+                  {parsed?.temp ? `${parsed.temp} °C` : (disk.temp !== null && disk.temp !== undefined ? `${disk.temp} °C` : '待机 / 未知')}
                 </Text>
               </View>
             </View>

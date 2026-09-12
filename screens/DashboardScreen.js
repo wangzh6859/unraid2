@@ -87,7 +87,7 @@ export default function DashboardScreen({ navigation }) {
   const [isTesting, setIsTesting] = useState(false);
 
   // 仪表盘核心遥测数据
-  const [stats, setStats] = useState({ cpu: 0, memory: 0, cpu_temp: null, uptime: '', hostname: '' });
+  const [stats, setStats] = useState({ cpu: 0, memory: 0, mem_total: 0, mem_used: 0, mem_avail: 0, cpu_temp: null, uptime: '', hostname: '' });
   const [gpu, setGpu] = useState({ name: 'N/A', usage: 0 });
   const [storage, setStorage] = useState({ percentage: 0, total_used: 0, total_size: 0, disks: [] });
   const [dockers, setDockers] = useState({ running: 0, total: 0, list: [] });
@@ -579,8 +579,32 @@ export default function DashboardScreen({ navigation }) {
   const ramTrackPath = describeArc(50, 50, 38, 140, 400);
   const ramProgPath = describeArc(50, 50, 38, 140, 140 + (memVal / 100) * 260);
 
-  // 预估或实际内存容量（以 32GB 标准为例计算已用）
-  const estimatedUsedRamGb = ((memVal / 100) * 32).toFixed(1);
+  // 实际物理内存容量动态计算 (从 /proc/meminfo 获取精确字节)
+  const memTotalBytes = stats.mem_total || 0;
+  const memUsedBytes = stats.mem_used || (memTotalBytes > 0 ? (memTotalBytes * (memVal / 100)) : 0);
+
+  const formatRamTotal = (bytes) => {
+    if (!bytes || bytes <= 0) return '';
+    const gb = bytes / (1024 * 1024 * 1024);
+    if (gb >= 1) {
+      const roundedGb = Math.round(gb);
+      const isCloseToStandard = Math.abs(gb - roundedGb) < 0.6;
+      const displayGb = isCloseToStandard ? roundedGb : gb.toFixed(1);
+      return `${displayGb} GB`;
+    }
+    const mb = bytes / (1024 * 1024);
+    return `${mb.toFixed(0)} MB`;
+  };
+
+  const usedRamDisplayNum = memUsedBytes > 0
+    ? (memUsedBytes / (1024 * 1024 * 1024)).toFixed(1)
+    : (memTotalBytes > 0 ? ((memVal / 100) * (memTotalBytes / (1024 * 1024 * 1024))).toFixed(1) : `${memVal}`);
+
+  const usedRamUnitText = memTotalBytes > 0 ? '已用 GB' : '使用率 %';
+
+  const totalRamMetaText = memTotalBytes > 0
+    ? `总计 ${formatRamTotal(memTotalBytes)} 物理内存`
+    : `物理内存已用 ${memVal}%`;
 
   // 网络波形曲线 SVG 计算 (宽 320, 高 50)
   const downWave = generateSmoothWave(downWaveHistory, 320, 50, 8, 4);
@@ -823,14 +847,14 @@ export default function DashboardScreen({ navigation }) {
               ) : null}
             </Svg>
             <View style={styles.gaugeCenterText}>
-              <Text style={styles.gaugeBigNum}>{estimatedUsedRamGb}</Text>
-              <Text style={styles.gaugeUnitText}>已用 GB</Text>
+              <Text style={styles.gaugeBigNum}>{usedRamDisplayNum}</Text>
+              <Text style={styles.gaugeUnitText}>{usedRamUnitText}</Text>
             </View>
           </View>
 
           {/* 内存总量概览 */}
           <View style={styles.ramMetaBox}>
-            <Text style={styles.ramMetaText}>总共约 32 GB 物理内存</Text>
+            <Text style={styles.ramMetaText}>{totalRamMetaText}</Text>
           </View>
         </View>
       </View>
