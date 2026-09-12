@@ -129,6 +129,17 @@ export default function DashboardScreen({ navigation }) {
   const [notificationModalVisible, setNotificationModalVisible] = useState(false);
   const [notifFilter, setNotifFilter] = useState('all'); // 'all' | 'alert' | 'normal'
 
+  // 通知筛选备忘录 (必须置于所有条件分支及早期 return 之前，严格遵守 React Hook 规则)
+  const filteredNotifications = useMemo(() => {
+    if (notifFilter === 'alert') {
+      return (notifications || []).filter(n => n.importance === 'alert' || n.importance === 'warning');
+    }
+    if (notifFilter === 'normal') {
+      return (notifications || []).filter(n => n.importance === 'normal');
+    }
+    return notifications || [];
+  }, [notifications, notifFilter]);
+
   // 确认弹窗
   const [confirmDialog, setConfirmDialog] = useState({
     visible: false,
@@ -543,48 +554,6 @@ export default function DashboardScreen({ navigation }) {
     }, [])
   );
 
-  // 状态 A：未配置服务器时渲染登录卡片
-  if (!isConfigured) {
-    return (
-      <KeyboardAvoidingView style={styles.center} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-        <View style={styles.setupCard}>
-          <Server color={colors.accent} size={48} style={{ alignSelf: 'center', marginBottom: 16 }} />
-          <Text style={styles.setupTitle}>连接 Unraid 控制台</Text>
-          <Text style={styles.setupSub}>请输入主服务器访问地址与 API Token</Text>
-
-          <View style={styles.inputContainer}>
-            <Server color={colors.sub} size={20} style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="http://192.168.x.x:80"
-              placeholderTextColor={colors.muted}
-              value={inputUrl}
-              onChangeText={setInputUrl}
-              autoCapitalize="none"
-              keyboardType="url"
-            />
-          </View>
-
-          <View style={styles.inputContainer}>
-            <Key color={colors.sub} size={20} style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="API Token 密钥"
-              placeholderTextColor={colors.muted}
-              value={inputToken}
-              onChangeText={setInputToken}
-              secureTextEntry={true}
-            />
-          </View>
-
-          <TouchableOpacity style={styles.saveBtn} onPress={handleSaveConfig} disabled={isTesting} activeOpacity={0.8}>
-            {isTesting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.saveBtnText}>立即接入</Text>}
-          </TouchableOpacity>
-        </View>
-      </KeyboardAvoidingView>
-    );
-  }
-
   // -------------------------------------------------------------
   // 数据渲染预计算
   // -------------------------------------------------------------
@@ -644,20 +613,51 @@ export default function DashboardScreen({ navigation }) {
   // 运行中的 Docker 容器前 5 个供快捷矩阵展示
   const runningDockerList = (dockers.list || []).filter(d => d.status === 'running').slice(0, 6);
 
-  // 通知筛选备忘录
-  const filteredNotifications = useMemo(() => {
-    if (notifFilter === 'alert') {
-      return (notifications || []).filter(n => n.importance === 'alert' || n.importance === 'warning');
-    }
-    if (notifFilter === 'normal') {
-      return (notifications || []).filter(n => n.importance === 'normal');
-    }
-    return notifications || [];
-  }, [notifications, notifFilter]);
-
   // -------------------------------------------------------------
   // 渲染主结构
   // -------------------------------------------------------------
+  // 状态 A：未配置服务器时渲染登录卡片 (所有 Hook 已在顶部全部执行完毕)
+  if (!isConfigured) {
+    return (
+      <KeyboardAvoidingView style={styles.center} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <View style={styles.setupCard}>
+          <Server color={colors.accent} size={48} style={{ alignSelf: 'center', marginBottom: 16 }} />
+          <Text style={styles.setupTitle}>连接 Unraid 控制台</Text>
+          <Text style={styles.setupSub}>请输入主服务器访问地址与 API Token</Text>
+
+          <View style={styles.inputContainer}>
+            <Server color={colors.sub} size={20} style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="http://192.168.x.x:80"
+              placeholderTextColor={colors.muted}
+              value={inputUrl}
+              onChangeText={setInputUrl}
+              autoCapitalize="none"
+              keyboardType="url"
+            />
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Key color={colors.sub} size={20} style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="API Token 密钥"
+              placeholderTextColor={colors.muted}
+              value={inputToken}
+              onChangeText={setInputToken}
+              secureTextEntry={true}
+            />
+          </View>
+
+          <TouchableOpacity style={styles.saveBtn} onPress={handleSaveConfig} disabled={isTesting} activeOpacity={0.8}>
+            {isTesting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.saveBtnText}>立即接入</Text>}
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    );
+  }
+
   return (
     <ScrollView
       style={styles.container}
