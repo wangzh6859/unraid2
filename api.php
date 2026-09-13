@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.13.8
+ * Version: 2026.09.13.9
  * Release: 2026-09-13
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.13.8');
+define('UNRAID_API_VERSION', '2026.09.13.9');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -243,11 +243,12 @@ function verify_auth() {
             echo '<div class="card"><h1>✅ Unraid API 服务运行正常！</h1>';
             echo '<p>您正在访问 Unraid Mobile Manager 后端 API 接口。</p>';
             $activeToken = get_configured_token();
-            $tokenSource = ($activeToken !== FALLBACK_TOKEN) ? ' <small style="color:#10b981">(读取自 unraid_api_token.txt)</small>' : ' <small style="color:#9ca3af">(默认内置)</small>';
+            $isCustom = ($activeToken !== FALLBACK_TOKEN);
+            $tokenSourceDesc = $isCustom ? '取自自定义 (unraid_api_token.txt)' : '取自系统默认';
             echo '<p>📱 <b>手机 App 连接配置：</b></p>';
-            echo '<ul><li><b>服务器地址：</b> <code>http://' . htmlspecialchars($host) . '</code></li><li><b>API Token：</b> <code>' . htmlspecialchars($activeToken) . '</code>' . $tokenSource . '</li></ul>';
+            echo '<ul><li><b>服务器地址：</b> <code>http://' . htmlspecialchars($host) . '</code></li><li><b>API Token：</b> <code>已配置 · 已隐藏保护</code> <span style="color:#10b981">(' . $tokenSourceDesc . ')</span></li></ul>';
             echo '<p>⚙️ <b>API 版本：</b> <code>' . UNRAID_API_VERSION . '</code> <small style="color:#10b981">(与 Unraid 网页端实时同步)</small><br>📁 <b>当前文件：</b> <code>' . htmlspecialchars(__FILE__) . '</code></p>';
-            echo '<p>🔗 <b>API 测试链接：</b><br><a href="?token=' . urlencode($activeToken) . '&action=status">点击此处测试获取系统状态数据 (JSON) &rarr;</a></p>';
+            echo '<p style="color:#9ca3af;font-size:13px;border-top:1px solid #374151;padding-top:12px;">🛡️ <b>安全保护：</b>为防止 Token 泄露，网页端不直接展示明文。请在手机 App 设置中填入您配置的 Token 进行连接。</p>';
             echo '</div></body></html>';
             exit;
         }
@@ -635,37 +636,35 @@ function get_docker_updates_map() {
     $iniFile = '/var/local/emhttp/docker.ini';
 
     // Strictly mirrors Unraid WebGUI:
-    // 1. update == "ready"  -> WebGUI displays "更新就绪"
-    // 2. update == "true"   -> WebGUI displays "更新"
-    // 3. update == "false"  -> WebGUI displays "最新" (Up-to-date)
+    // 1. update == "ready" OR status/install contains "ready" -> WebGUI displays "更新就绪"
+    // 2. update == "true" OR install contains "update" -> WebGUI displays "更新"
+    // 3. update == "false" (and not ready) -> WebGUI displays "最新" (Up-to-date)
     $evalSecStatus = function($sec) {
         $updateVal = strtolower(trim((string)($sec['update'] ?? '')));
         $statusVal = strtolower(trim((string)($sec['status'] ?? '')));
+        $installVal = strtolower(trim((string)($sec['install'] ?? '')));
 
-        if ($updateVal === 'ready') {
+        // 1. Check for "ready" state (Ready to apply / ⚡ 更新就绪)
+        if (strpos($updateVal, 'ready') !== false ||
+            strpos($statusVal, 'ready') !== false ||
+            strpos($installVal, 'ready') !== false) {
             return ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
         }
-        if ($updateVal === 'true' || $updateVal === 'yes' || $updateVal === '1') {
-            return ['has_update' => true, 'status' => 'update', 'status_text' => '更新'];
-        }
-        if ($updateVal === 'false') {
-            return ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新'];
-        }
 
-        // Fallback only if 'update' key is not present:
-        if (stripos($statusVal, 'ready') !== false) {
-            return ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
-        }
-        if (stripos($statusVal, 'update') !== false && stripos($statusVal, 'up-to-date') === false) {
+        // 2. Check for "update" state (Remote update available / 更新)
+        if ($updateVal === 'true' || $updateVal === 'yes' || $updateVal === '1' ||
+            strpos($installVal, 'update') !== false ||
+            (strpos($statusVal, 'update') !== false && strpos($statusVal, 'up-to-date') === false)) {
             return ['has_update' => true, 'status' => 'update', 'status_text' => '更新'];
         }
 
+        // 3. Otherwise Up-to-date
         return ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新'];
     };
 
     $registerContainer = function($name, $record) use (&$dockerUpdatesMap) {
         if (empty($name)) return;
-        $clean = trim($name, " \t\n\r\0\x0B/'\"[]()");
+        $clean = trim((string)$name, " \t\n\r\0\x0B/'\"[]()");
         if (empty($clean) || strlen($clean) < 2) return;
 
         $variants = [
@@ -682,8 +681,17 @@ function get_docker_updates_map() {
             $variants[] = 'my-' . $clean;
             $variants[] = 'my-' . strtolower($clean);
         }
+        if (strpos($clean, ':') !== false) {
+            $noTag = preg_replace('/:.*$/', '', $clean);
+            $variants[] = $noTag;
+            $variants[] = strtolower($noTag);
+        }
 
         foreach ($variants as $v) {
+            // Prioritize positive update detection over false/up-to-date
+            if (isset($dockerUpdatesMap[$v]) && !empty($dockerUpdatesMap[$v]['has_update']) && empty($record['has_update'])) {
+                continue;
+            }
             $dockerUpdatesMap[$v] = $record;
         }
     };
@@ -700,6 +708,10 @@ function get_docker_updates_map() {
                 if (!empty($sec['name'])) $registerContainer($sec['name'], $record);
                 if (!empty($sec['Container'])) $registerContainer($sec['Container'], $record);
                 if (!empty($sec['container'])) $registerContainer($sec['container'], $record);
+                if (!empty($sec['Repository'])) $registerContainer($sec['Repository'], $record);
+                if (!empty($sec['repository'])) $registerContainer($sec['repository'], $record);
+                if (!empty($sec['Registry'])) $registerContainer($sec['Registry'], $record);
+                if (!empty($sec['registry'])) $registerContainer($sec['registry'], $record);
             }
         }
 
@@ -716,6 +728,8 @@ function get_docker_updates_map() {
                 $registerContainer($currSec, $record);
                 if (!empty($currSecData['name'])) $registerContainer($currSecData['name'], $record);
                 if (!empty($currSecData['container'])) $registerContainer($currSecData['container'], $record);
+                if (!empty($currSecData['repository'])) $registerContainer($currSecData['repository'], $record);
+                if (!empty($currSecData['registry'])) $registerContainer($currSecData['registry'], $record);
             };
 
             foreach ($lines as $line) {
@@ -1039,6 +1053,15 @@ $disks[] = [
                     'my-' . $cleanName,
                     'my-' . strtolower($cleanName),
                 ];
+                if (!empty($cImage)) {
+                    $candidates[] = $cImage;
+                    $candidates[] = strtolower($cImage);
+                    if (strpos($cImage, ':') !== false) {
+                        $noTag = preg_replace('/:.*$/', '', $cImage);
+                        $candidates[] = $noTag;
+                        $candidates[] = strtolower($noTag);
+                    }
+                }
                 foreach ($candidates as $cand) {
                     if (isset($dockerUpdatesMap[$cand])) {
                         $info = $dockerUpdatesMap[$cand];
@@ -2553,8 +2576,11 @@ function handle_smart_info() {
 // -------------------------------------------------------------
 
 function handle_file_list() {
+    @header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    @header('Pragma: no-cache');
     $rawPath = isset($_GET['path']) ? $_GET['path'] : ALLOWED_ROOT;
     $targetDir = sanitize_path($rawPath);
+    clearstatcache(true, $targetDir);
 
     if (!file_exists($targetDir)) {
         json_output(['status' => 'error', 'message' => "Directory not found: {$targetDir}"], 404);
@@ -2872,8 +2898,14 @@ function handle_file_upload() {
         ]);
     } else {
         // Direct stream / chunk upload
-        $destName = !empty($filename) ? $filename : 'upload_' . time();
+        $destName = !empty($filename) ? $filename : '';
+        if (empty($destName) || $destName === 'undefined') {
+            $destName = 'upload_' . date('Ymd_His');
+        }
         $cleanDestName = safe_basename($destName);
+        if (empty($cleanDestName) || $cleanDestName === 'undefined') {
+            $cleanDestName = 'upload_' . date('Ymd_His');
+        }
         $destPath = rtrim($targetDir, '/') . '/' . $cleanDestName;
         
         $in = @fopen('php://input', 'rb');
@@ -2928,10 +2960,13 @@ function handle_file_upload() {
             @chown($destPath, 'nobody');
             @chgrp($destPath, 'users');
         }
+        clearstatcache(true, $destPath);
+        clearstatcache(true, $targetDir);
         json_output([
             'status' => 'success',
             'message' => 'Raw stream upload complete',
             'path' => $destPath,
+            'name' => $cleanDestName,
             'size' => filesize($destPath)
         ]);
     }
@@ -3742,9 +3777,19 @@ function handle_check_docker_updates() {
         foreach ($lines as $line) {
             $parts = explode("\t", trim($line));
             $cName = isset($parts[0]) ? ltrim(trim($parts[0]), '/') : '';
+            $cImg = isset($parts[1]) ? trim($parts[1]) : '';
             if (empty($cName)) continue;
             $info = null;
             $candidates = [$cName, strtolower($cName), 'my-' . $cName, 'my-' . strtolower($cName)];
+            if (!empty($cImg)) {
+                $candidates[] = $cImg;
+                $candidates[] = strtolower($cImg);
+                if (strpos($cImg, ':') !== false) {
+                    $noTag = preg_replace('/:.*$/', '', $cImg);
+                    $candidates[] = $noTag;
+                    $candidates[] = strtolower($noTag);
+                }
+            }
             foreach ($candidates as $cand) {
                 if (isset($dockerUpdatesMap[$cand])) {
                     $info = $dockerUpdatesMap[$cand];

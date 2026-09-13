@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import {
-  ShoppingBag, Download, Cpu, Database, RotateCw, Play, Power, Terminal, ExternalLink,
+  Cpu, Database, RotateCw, Play, Power, Terminal, ExternalLink,
   Search, Copy, Check, X, RefreshCw, Globe, Sliders, Box, Layers,
   ChevronDown, ArrowUpDown, Filter, Sparkles, ArrowUp, Zap, FileCode, Plus, CheckCircle2, AlertTriangle, AlertCircle, Trash2, Folder } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
@@ -30,32 +30,13 @@ export default function DockerDetailsScreen({ route }) {
   const [updatingDocker, setUpdatingDocker] = useState(null);
 
   // 顶部分段切换：独立容器 vs Compose 堆栈
-  const [dockerMode, setDockerMode] = useState('containers');
+  const [dockerMode, setDockerMode] = useState('containers'); // 'containers' | 'compose'
   useEffect(() => {
-    if (route?.params?.initialMode) {
+    if (route?.params?.initialMode && (route.params.initialMode === 'containers' || route.params.initialMode === 'compose')) {
       setDockerMode(route.params.initialMode);
-      if (route.params.initialMode === 'apps') {
-        fetchCaApps();
-      }
     }
-  }, [route?.params?.initialMode]); // 'containers' | 'compose' | 'apps'
+  }, [route?.params?.initialMode]);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
-
-  // 社区应用市场 (Community Applications) 状态
-  const [caApps, setCaApps] = useState([]);
-  const [caLoading, setCaLoading] = useState(false);
-  const [caSearch, setCaSearch] = useState('');
-  const [caCategory, setCaCategory] = useState('all');
-
-  const CA_CATEGORIES = [
-    { id: 'all', label: '全部' },
-    { id: 'media', label: '影音媒体' },
-    { id: 'download', label: '下载工具' },
-    { id: 'cloud', label: '私有云盘' },
-    { id: 'network', label: '网络安全' },
-    { id: 'smarthome', label: '智能家居' },
-    { id: 'tools', label: '系统工具' },
-  ];
 
   // Docker Compose 状态
   const [composeProjects, setComposeProjects] = useState([]);
@@ -314,51 +295,7 @@ export default function DockerDetailsScreen({ route }) {
     }
   };
 
-  // 获取社区应用列表
-  const fetchCaApps = async (cat = caCategory, q = caSearch) => {
-    try {
-      setCaLoading(true);
-      const savedUrl = await AsyncStorage.getItem('@server_url');
-      const savedToken = await AsyncStorage.getItem('@api_token');
-      if (!savedUrl || !savedToken) return;
 
-      const url = `${savedUrl}/api.php?token=${savedToken}&action=ca_apps&category=${encodeURIComponent(cat)}&q=${encodeURIComponent(q)}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (data.status === 'success' && Array.isArray(data.apps)) {
-        setCaApps(data.apps);
-      }
-    } catch (e) {
-      console.log('fetchCaApps error:', e);
-    } finally {
-      setCaLoading(false);
-    }
-  };
-
-  // 部署社区应用
-  const handleDeployApp = async (app) => {
-    try {
-      const savedUrl = await AsyncStorage.getItem('@server_url');
-      const cleanUrl = savedUrl ? savedUrl.replace(/\/api\.php.*$/, '').replace(/\/+$/, '') : '';
-      const templateDirectUrl = `${cleanUrl}/Docker/AddContainer?xmlTemplate=default:${encodeURIComponent(app.repository)}`;
-
-      showConfirm({
-        type: 'info',
-        title: `部署「${app.name}」`,
-        message: `镜像仓库: ${app.repository}\n推荐端口: ${app.default_port || '默认配置'}\n\n是否打开 Unraid 官方容器模板进行路径与端口配置？`,
-        confirmText: '打开模板配置',
-        cancelText: '取消',
-        showCancel: true,
-        onConfirm: () => {
-          Linking.openURL(templateDirectUrl).catch(() => {
-            Linking.openURL(cleanUrl);
-          });
-        },
-      });
-    } catch (e) {
-      console.log(e);
-    }
-  };
 
   // 容器更新操作（与 Unraid 网页端“更新就绪”完全对齐）
   const handleUpdateDocker = (name) => {
@@ -936,19 +873,6 @@ export default function DockerDetailsScreen({ route }) {
           </Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.segmentBtn, dockerMode === 'apps' && styles.segmentBtnActive]}
-          onPress={() => {
-            setDockerMode('apps');
-            if (caApps.length === 0) fetchCaApps();
-          }}
-          activeOpacity={0.8}
-        >
-          <ShoppingBag size={14} color={dockerMode === 'apps' ? '#ffffff' : colors.sub} style={{ marginRight: 5 }} />
-          <Text style={[styles.segmentBtnText, dockerMode === 'apps' && styles.segmentBtnTextActive]}>
-            应用市场
-          </Text>
-        </TouchableOpacity>
       </View>
 
       
@@ -1146,139 +1070,6 @@ export default function DockerDetailsScreen({ route }) {
               </View>
             )}
           </ScrollView>
-        </View>
-      ) : dockerMode === 'apps' ? (
-        <View style={{ flex: 1 }}>
-          {/* 社区应用市场视图 */}
-          <View style={styles.filterSection}>
-            <View style={styles.searchBox}>
-              <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="搜索官方模板与社区应用..."
-                placeholderTextColor={colors.muted}
-                value={caSearch}
-                onChangeText={(t) => {
-                  setCaSearch(t);
-                  fetchCaApps(caCategory, t);
-                }}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              {caSearch ? (
-                <TouchableOpacity onPress={() => { setCaSearch(''); fetchCaApps(caCategory, ''); }}>
-                  <X size={15} color={colors.sub} />
-                </TouchableOpacity>
-              ) : null}
-            </View>
-
-            {/* 分类快捷滑块 */}
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={{ marginTop: 10 }}
-              contentContainerStyle={{ gap: 8, paddingRight: 16 }}
-            >
-              {CA_CATEGORIES.map(cat => (
-                <TouchableOpacity
-                  key={cat.id}
-                  style={[
-                    styles.tabBtn,
-                    caCategory === cat.id && styles.tabBtnActive
-                  ]}
-                  onPress={() => {
-                    setCaCategory(cat.id);
-                    fetchCaApps(cat.id, caSearch);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[
-                    styles.tabBtnText,
-                    caCategory === cat.id && styles.tabBtnTextActive
-                  ]}>
-                    {cat.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-
-          {/* 应用卡片列表 */}
-          {caLoading && caApps.length === 0 ? (
-            <View style={styles.center}>
-              <ActivityIndicator size="large" color={colors.accent} />
-              <Text style={styles.loadingText}>正在获取社区应用市场清单...</Text>
-            </View>
-          ) : (
-            <ScrollView
-              contentContainerStyle={styles.content}
-              showsVerticalScrollIndicator={false}
-              refreshControl={
-                <RefreshControl
-                  refreshing={caLoading}
-                  onRefresh={() => fetchCaApps(caCategory, caSearch)}
-                  colors={[colors.accent]}
-                  tintColor={colors.accent}
-                />
-              }
-            >
-              {caApps.map((app, index) => (
-                <View key={app.id || index} style={styles.dockerCard}>
-                  <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-                    {app.icon ? (
-                      <Image
-                        source={{ uri: app.icon }}
-                        style={styles.appIcon}
-                        resizeMode="contain"
-                      />
-                    ) : (
-                      <View style={[styles.appIconFallback, { backgroundColor: 'rgba(56, 189, 248, 0.12)' }]}>
-                        <ShoppingBag size={22} color={colors.accent} />
-                      </View>
-                    )}
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <Text style={styles.appNameText} numberOfLines={1}>{app.name}</Text>
-                        <View style={styles.appCategoryBadge}>
-                          <Text style={styles.appCategoryText}>{app.category || 'Tools'}</Text>
-                        </View>
-                      </View>
-                      <Text style={styles.appAuthorText} numberOfLines={1}>作者: {app.author || '社区精选'}</Text>
-                    </View>
-                  </View>
-
-                  {app.overview ? (
-                    <Text style={[styles.appOverviewText, { marginTop: 10 }]} numberOfLines={3}>
-                      {app.overview}
-                    </Text>
-                  ) : null}
-
-                  <View style={styles.appFooterRow}>
-                    <View style={styles.appRepoTag}>
-                      <Text style={styles.appRepoText} numberOfLines={1}>{app.repository}</Text>
-                    </View>
-                    <TouchableOpacity
-                      style={styles.appInstallBtn}
-                      onPress={() => handleDeployApp(app)}
-                      activeOpacity={0.8}
-                    >
-                      <Download size={13} color="#ffffff" style={{ marginRight: 4 }} />
-                      <Text style={styles.appInstallBtnText}>一键部署</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              ))}
-
-              {caApps.length === 0 && !caLoading && (
-                <View style={styles.emptyContainer}>
-                  <ShoppingBag size={42} color={colors.muted} style={{ marginBottom: 12 }} />
-                  <Text style={styles.emptyTitle}>暂无匹配应用</Text>
-                  <Text style={styles.emptySub}>未搜索到相关应用模板，请尝试更换关键词或分类。</Text>
-                </View>
-              )}
-            </ScrollView>
-          )}
-        </View>
       ) : (
         <View style={{ flex: 1 }}>
 
@@ -2009,108 +1800,6 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9',
     marginRight: 6,
   },
-  categoryPillActive: {
-    backgroundColor: colors.accent,
-  },
-  categoryPillText: {
-    fontSize: 12,
-    color: colors.sub,
-    fontWeight: '600',
-  },
-  categoryPillTextActive: {
-    color: '#ffffff',
-    fontWeight: '700',
-  },
-  appCard: {
-    backgroundColor: colors.card,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
-  },
-  appCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  appIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#f8fafc',
-  },
-  appIconFallback: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  appIconFallbackText: {
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  appNameText: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: colors.textStrong,
-    flex: 1,
-    marginRight: 8,
-  },
-  appCategoryBadge: {
-    backgroundColor: 'rgba(56, 189, 248, 0.12)',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  appCategoryText: {
-    fontSize: 11,
-    color: colors.accent,
-    fontWeight: '600',
-  },
-  appAuthorText: {
-    fontSize: 12,
-    color: colors.sub,
-    marginTop: 2,
-  },
-  appOverviewText: {
-    fontSize: 13,
-    color: colors.text,
-    lineHeight: 18,
-    marginBottom: 12,
-  },
-  appFooterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: colors.cardBorder,
-  },
-  appRepoTag: {
-    flex: 1,
-    marginRight: 12,
-  },
-  appRepoText: {
-    fontSize: 11,
-    color: colors.sub,
-    fontFamily: 'monospace',
-  },
-  appInstallBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.accent,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 10,
-  },
-  appInstallBtnText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#ffffff',
-  },
-
   container: {
     flex: 1,
     backgroundColor: colors.bg,

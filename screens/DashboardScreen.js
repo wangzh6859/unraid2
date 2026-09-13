@@ -6,7 +6,7 @@ import {
 } from 'react-native';
 import Svg, { Path, Circle, Defs, LinearGradient, Stop, G, Rect } from 'react-native-svg';
 import {
-  ShoppingBag, Cpu, Database, HardDrive, Box, Monitor, Wifi, Zap, Server, Key,
+  Cpu, Database, HardDrive, Box, Monitor, Wifi, Zap, Server, Key,
   ShieldCheck, AlertCircle, Play, Pause, Square, FileText, Search,
   RefreshCw, Copy, Check, X, ArrowDown, ArrowUp, ExternalLink, Power,
   ChevronRight, RefreshCcw, Layers, Terminal, Bell, Clock, AlertTriangle, Info, CheckCircle2 } from 'lucide-react-native';
@@ -1101,15 +1101,7 @@ export default function DashboardScreen({ navigation }) {
             <Text style={styles.dockerSummaryLabel}>运行中</Text>
           </TouchableOpacity>
 
-          {/* 社区应用市场快捷入口 */}
-          <TouchableOpacity
-            style={[styles.dockerSummaryTile, { backgroundColor: isDark ? 'rgba(168, 85, 247, 0.15)' : '#f3e8ff' }]}
-            onPress={() => navigation.navigate('容器', { initialMode: 'apps' })}
-            activeOpacity={0.8}
-          >
-            <ShoppingBag size={18} color="#a855f7" style={{ marginBottom: 4 }} />
-            <Text style={[styles.dockerSummaryLabel, { color: '#a855f7', fontWeight: 'bold' }]}>应用市场</Text>
-          </TouchableOpacity>
+
 
           {/* 常用容器磁贴 */}
           {runningDockerList.length > 0 ? (

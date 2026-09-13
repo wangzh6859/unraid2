@@ -256,8 +256,10 @@ export default function FilesScreen({ navigation }) {
     setIsLoadingList(true);
     try {
       const cleanUrl = baseUrl.replace(/\/+$/, '');
-      const url = `${cleanUrl}/api.php?token=${encodeURIComponent(token)}&action=file_list&path=${encodeURIComponent(path)}`;
-      const res = await fetch(url);
+      const url = `${cleanUrl}/api.php?token=${encodeURIComponent(token)}&action=file_list&path=${encodeURIComponent(path)}&_t=${Date.now()}`;
+      const res = await fetch(url, {
+        headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' },
+      });
       const data = await res.json();
 
       if (data.status === 'success') {
@@ -380,11 +382,17 @@ export default function FilesScreen({ navigation }) {
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const file = result.assets[0];
         const fileUri = file.uri;
+        let chosenName = file.name;
+        if (!chosenName || chosenName === 'undefined') {
+          const u = fileUri || '';
+          const slash = u.lastIndexOf('/');
+          chosenName = slash >= 0 ? decodeURIComponent(u.substring(slash + 1)) : ('upload_' + Date.now());
+        }
 
         const taskId = 'up_' + Date.now();
         const newTask = {
           id: taskId,
-          name: file.name,
+          name: chosenName,
           uri: fileUri,
           size: file.size || 0,
           targetPath: currentPath,
@@ -559,11 +567,15 @@ export default function FilesScreen({ navigation }) {
       activeTasksRef.current[taskId].uploadTask = uploadTask;
       const res = await uploadTask.uploadAsync();
 
+      let savedPath = `${taskItem.targetPath}/${taskItem.name}`;
       if (res && res.status >= 200 && res.status < 300) {
         let parsed = null;
         try { parsed = JSON.parse(res.body); } catch (_) {}
         if (parsed && parsed.status === 'error') {
           throw new Error(parsed.message || '服务端写入文件失败');
+        }
+        if (parsed && parsed.path) {
+          savedPath = parsed.path;
         }
       } else {
         let errorMsg = `HTTP ${res ? res.status : '未知错误'}`;
@@ -580,7 +592,6 @@ export default function FilesScreen({ navigation }) {
         FileSystem.deleteAsync(taskItem.uri, { idempotent: true }).catch(() => {});
       }
 
-      const savedPath = `${taskItem.targetPath}/${taskItem.name}`;
       setTransfers(prev => {
         const next = prev.map(t => (t.id === taskId ? {
           ...t,
@@ -595,7 +606,8 @@ export default function FilesScreen({ navigation }) {
         return next;
       });
 
-      loadDirectory(cleanBaseUrl, apiToken, currentPath);
+      const dirToReload = taskItem.targetPath || currentPath;
+      await loadDirectory(cleanBaseUrl, apiToken, dirToReload);
       await backgroundTransferManager.notifyTransferEnded(taskId, 'success', {
         name: taskItem.name,
         sizeText: formatBytesFixed(totalSize),
