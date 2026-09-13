@@ -1297,8 +1297,6 @@ function handle_docker_logs() {
 // -------------------------------------------------------------
 // Docker Container Update / Upgrade
 // -------------------------------------------------------------
-// Docker Container Update / Upgrade
-// -------------------------------------------------------------
 function handle_update_docker() {
     @set_time_limit(600);
     @ini_set('max_execution_time', '600');
@@ -1306,103 +1304,97 @@ function handle_update_docker() {
 
     $target = isset($_GET['target']) ? trim($_GET['target']) : '';
     if (empty($target)) {
-        json_output(['status' => 'error', 'message' => 'Missing target docker container'], 400);
+        json_output(['status' => 'error', 'message' => '缺少目标容器名称参数']);
+        return;
     }
     
     $cleanTarget = ltrim($target, '/');
     $escaped = escapeshellarg($cleanTarget);
 
     // Retrieve container details before update
-    $oldId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escaped} 2>/dev/null"));
-    $oldImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
-    $imageName = trim(@shell_exec("docker inspect --format '{{.Config.Image}}' {$escaped} 2>/dev/null"));
-
-    if (empty($oldId)) {
-        // Retry with original raw target
+    $inspectRaw = @shell_exec("docker inspect {$escaped} 2>/dev/null");
+    if (empty($inspectRaw)) {
         $rawEscaped = escapeshellarg($target);
-        $oldId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$rawEscaped} 2>/dev/null"));
-        $oldImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$rawEscaped} 2>/dev/null"));
-        $imageName = trim(@shell_exec("docker inspect --format '{{.Config.Image}}' {$rawEscaped} 2>/dev/null"));
-        if (!empty($oldId)) {
+        $inspectRaw = @shell_exec("docker inspect {$rawEscaped} 2>/dev/null");
+        if (!empty($inspectRaw)) {
             $cleanTarget = $target;
             $escaped = $rawEscaped;
         }
     }
 
-    if (empty($oldId)) {
-        json_output(['status' => 'error', 'message' => "未在系统中找到容器 [{$cleanTarget}]"], 404);
+    if (empty($inspectRaw)) {
+        json_output(['status' => 'error', 'message' => "未在系统中找到容器 [{$cleanTarget}]"]);
+        return;
+    }
+
+    $inspectArr = @json_decode($inspectRaw, true);
+    if (!is_array($inspectArr) || empty($inspectArr[0])) {
+        json_output(['status' => 'error', 'message' => "无法解析容器 [{$cleanTarget}] 的配置信息"]);
+        return;
+    }
+    $c = $inspectArr[0];
+
+    $oldId = $c['Id'] ?? '';
+    $oldImgId = $c['Image'] ?? '';
+    $imageName = $c['Config']['Image'] ?? '';
+    $wasRunning = !empty($c['State']['Running']);
+
+    if (empty($imageName)) {
+        json_output(['status' => 'error', 'message' => "无法获取容器 [{$cleanTarget}] 的镜像名称"]);
+        return;
     }
 
     $updaterOut = '';
     $updated = false;
 
-    // 1. Try Unraid Dynamix Docker Manager "dockerupdate update <target>" (Note: "update", NOT "apply"!)
-    $unraidUpdater = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate';
-    if (file_exists($unraidUpdater)) {
-        $cmd = "{$unraidUpdater} update " . escapeshellarg($cleanTarget);
-        $updaterOut .= @shell_exec("{$cmd} 2>&1") . "\n";
-    }
+    // 1. If container belongs to a Docker Compose stack, use docker compose
+    $composeWorkingDir = $c['Config']['Labels']['com.docker.compose.project.working_dir'] ?? '';
+    $composeService = $c['Config']['Labels']['com.docker.compose.service'] ?? '';
+    if (!empty($composeWorkingDir) && is_dir($composeWorkingDir)) {
+        $composeCmd = get_compose_cmd();
+        $svcArg = !empty($composeService) ? escapeshellarg($composeService) : '';
+        $cmdCompose = "cd " . escapeshellarg($composeWorkingDir) . " && {$composeCmd} pull {$svcArg} 2>&1 && {$composeCmd} up -d {$svcArg} 2>&1";
+        $updaterOut .= @shell_exec($cmdCompose) . "\n";
 
-    // Check if container was recreated with a new container ID or image
-    $newId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escaped} 2>/dev/null"));
-    $newImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
-    if (!empty($newId) && ($newId !== $oldId || $newImgId !== $oldImgId)) {
-        $updated = true;
-    }
-
-    // 2. Try Unraid Dynamix docker wrapper script "/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/docker update <target>"
-    if (!$updated) {
-        $dynamixDocker = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/docker';
-        if (file_exists($dynamixDocker)) {
-            $cmd2 = "{$dynamixDocker} update " . escapeshellarg($cleanTarget);
-            $updaterOut .= @shell_exec("{$cmd2} 2>&1") . "\n";
-
-            $newId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escaped} 2>/dev/null"));
-            $newImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
-            if (!empty($newId) && ($newId !== $oldId || $newImgId !== $oldImgId)) {
-                $updated = true;
-            }
+        $newId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escaped} 2>/dev/null"));
+        $newImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
+        if (!empty($newId) && ($newId !== $oldId || $newImgId !== $oldImgId)) {
+            $updated = true;
         }
     }
 
-    // 3. If container belongs to a Docker Compose stack, use docker compose
+    // 2. Standard Container Recreation: Pull Image -> Backup -> Recreate
     if (!$updated) {
-        $composeWorkingDir = trim(@shell_exec('docker inspect --format \'{{index .Config.Labels "com.docker.compose.project.working_dir"}}\' ' . $escaped . ' 2>/dev/null'));
-        $composeService = trim(@shell_exec('docker inspect --format \'{{index .Config.Labels "com.docker.compose.service"}}\' ' . $escaped . ' 2>/dev/null'));
-        if (!empty($composeWorkingDir) && is_dir($composeWorkingDir)) {
-            $composeCmd = get_compose_cmd();
-            $svcArg = !empty($composeService) ? escapeshellarg($composeService) : '';
-            $cmdCompose = "cd " . escapeshellarg($composeWorkingDir) . " && {$composeCmd} pull {$svcArg} 2>&1 && {$composeCmd} up -d {$svcArg} 2>&1";
-            $updaterOut .= @shell_exec($cmdCompose) . "\n";
-
-            $newId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escaped} 2>/dev/null"));
-            $newImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
-            if (!empty($newId) && ($newId !== $oldId || $newImgId !== $oldImgId)) {
-                $updated = true;
-            }
-        }
-    }
-
-    // 4. Standalone fallback: pull image and re-invoke updater
-    if (!$updated && !empty($imageName)) {
+        // Step A: Pull latest image first
         $pullOut = @shell_exec("docker pull " . escapeshellarg($imageName) . " 2>&1");
         $updaterOut .= $pullOut . "\n";
 
         $latestPulledImgId = trim(@shell_exec("docker inspect --format '{{.Id}}' " . escapeshellarg($imageName) . " 2>/dev/null"));
-
-        if (file_exists($unraidUpdater)) {
-            $retryOut = @shell_exec("{$unraidUpdater} update " . escapeshellarg($cleanTarget) . " 2>&1");
-            $updaterOut .= $retryOut . "\n";
-            $newId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escaped} 2>/dev/null"));
-            $newImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
-            if (!empty($newId) && ($newId !== $oldId || $newImgId !== $oldImgId)) {
-                $updated = true;
-            }
+        if (empty($latestPulledImgId)) {
+            json_output([
+                'status' => 'error',
+                'message' => "拉取最新镜像 [{$imageName}] 失败：\n" . trim(substr($pullOut, 0, 300)),
+                'output' => trim($updaterOut)
+            ]);
+            return;
         }
 
-        // If local image already matches latest remote registry image digest
-        if (!$updated && !empty($latestPulledImgId) && $latestPulledImgId === $oldImgId) {
+        // Step B: Perform safe atomic container recreation
+        $recreateResult = docker_recreate_container($cleanTarget, $imageName, $c);
+        if (!empty($recreateResult['output'])) {
+            $updaterOut .= $recreateResult['output'] . "\n";
+        }
+
+        if ($recreateResult['success']) {
             $updated = true;
+            $newId = $recreateResult['new_id'] ?? '';
+        } else {
+            json_output([
+                'status' => 'error',
+                'message' => "容器重新创建失败（已安全还原旧容器）：\n" . ($recreateResult['error'] ?? '未知错误'),
+                'output' => trim($updaterOut)
+            ]);
+            return;
         }
     }
 
@@ -1467,7 +1459,7 @@ function handle_update_docker() {
 
         json_output([
             'status' => 'success',
-            'message' => "容器 [{$cleanTarget}] 升级成功！已更新至最新版本。",
+            'message' => "容器 [{$cleanTarget}] 升级成功！已更新至最新版本" . ($wasRunning ? "并已重新运行。" : "（保持停止状态）。"),
             'details' => [
                 'old_id' => substr($oldId, 0, 12),
                 'new_id' => !empty($newId) ? substr($newId, 0, 12) : substr($oldId, 0, 12),
@@ -1479,7 +1471,225 @@ function handle_update_docker() {
             'status' => 'error',
             'message' => "容器升级未能完成：未检测到新容器创建或配置未变动。\n" . trim(substr($updaterOut, 0, 400)),
             'output' => trim($updaterOut)
-        ], 500);
+        ]);
+    }
+}
+
+// -------------------------------------------------------------
+// Safe Atomic Docker Container Recreator
+// -------------------------------------------------------------
+function docker_recreate_container($cleanTarget, $imageName, $c) {
+    $oldId = $c['Id'] ?? '';
+    $wasRunning = !empty($c['State']['Running']);
+    $backupName = $cleanTarget . '_backup_' . time();
+    $escapedTarget = escapeshellarg($cleanTarget);
+    $escapedBackup = escapeshellarg($backupName);
+
+    // 1. Check if Unraid XML template exists for this container
+    $xmlPath = "/boot/config/plugins/dockerMan/templates-user/my-{$cleanTarget}.xml";
+    $useXml = false;
+    $xml = null;
+    if (file_exists($xmlPath)) {
+        $xml = @simplexml_load_file($xmlPath);
+        if ($xml && !empty($xml->Repository)) {
+            $useXml = true;
+        }
+    }
+
+    $createCmdArgs = [];
+    $createCmdArgs[] = "--name " . $escapedTarget;
+
+    if ($useXml) {
+        $repo = trim((string)$xml->Repository);
+        $network = trim((string)$xml->Network) ?: 'bridge';
+        $myIp = trim((string)$xml->MyIP);
+        $privileged = (strtolower(trim((string)$xml->Privileged)) === 'true');
+        $extraParams = trim((string)$xml->ExtraParams);
+        $postArgs = trim((string)$xml->PostArgs);
+        $icon = trim((string)$xml->Icon);
+        $webui = trim((string)$xml->WebUI);
+        $cpuSet = trim((string)$xml->CPUset);
+
+        $createCmdArgs[] = "--net " . escapeshellarg($network);
+        if (!empty($myIp)) {
+            $createCmdArgs[] = "--ip " . escapeshellarg($myIp);
+        }
+        if ($privileged) {
+            $createCmdArgs[] = "--privileged";
+        }
+        if (!empty($cpuSet)) {
+            $createCmdArgs[] = "--cpuset-cpus " . escapeshellarg($cpuSet);
+        }
+        if (!empty($icon)) {
+            $createCmdArgs[] = "-l " . escapeshellarg("net.unraid.docker.icon=" . $icon);
+        }
+        if (!empty($webui)) {
+            $createCmdArgs[] = "-l " . escapeshellarg("net.unraid.docker.webui=" . $webui);
+        }
+        $createCmdArgs[] = "-l net.unraid.docker.managed=dockerman";
+
+        if (isset($xml->Config)) {
+            foreach ($xml->Config as $cfg) {
+                $type = trim((string)$cfg['Type']);
+                $target = trim((string)$cfg['Target']);
+                $mode = trim((string)$cfg['Mode']);
+                $val = trim((string)$cfg);
+
+                if ($type === 'Port' && !empty($val) && !empty($target)) {
+                    $pStr = $val . ':' . $target . (!empty($mode) ? '/' . $mode : '');
+                    $createCmdArgs[] = "-p " . escapeshellarg($pStr);
+                } elseif ($type === 'Path' && !empty($val) && !empty($target)) {
+                    $vStr = $val . ':' . $target . (!empty($mode) ? ':' . $mode : '');
+                    $createCmdArgs[] = "-v " . escapeshellarg($vStr);
+                } elseif ($type === 'Variable' && !empty($target)) {
+                    $createCmdArgs[] = "-e " . escapeshellarg($target . '=' . $val);
+                } elseif ($type === 'Device' && !empty($val)) {
+                    $dStr = $val . (!empty($target) ? ':' . $target : '') . (!empty($mode) ? ':' . $mode : '');
+                    $createCmdArgs[] = "--device " . escapeshellarg($dStr);
+                } elseif ($type === 'Label' && !empty($target)) {
+                    $createCmdArgs[] = "-l " . escapeshellarg($target . '=' . $val);
+                }
+            }
+        }
+
+        if (!empty($extraParams)) {
+            $createCmdArgs[] = $extraParams;
+        }
+        if (stripos($extraParams, '--restart') === false) {
+            $createCmdArgs[] = "--restart unless-stopped";
+        }
+
+        $finalImage = !empty($repo) ? $repo : $imageName;
+        $finalImageAndArgs = escapeshellarg($finalImage) . (!empty($postArgs) ? ' ' . $postArgs : '');
+    } else {
+        // Fallback: Reconstruct from docker inspect
+        $netMode = $c['HostConfig']['NetworkMode'] ?? 'bridge';
+        if (!empty($netMode)) {
+            $createCmdArgs[] = "--net " . escapeshellarg($netMode);
+        }
+
+        $restartPolicy = $c['HostConfig']['RestartPolicy']['Name'] ?? 'unless-stopped';
+        if (!empty($restartPolicy) && $restartPolicy !== 'no') {
+            $maxRetry = $c['HostConfig']['RestartPolicy']['MaximumRetryCount'] ?? 0;
+            $rStr = ($restartPolicy === 'on-failure' && $maxRetry > 0) ? "on-failure:{$maxRetry}" : $restartPolicy;
+            $createCmdArgs[] = "--restart " . escapeshellarg($rStr);
+        }
+
+        if (!empty($c['HostConfig']['Privileged'])) {
+            $createCmdArgs[] = "--privileged";
+        }
+
+        if (!empty($c['HostConfig']['PortBindings']) && is_array($c['HostConfig']['PortBindings'])) {
+            foreach ($c['HostConfig']['PortBindings'] as $cPortProto => $bindings) {
+                if (is_array($bindings)) {
+                    foreach ($bindings as $bind) {
+                        $hIp = trim($bind['HostIp'] ?? '');
+                        $hPort = trim($bind['HostPort'] ?? '');
+                        if (!empty($hPort)) {
+                            if (!empty($hIp) && $hIp !== '0.0.0.0') {
+                                $createCmdArgs[] = "-p " . escapeshellarg("{$hIp}:{$hPort}:{$cPortProto}");
+                            } else {
+                                $createCmdArgs[] = "-p " . escapeshellarg("{$hPort}:{$cPortProto}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!empty($c['HostConfig']['Binds']) && is_array($c['HostConfig']['Binds'])) {
+            foreach ($c['HostConfig']['Binds'] as $bindStr) {
+                if (!empty($bindStr)) {
+                    $createCmdArgs[] = "-v " . escapeshellarg($bindStr);
+                }
+            }
+        }
+
+        if (!empty($c['Config']['Env']) && is_array($c['Config']['Env'])) {
+            foreach ($c['Config']['Env'] as $envStr) {
+                if (!preg_match('/^(HOSTNAME|PATH)=/', $envStr)) {
+                    $createCmdArgs[] = "-e " . escapeshellarg($envStr);
+                }
+            }
+        }
+
+        if (!empty($c['HostConfig']['Devices']) && is_array($c['HostConfig']['Devices'])) {
+            foreach ($c['HostConfig']['Devices'] as $dev) {
+                $hPath = $dev['PathOnHost'] ?? '';
+                $cPath = $dev['PathInContainer'] ?? $hPath;
+                $perm = $dev['CgroupPermissions'] ?? 'rwm';
+                if (!empty($hPath)) {
+                    $createCmdArgs[] = "--device " . escapeshellarg("{$hPath}:{$cPath}:{$perm}");
+                }
+            }
+        }
+
+        if (!empty($c['Config']['Labels']) && is_array($c['Config']['Labels'])) {
+            foreach ($c['Config']['Labels'] as $lKey => $lVal) {
+                $createCmdArgs[] = "-l " . escapeshellarg("{$lKey}={$lVal}");
+            }
+        }
+
+        $shmSize = $c['HostConfig']['ShmSize'] ?? 0;
+        if ($shmSize > 67108864) {
+            $createCmdArgs[] = "--shm-size=" . escapeshellarg($shmSize);
+        }
+
+        $finalImageAndArgs = escapeshellarg($imageName);
+        if (!empty($c['Config']['Cmd']) && is_array($c['Config']['Cmd'])) {
+            $cmdParts = array_map('escapeshellarg', $c['Config']['Cmd']);
+            $finalImageAndArgs .= ' ' . implode(' ', $cmdParts);
+        }
+    }
+
+    // Step C: Atomic Rename old container to backup
+    if ($wasRunning) {
+        @shell_exec("docker stop -t 15 {$escapedTarget} 2>&1");
+    }
+
+    $renameOut = trim(@shell_exec("docker rename {$escapedTarget} {$escapedBackup} 2>&1"));
+    $checkBackup = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escapedBackup} 2>/dev/null"));
+    if (empty($checkBackup)) {
+        if ($wasRunning) {
+            @shell_exec("docker start {$escapedTarget} 2>&1");
+        }
+        return [
+            'success' => false,
+            'error' => "旧容器备份重命名失败: {$renameOut}",
+            'output' => $renameOut
+        ];
+    }
+
+    // Step D: Recreate the container
+    // If was running, run -d; if was stopped, create (keeps it stopped!)
+    $dockerVerb = $wasRunning ? 'docker run -d' : 'docker create';
+    $runCmd = "{$dockerVerb} " . implode(' ', $createCmdArgs) . " " . $finalImageAndArgs . " 2>&1";
+    $createOut = trim(@shell_exec($runCmd));
+
+    $newId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escapedTarget} 2>/dev/null"));
+
+    // Step E: Verify new container
+    if (!empty($newId) && $newId !== $oldId) {
+        // Success! Remove backup container
+        @shell_exec("docker rm -f {$escapedBackup} 2>/dev/null");
+        return [
+            'success' => true,
+            'new_id' => $newId,
+            'used_xml' => $useXml,
+            'output' => "Container recreated successfully via {$dockerVerb}.\n" . $createOut
+        ];
+    } else {
+        // Recreation failed! Rollback!
+        @shell_exec("docker rm -f {$escapedTarget} 2>/dev/null");
+        @shell_exec("docker rename {$escapedBackup} {$escapedTarget} 2>&1");
+        if ($wasRunning) {
+            @shell_exec("docker start {$escapedTarget} 2>&1");
+        }
+        return [
+            'success' => false,
+            'error' => "新建容器失败，已安全回滚保留原容器。\n命令输出: {$createOut}",
+            'output' => "CMD: {$runCmd}\nOUT: {$createOut}"
+        ];
     }
 }
 

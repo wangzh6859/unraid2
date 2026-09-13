@@ -375,8 +375,22 @@ export default function DockerDetailsScreen({ route }) {
             { signal: controller.signal }
           );
           clearTimeout(timeoutTimer);
-          const data = await res.json();
-          if (data.status === 'success') {
+          const rawText = await res.text();
+          let data = null;
+          try {
+            data = JSON.parse(rawText);
+          } catch (parseErr) {
+            showConfirm({
+              type: 'error',
+              title: '服务端异常',
+              message: rawText ? (rawText.length > 300 ? rawText.substring(0, 300) + '...' : rawText) : '服务端未返回有效响应',
+              confirmText: '确定',
+              showCancel: false,
+            });
+            return;
+          }
+
+          if (data && data.status === 'success') {
             showConfirm({
               type: 'success',
               title: '升级成功',
@@ -390,7 +404,7 @@ export default function DockerDetailsScreen({ route }) {
             showConfirm({
               type: 'error',
               title: '升级失败',
-              message: data.message || '升级未能完成，未检测到容器重新创建',
+              message: (data && data.message) ? data.message : '升级未能完成，未检测到容器重新创建',
               confirmText: '确定',
               showCancel: false,
             });
