@@ -380,6 +380,8 @@ export default function FilesScreen({ navigation }) {
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
+        // Allow Android system file picker activity transition to finish cleanly
+        await new Promise((r) => setTimeout(r, 250));
         const file = result.assets[0];
         const fileUri = file.uri;
         let chosenName = file.name;
@@ -570,11 +572,17 @@ export default function FilesScreen({ navigation }) {
       let savedPath = `${taskItem.targetPath}/${taskItem.name}`;
       if (res && res.status >= 200 && res.status < 300) {
         let parsed = null;
-        try { parsed = JSON.parse(res.body); } catch (_) {}
-        if (parsed && parsed.status === 'error') {
-          throw new Error(parsed.message || '服务端写入文件失败');
+        try {
+          parsed = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
+        } catch (parseErr) {
+          console.log('[Upload] Response JSON parse failed, raw body:', res?.body);
         }
-        if (parsed && parsed.path) {
+
+        if (!parsed || parsed.status !== 'success') {
+          const errMsg = parsed?.message || (res?.body ? String(res.body).substring(0, 120) : '服务端未确认写入');
+          throw new Error(`文件未写入服务端: ${errMsg}`);
+        }
+        if (parsed.path) {
           savedPath = parsed.path;
         }
       } else {

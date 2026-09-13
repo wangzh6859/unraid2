@@ -75,6 +75,8 @@ export default function SettingsScreen({ navigation }) {
   // Unraid Server credentials
   const [unraidUrl, setUnraidUrl] = useState('未连接');
   const [apiToken, setApiToken] = useState('');
+  const [serverApiVersion, setServerApiVersion] = useState('');
+  const [isUpdatingApi, setIsUpdatingApi] = useState(false);
 
   // Download & Cache settings
   const [downloadDir, setDownloadDirState] = useState(null);
@@ -250,12 +252,79 @@ export default function SettingsScreen({ navigation }) {
     });
   };
 
+  const fetchServerApiVersion = async (url, token) => {
+    try {
+      const u = (url || unraidUrl || '').replace(/\/+$/, '');
+      const t = token || apiToken;
+      if (!u || u === '未连接' || !t) return;
+      const res = await fetch(`${u}/api.php?token=${encodeURIComponent(t)}&action=version`);
+      const data = await res.json();
+      if (data && (data.api_version || data.version)) {
+        setServerApiVersion(data.api_version || data.version);
+      }
+    } catch (e) {
+      console.log('[SettingsScreen] fetchServerApiVersion error:', e);
+    }
+  };
+
+  const handleSelfUpdateApi = async () => {
+    if (!unraidUrl || unraidUrl === '未连接' || !apiToken) {
+      showConfirm({
+        type: 'warning',
+        title: '未连接服务器',
+        message: '请先配置有效的服务器连接地址与 API Token。',
+        confirmText: '好的',
+        showCancel: false,
+      });
+      return;
+    }
+
+    setIsUpdatingApi(true);
+    try {
+      const cleanUrl = unraidUrl.replace(/\/+$/, '');
+      const res = await fetch(`${cleanUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=self_update_api`);
+      const data = await res.json();
+      if (data && data.status === 'success') {
+        await fetchServerApiVersion();
+        showConfirm({
+          type: 'success',
+          title: 'API 更新成功',
+          message: data.message || '后端 API (api.php) 已自动热更新至最新版本！',
+          confirmText: '好的',
+          showCancel: false,
+        });
+      } else {
+        showConfirm({
+          type: 'error',
+          title: 'API 更新失败',
+          message: data?.message || '请检查服务器网络或文件写入权限。',
+          confirmText: '知道了',
+          showCancel: false,
+        });
+      }
+    } catch (e) {
+      showConfirm({
+        type: 'error',
+        title: '请求异常',
+        message: e.message,
+        confirmText: '确定',
+        showCancel: false,
+      });
+    } finally {
+      setIsUpdatingApi(false);
+    }
+  };
+
   const loadSettings = async () => {
     try {
       const savedUrl = await AsyncStorage.getItem('@server_url');
       if (savedUrl) setUnraidUrl(savedUrl);
       const token = await AsyncStorage.getItem('@api_token');
       if (token) setApiToken(token);
+
+      if (savedUrl && token) {
+        fetchServerApiVersion(savedUrl, token);
+      }
 
       const lockVal = await AsyncStorage.getItem('@security_app_lock');
       if (lockVal !== null) setAppLockEnabled(lockVal === 'true');
@@ -301,7 +370,8 @@ export default function SettingsScreen({ navigation }) {
   useFocusEffect(
     useCallback(() => {
       loadSettings();
-    }, [])
+      fetchServerApiVersion();
+    }, [unraidUrl, apiToken])
   );
 
   // Download directory permissions via SAF
@@ -473,9 +543,11 @@ export default function SettingsScreen({ navigation }) {
       if (cleanUrl.endsWith('/')) cleanUrl = cleanUrl.slice(0, -1);
       await AsyncStorage.setItem('@server_url', cleanUrl);
       setUnraidUrl(cleanUrl);
+      fetchServerApiVersion(cleanUrl, apiToken);
     } else if (serverEditField === 'token') {
       await AsyncStorage.setItem('@api_token', v);
       setApiToken(v);
+      fetchServerApiVersion(unraidUrl, v);
     } else if (serverEditField === 'wol_mac') {
       if (v && !isValidMacAddress(v)) {
         showConfirm({

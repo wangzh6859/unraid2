@@ -129,7 +129,16 @@ class BackgroundTransferManager {
       this.isStartingService = true;
 
       try {
-        await this.requestNotificationPermission();
+        const hasPermission = await this.requestNotificationPermission();
+        if (!hasPermission) {
+          console.log('[BTM] Notification permission not granted, skipping foreground service keepalive');
+          this.isServiceRunning = false;
+          this.isStartingService = false;
+          return;
+        }
+
+        // Allow Android activity to fully settle into RESUMED state before starting FGS
+        await new Promise((r) => setTimeout(r, 350));
 
         const options = {
           taskName: 'UnraidTransferDaemon',
@@ -158,6 +167,7 @@ class BackgroundTransferManager {
             await BackgroundService.start(this.backgroundDaemonTask, options);
           } catch (bsErr) {
             console.log('[BTM] BackgroundService.start caught error:', bsErr);
+            this.isServiceRunning = false;
           }
         }
         this.lastUpdateTime = Date.now();

@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.13.9
+ * Version: 2026.09.13.10
  * Release: 2026-09-13
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.13.9');
+define('UNRAID_API_VERSION', '2026.09.13.10');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -376,10 +376,6 @@ switch ($action) {
         handle_check_docker_updates();
         break;
 
-    case 'ca_apps':
-        handle_ca_apps();
-        break;
-
     case 'compose_list':
         handle_compose_list();
         break;
@@ -633,12 +629,7 @@ function get_server_mac() {
 
 function get_docker_updates_map() {
     $dockerUpdatesMap = [];
-    $iniFile = '/var/local/emhttp/docker.ini';
 
-    // Strictly mirrors Unraid WebGUI:
-    // 1. update == "ready" OR status/install contains "ready" -> WebGUI displays "更新就绪"
-    // 2. update == "true" OR install contains "update" -> WebGUI displays "更新"
-    // 3. update == "false" (and not ready) -> WebGUI displays "最新" (Up-to-date)
     $evalSecStatus = function($sec) {
         $updateVal = strtolower(trim((string)($sec['update'] ?? '')));
         $statusVal = strtolower(trim((string)($sec['status'] ?? '')));
@@ -696,8 +687,58 @@ function get_docker_updates_map() {
         }
     };
 
-    if (file_exists($iniFile)) {
-        // Method 1: parse_ini_file
+    // Method 1: Infallible Docker Engine inspection (Running Container ImageID vs Tag ImageID)
+    // When an image is pulled (or Unraid WebGUI shows "⚡ 更新就绪"),
+    // the running container was started with an older Image ID than the tag currently on the host.
+    // This provides 100% accurate "更新就绪" detection independent of webGUI cache.
+    $inspectRaw = @shell_exec('docker inspect --format "{{.Name}}\t{{.Config.Image}}\t{{.Image}}" $(docker ps -aq) 2>/dev/null');
+    if (!empty($inspectRaw)) {
+        $imagesRaw = @shell_exec('docker images --no-trunc --format "{{.Repository}}:{{.Tag}}\t{{.ID}}" 2>/dev/null');
+        $tagToId = [];
+        if (!empty($imagesRaw)) {
+            foreach (explode("\n", trim($imagesRaw)) as $imgLine) {
+                $parts = explode("\t", trim($imgLine));
+                if (count($parts) >= 2) {
+                    $repoTag = trim($parts[0]);
+                    $iId = preg_replace('/^sha256:/', '', trim($parts[1]));
+                    $tagToId[$repoTag] = $iId;
+                    if (strpos($repoTag, ':latest') !== false) {
+                        $tagToId[substr($repoTag, 0, -7)] = $iId;
+                    }
+                }
+            }
+        }
+
+        foreach (explode("\n", trim($inspectRaw)) as $cLine) {
+            $parts = explode("\t", trim($cLine));
+            if (count($parts) >= 3) {
+                $cName = ltrim(trim($parts[0]), '/');
+                $cImageTag = trim($parts[1]);
+                $cRunningId = preg_replace('/^sha256:/', '', trim($parts[2]));
+
+                $currentTagId = isset($tagToId[$cImageTag]) ? $tagToId[$cImageTag] : (isset($tagToId[$cImageTag . ':latest']) ? $tagToId[$cImageTag . ':latest'] : '');
+
+                if (!empty($currentTagId) && !empty($cRunningId) && $currentTagId !== $cRunningId) {
+                    $readyRecord = ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
+                    $registerContainer($cName, $readyRecord);
+                    $registerContainer($cImageTag, $readyRecord);
+                }
+            }
+        }
+    }
+
+    // Method 2: Check Unraid docker.ini files across standard locations
+    $iniCandidates = [
+        '/var/local/emhttp/docker.ini',
+        '/var/run/emhttp/docker.ini',
+        '/var/run/emhttp.ini',
+        '/boot/config/plugins/dockerMan/templates-user/docker.ini'
+    ];
+
+    foreach ($iniCandidates as $iniFile) {
+        if (!file_exists($iniFile)) continue;
+
+        // Method 2A: parse_ini_file
         $ini = @parse_ini_file($iniFile, true);
         if (is_array($ini)) {
             foreach ($ini as $secKey => $sec) {
@@ -715,7 +756,7 @@ function get_docker_updates_map() {
             }
         }
 
-        // Method 2: Robust Line-by-line fallback
+        // Method 2B: Robust Line-by-line fallback
         $raw = @file_get_contents($iniFile);
         if ($raw) {
             $lines = explode("\n", $raw);
@@ -1275,7 +1316,10 @@ function handle_docker_action($action) {
     elseif ($action === 'restart_docker') $cmd = "docker restart {$target}";
     
     $out = shell_exec($cmd . ' 2>&1');
-    json_output(['status' => 'success', 'message' => "Docker action {$action} executed", 'output' => trim($out)]);
+    json_output(['status' => 'success', 'message' => "Docker action {$action} executed", 'ready_count' => $readyCount,
+        'new_version_count' => $newVersionCount,
+        'output' => trim($out)
+    ]);
 }
 
 function handle_docker_logs() {
@@ -1993,6 +2037,8 @@ function handle_compose_action() {
         'status' => 'success',
         'project' => $target,
         'action' => $cmd,
+        'ready_count' => $readyCount,
+        'new_version_count' => $newVersionCount,
         'output' => trim($out)
     ]);
 }
@@ -2301,7 +2347,10 @@ function handle_vm_action($action) {
     elseif ($action === 'resume_vm') $cmd = "virsh resume {$target}";
     
     $out = shell_exec($cmd . ' 2>&1');
-    json_output(['status' => 'success', 'message' => "VM action {$action} executed", 'output' => trim($out)]);
+    json_output(['status' => 'success', 'message' => "VM action {$action} executed", 'ready_count' => $readyCount,
+        'new_version_count' => $newVersionCount,
+        'output' => trim($out)
+    ]);
 }
 
 function handle_parity_control() {
@@ -2332,6 +2381,8 @@ function handle_parity_control() {
         'status' => 'success',
         'message' => $msg,
         'command' => $cmd,
+        'ready_count' => $readyCount,
+        'new_version_count' => $newVersionCount,
         'output' => trim($out)
     ]);
 }
@@ -2962,9 +3013,10 @@ function handle_file_upload() {
         }
         clearstatcache(true, $destPath);
         clearstatcache(true, $targetDir);
+        log_upload_debug("file_upload stream ok: dest={$destPath}, size=" . filesize($destPath));
         json_output([
             'status' => 'success',
-            'message' => 'Raw stream upload complete',
+            'message' => '文件已成功上传至 Unraid 存储',
             'path' => $destPath,
             'name' => $cleanDestName,
             'size' => filesize($destPath)
@@ -3816,351 +3868,8 @@ function handle_check_docker_updates() {
         'message' => $msg,
         'update_count' => $updatesCount,
         'updates_count' => $updatesCount,
+        'ready_count' => $readyCount,
+        'new_version_count' => $newVersionCount,
         'output' => trim($out)
     ]);
 }
-
-function handle_ca_apps() {
-    $cat = isset($_GET['category']) ? trim($_GET['category']) : 'all';
-    $search = isset($_GET['search']) ? trim($_GET['search']) : (isset($_GET['q']) ? trim($_GET['q']) : '');
-
-    $apps = [];
-
-    // 1. Attempt to read Unraid Community Applications local cache
-    $caCacheFile = '/tmp/community.applications/tempFiles/templates.json';
-    if (file_exists($caCacheFile)) {
-        $raw = @file_get_contents($caCacheFile);
-        if ($raw) {
-            $decoded = @json_decode($raw, true);
-            if (is_array($decoded)) {
-                foreach ($decoded as $item) {
-                    if (empty($item['Name']) && empty($item['name'])) continue;
-                    $name = !empty($item['Name']) ? $item['Name'] : $item['name'];
-                    $repo = !empty($item['Repository']) ? $item['Repository'] : (!empty($item['repository']) ? $item['repository'] : '');
-                    $desc = !empty($item['Overview']) ? $item['Overview'] : (!empty($item['description']) ? $item['description'] : '');
-                    $icon = !empty($item['Icon']) ? $item['Icon'] : (!empty($item['icon']) ? $item['icon'] : '');
-                    $category = !empty($item['Category']) ? $item['Category'] : (!empty($item['category']) ? $item['category'] : 'Tools:');
-                    $author = !empty($item['Author']) ? $item['Author'] : (!empty($item['author']) ? $item['author'] : 'Community');
-
-                    $apps[] = [
-                        'id' => md5($name . $repo),
-                        'name' => $name,
-                        'author' => $author,
-                        'repository' => $repo,
-                        'overview' => strip_tags($desc),
-                        'icon' => $icon,
-                        'category' => $category,
-                    ];
-                }
-            }
-        }
-    }
-
-    // 2. If CA cache is empty, provide curated high-quality Unraid Docker apps catalog
-    if (empty($apps)) {
-        $apps = get_default_curated_apps();
-    }
-
-    // Filter by search query
-    if (!empty($search)) {
-        $q = mb_strtolower($search, 'UTF-8');
-        $apps = array_values(array_filter($apps, function($a) use ($q) {
-            return (
-                stripos($a['name'], $q) !== false ||
-                stripos($a['overview'], $q) !== false ||
-                stripos($a['author'], $q) !== false ||
-                stripos($a['category'], $q) !== false
-            );
-        }));
-    }
-
-    // Filter by category
-    if ($cat !== 'all') {
-        $apps = array_values(array_filter($apps, function($a) use ($cat) {
-            $c = strtolower($a['category']);
-            if ($cat === 'media') return stripos($c, 'media') !== false || stripos($c, 'video') !== false || stripos($c, 'audio') !== false;
-            if ($cat === 'download') return stripos($c, 'download') !== false || stripos($c, 'torrent') !== false;
-            if ($cat === 'cloud') return stripos($c, 'cloud') !== false || stripos($c, 'backup') !== false || stripos($c, 'sync') !== false;
-            if ($cat === 'network') return stripos($c, 'network') !== false || stripos($c, 'proxy') !== false || stripos($c, 'vpn') !== false;
-            if ($cat === 'smarthome') return stripos($c, 'home') !== false || stripos($c, 'iot') !== false;
-            if ($cat === 'tools') return stripos($c, 'tool') !== false || stripos($c, 'system') !== false;
-            return true;
-        }));
-    }
-
-    json_output([
-        'status' => 'success',
-        'total' => count($apps),
-        'apps' => $apps
-    ]);
-}
-
-function get_default_curated_apps() {
-    return [
-        [
-            'id' => 'nextcloud',
-            'name' => 'Nextcloud',
-            'author' => 'linuxserver',
-            'repository' => 'lscr.io/linuxserver/nextcloud:latest',
-            'category' => 'Cloud:Backup',
-            'category_label' => '私有云盘',
-            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/nextcloud-logo.png',
-            'overview' => '行业领先的安全私有云存储中心，支持文件同步、在线文档、多端相册备份及企业级安全协作。',
-            'default_port' => 443
-        ],
-        [
-            'id' => 'plex',
-            'name' => 'Plex Media Server',
-            'author' => 'linuxserver',
-            'repository' => 'lscr.io/linuxserver/plex:latest',
-            'category' => 'Media:Video',
-            'category_label' => '影音媒体',
-            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/plex-logo.png',
-            'overview' => '全球广泛使用的影音服务器，自动刮削电影电视海报字幕，支持全平台硬件实时转码与远程推流。',
-            'default_port' => 32400
-        ],
-        [
-            'id' => 'jellyfin',
-            'name' => 'Jellyfin',
-            'author' => 'linuxserver',
-            'repository' => 'lscr.io/linuxserver/jellyfin:latest',
-            'category' => 'Media:Video',
-            'category_label' => '影音媒体',
-            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/jellyfin-logo.png',
-            'overview' => '100% 自由开源且零订阅的家庭影院媒体中枢，原生支持 Intel QuickSync 及硬件级 HDR 色调映射。',
-            'default_port' => 8096
-        ],
-        [
-            'id' => 'emby',
-            'name' => 'Emby Server',
-            'author' => 'emby',
-            'repository' => 'emby/embyserver:latest',
-            'category' => 'Media:Video',
-            'category_label' => '影音媒体',
-            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/emby-icon.png',
-            'overview' => '性能强悍的个人媒体服务器，支持精细化的多用户权限控制、Live TV 电视录制与流畅硬件转码。',
-            'default_port' => 8096
-        ],
-        [
-            'id' => 'qbittorrent',
-            'name' => 'qBittorrent',
-            'author' => 'linuxserver',
-            'repository' => 'lscr.io/linuxserver/qbittorrent:latest',
-            'category' => 'Download:Torrent',
-            'category_label' => '下载工具',
-            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/qbittorrent-logo.png',
-            'overview' => 'PT/BT 下载神器，内置完善的 WebUI 界面、RSS 订阅自动下载、限速调度与高级种子分类管理。',
-            'default_port' => 8080
-        ],
-        [
-            'id' => 'transmission',
-            'name' => 'Transmission',
-            'author' => 'linuxserver',
-            'repository' => 'lscr.io/linuxserver/transmission:latest',
-            'category' => 'Download:Torrent',
-            'category_label' => '下载工具',
-            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/transmission-logo.png',
-            'overview' => '超轻量级 BT 客户端，内存开销极小，极其适合 24 小时低功耗保种与海量种子挂机。',
-            'default_port' => 9091
-        ],
-        [
-            'id' => 'nginx-proxy-manager',
-            'name' => 'Nginx Proxy Manager',
-            'author' => 'jc21',
-            'repository' => 'jc21/nginx-proxy-manager:latest',
-            'category' => 'Network:Proxy',
-            'category_label' => '网络安全',
-            'icon' => 'https://raw.githubusercontent.com/NginxProxyManager/nginx-proxy-manager/develop/frontend/images/logo.png',
-            'overview' => '极简优雅的反向代理控制面板，支持一键自动申请部署 Let\'s Encrypt SSL 免费泛域名证书与访问控制。',
-            'default_port' => 81
-        ],
-        [
-            'id' => 'adguardhome',
-            'name' => 'AdGuard Home',
-            'author' => 'adguard',
-            'repository' => 'adguard/adguardhome:latest',
-            'category' => 'Network:Security',
-            'category_label' => '网络安全',
-            'icon' => 'https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/client/src/assets/logo.svg',
-            'overview' => '局域网全网级 DNS 广告拦截与隐私卫士，支持 DoH / DoT 加密解析、父母控制与全设备跟踪保护。',
-            'default_port' => 3000
-        ],
-        [
-            'id' => 'vaultwarden',
-            'name' => 'Vaultwarden',
-            'author' => 'dani-garcia',
-            'repository' => 'vaultwarden/server:latest',
-            'category' => 'Network:Security',
-            'category_label' => '网络安全',
-            'icon' => 'https://raw.githubusercontent.com/dani-garcia/vaultwarden/main/resources/vaultwarden-icon.svg',
-            'overview' => '基于 Rust 轻量重构的 Bitwarden 开源密码管理器后端，安全保管账号密码、二步验证码与信用卡信息。',
-            'default_port' => 80
-        ],
-        [
-            'id' => 'homeassistant',
-            'name' => 'Home Assistant',
-            'author' => 'homeassistant',
-            'repository' => 'ghcr.io/home-assistant/home-assistant:stable',
-            'category' => 'Home:IoT',
-            'category_label' => '智能家居',
-            'icon' => 'https://brands.home-assistant.io/homeassistant/icon.png',
-            'overview' => '全球第一的开源智能家居控制中心，整合米家、Apple HomeKit、Matter、Zigbee 与各类传感器联动。',
-            'default_port' => 8123
-        ],
-        [
-            'id' => 'uptime-kuma',
-            'name' => 'Uptime Kuma',
-            'author' => 'louislam',
-            'repository' => 'louislam/uptime-kuma:latest',
-            'category' => 'Tools:System',
-            'category_label' => '系统工具',
-            'icon' => 'https://raw.githubusercontent.com/louislam/uptime-kuma/master/public/icon.svg',
-            'overview' => '高颜值自建服务运行状态监控站，支持 HTTP、TCP、Ping、DNS 探针，并提供多通道异常消息推送。',
-            'default_port' => 3001
-        ],
-        [
-            'id' => 'immich',
-            'name' => 'Immich',
-            'author' => 'immich-app',
-            'repository' => 'ghcr.io/immich-app/immich-server:release',
-            'category' => 'Cloud:Backup',
-            'category_label' => '私有云盘',
-            'icon' => 'https://immich.app/img/immich-logo.svg',
-            'overview' => '高性能自建相册备份方案（Google Photos 完美替代品），原生移动端极速自动备份、AI 人脸与目标识别。',
-            'default_port' => 2283
-        ],
-        [
-            'id' => 'photoprism',
-            'name' => 'PhotoPrism',
-            'author' => 'photoprism',
-            'repository' => 'photoprism/photoprism:latest',
-            'category' => 'Cloud:Backup',
-            'category_label' => '私有云盘',
-            'icon' => 'https://raw.githubusercontent.com/photoprism/photoprism/develop/assets/static/img/app/favicon.png',
-            'overview' => '基于 TensorFlow AI 图像驱动的个人相册引擎，支持自动地图定位、人脸归类及时间线浏览。',
-            'default_port' => 2342
-        ],
-        [
-            'id' => 'tailscale',
-            'name' => 'Tailscale',
-            'author' => 'tailscale',
-            'repository' => 'tailscale/tailscale:latest',
-            'category' => 'Network:VPN',
-            'category_label' => '网络安全',
-            'icon' => 'https://tailscale.com/favicon.ico',
-            'overview' => '基于 WireGuard 协议构建的安全零配置虚拟局域网（Mesh VPN），轻松实现异地多设备点对点直连。',
-            'default_port' => 41641
-        ],
-        [
-            'id' => 'cloudflared',
-            'name' => 'Cloudflare Tunnel',
-            'author' => 'cloudflare',
-            'repository' => 'cloudflare/cloudflared:latest',
-            'category' => 'Network:Proxy',
-            'category_label' => '网络安全',
-            'icon' => 'https://www.cloudflare.com/favicon.ico',
-            'overview' => '无需公网 IP 与路由端口映射，安全将 Unraid 内网服务无缝发布穿透到全球互联网。',
-            'default_port' => 80
-        ],
-        [
-            'id' => 'portainer',
-            'name' => 'Portainer CE',
-            'author' => 'portainer',
-            'repository' => 'portainer/portainer-ce:latest',
-            'category' => 'Tools:System',
-            'category_label' => '系统工具',
-            'icon' => 'https://raw.githubusercontent.com/portainer/portainer/develop/app/assets/ico/favicon.ico',
-            'overview' => '强大的轻量级 Docker 图形化管理容器仪表板，便捷管理镜像、网络、数据卷与多节点集群。',
-            'default_port' => 9000
-        ],
-        [
-            'id' => 'homarr',
-            'name' => 'Homarr',
-            'author' => 'ajnart',
-            'repository' => 'ghcr.io/ajnart/homarr:latest',
-            'category' => 'Tools:System',
-            'category_label' => '系统工具',
-            'icon' => 'https://homarr.dev/img/logo.png',
-            'overview' => '现代美观的定制化 NAS 导航主页，深度集成 Docker、qBittorrent、Plex 实时状态小组件。',
-            'default_port' => 7575
-        ],
-        [
-            'id' => 'homepage',
-            'name' => 'Homepage',
-            'author' => 'gethomepage',
-            'repository' => 'ghcr.io/gethomepage/homepage:latest',
-            'category' => 'Tools:System',
-            'category_label' => '系统工具',
-            'icon' => 'https://gethomepage.dev/img/logo.png',
-            'overview' => '极简高效且高度可定制的自建导航面板，以 YAML 驱动，支持 100+ 项流行自建服务集成。',
-            'default_port' => 3000
-        ],
-        [
-            'id' => 'calibre-web',
-            'name' => 'Calibre-Web',
-            'author' => 'linuxserver',
-            'repository' => 'lscr.io/linuxserver/calibre-web:latest',
-            'category' => 'Media:Books',
-            'category_label' => '影音媒体',
-            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/calibre-web-logo.png',
-            'overview' => '干净整洁的私人在线数字图书馆，支持在线阅读 EPUB/PDF、图书元数据刮削及一键推送到 Kindle。',
-            'default_port' => 8083
-        ],
-        [
-            'id' => 'audiobookshelf',
-            'name' => 'Audiobookshelf',
-            'author' => 'advplyr',
-            'repository' => 'ghcr.io/advplyr/audiobookshelf:latest',
-            'category' => 'Media:Audio',
-            'category_label' => '影音媒体',
-            'icon' => 'https://raw.githubusercontent.com/advplyr/audiobookshelf/master/client/static/icon.png',
-            'overview' => '专为有声读物与播客打造的流媒体服务器，支持多端收听进度自动云同步与离线章节下载。',
-            'default_port' => 13378
-        ],
-        [
-            'id' => 'navidrome',
-            'name' => 'Navidrome',
-            'author' => 'deluan',
-            'repository' => 'deluan/navidrome:latest',
-            'category' => 'Media:Audio',
-            'category_label' => '影音媒体',
-            'icon' => 'https://raw.githubusercontent.com/navidrome/navidrome/master/resources/logo-192x192.png',
-            'overview' => '轻量超速的个人音乐流媒体服务器，完美兼容 Subsonic 移动客户端协议，支持无损 FLAC 串流。',
-            'default_port' => 4533
-        ],
-        [
-            'id' => 'stirling-pdf',
-            'name' => 'Stirling-PDF',
-            'author' => 'frooodle',
-            'repository' => 'frooodle/s-pdf:latest',
-            'category' => 'Tools:Productivity',
-            'category_label' => '系统工具',
-            'icon' => 'https://raw.githubusercontent.com/Frooodle/Stirling-PDF/main/src/main/resources/static/favicon.ico',
-            'overview' => '功能强大的本地离线 PDF 多功能工具箱，支持合并、拆分、OCR 识别、旋转、密码保护与页面提取。',
-            'default_port' => 8080
-        ],
-        [
-            'id' => 'it-tools',
-            'name' => 'IT-Tools',
-            'author' => 'corentinth',
-            'repository' => 'corentinth/it-tools:latest',
-            'category' => 'Tools:Productivity',
-            'category_label' => '系统工具',
-            'icon' => 'https://it-tools.tech/favicon-32x32.png',
-            'overview' => '开发人员与系统运维的百宝箱应用集合，包含编解码、时间戳转换、二维码生成、哈希比对等数十项实用工具。',
-            'default_port' => 80
-        ],
-        [
-            'id' => 'syncthing',
-            'name' => 'Syncthing',
-            'author' => 'linuxserver',
-            'repository' => 'lscr.io/linuxserver/syncthing:latest',
-            'category' => 'Cloud:Sync',
-            'category_label' => '私有云盘',
-            'icon' => 'https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/syncthing-logo.png',
-            'overview' => '持续点对点去中心化加密同步工具，无需中继服务器，安全保护多台电脑与手机间的数据一致性。',
-            'default_port' => 8384
-        ]
-    ];
-}
-
