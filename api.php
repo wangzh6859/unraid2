@@ -6,7 +6,7 @@
  * Release: 2026-09-13
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.13.15');
+define('UNRAID_API_VERSION', '2026.09.13.16');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -638,7 +638,6 @@ function get_server_mac() {
 function get_docker_updates_map() {
     $dockerUpdatesMap = [];
 
-    // Helper to register container status strictly by container name and container ID
     $register = function($key, $record) use (&$dockerUpdatesMap) {
         if (empty($key)) return;
         $clean = trim((string)$key, " \t\n\r\0\x0B/'\"[]()");
@@ -657,101 +656,69 @@ function get_docker_updates_map() {
         }
 
         foreach ($variants as $v) {
+            // Keep 'ready' if already marked ready
+            if (isset($dockerUpdatesMap[$v]) && $dockerUpdatesMap[$v]['status'] === 'ready' && $record['status'] !== 'ready') {
+                continue;
+            }
             $dockerUpdatesMap[$v] = $record;
         }
     };
 
-    // 1. Primary Source of Truth: Read /var/local/emhttp/docker.ini directly (identical to Unraid WebGUI)
-    $iniFile = '/var/local/emhttp/docker.ini';
-    $iniData = [];
-    if (file_exists($iniFile) && is_readable($iniFile)) {
-        $parsed = @parse_ini_file($iniFile, true);
-        if (is_array($parsed) && !empty($parsed)) {
-            $iniData = $parsed;
-        } else {
-            // Line-by-line fallback parser in case parse_ini_file encounters syntax anomalies
-            $raw = @file_get_contents($iniFile);
-            if ($raw) {
-                $lines = explode("\n", $raw);
-                $currSec = '';
-                foreach ($lines as $line) {
-                    $line = trim($line);
-                    if ($line === '' || $line[0] === ';') continue;
-                    if (preg_match('/^\[(.*)\]$/', $line, $m)) {
-                        $currSec = trim($m[1]);
-                        $iniData[$currSec] = [];
-                    } elseif ($currSec !== '' && strpos($line, '=') !== false) {
-                        list($k, $v) = explode('=', $line, 2);
-                        $iniData[$currSec][trim($k)] = trim($v, " \t\n\r\0\x0B\"'");
-                    }
-                }
+    // -------------------------------------------------------------
+    // Source 1: Official Unraid Dynamix docker.json (Primary Storage)
+    // -------------------------------------------------------------
+    $jsonCandidates = [
+        '/usr/local/emhttp/state/plugins/dynamix.docker.manager/docker.json',
+        '/var/local/emhttp/plugins/dynamix.docker.manager/docker.json',
+        '/var/local/emhttp/docker.json',
+        '/tmp/docker.json'
+    ];
+    foreach ($jsonCandidates as $jf) {
+        if (!file_exists($jf) || !is_readable($jf)) continue;
+        $raw = @file_get_contents($jf);
+        if (!$raw) continue;
+        $arr = @json_decode($raw, true);
+        if (!is_array($arr)) continue;
+
+        foreach ($arr as $cName => $cInfo) {
+            if (!is_array($cInfo)) continue;
+            $upVal = isset($cInfo['updated']) ? strtolower(trim((string)$cInfo['updated'])) : '';
+            // Unraid Dynamix: updated === 'false' means remote update available!
+            // updated === 'true' means up to date
+            // updated === 'ready' means local image pulled, container ready to recreate
+            if ($upVal === 'false' || $upVal === '0') {
+                $register($cName, ['has_update' => true, 'status' => 'update', 'status_text' => '更新']);
+            } elseif ($upVal === 'ready') {
+                $register($cName, ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪']);
+            } elseif ($upVal === 'true' || $upVal === '1') {
+                $register($cName, ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新']);
             }
         }
+        break; // Successfully loaded official docker.json
     }
 
-    // Process official docker.ini entries
-    foreach ($iniData as $secName => $sec) {
-        if (!is_array($sec)) continue;
-        $cName = !empty($sec['Name']) ? $sec['Name'] : (!empty($sec['name']) ? $sec['name'] : $secName);
-        $rawUpdated = strtolower(trim((string)($sec['updated'] ?? ($sec['Updated'] ?? ''))));
-        
-        // Exact Unraid WebGUI Dynamix Docker logic:
-        // updated="ready"  => ⚡ 更新就绪 (Apply Update / Image pulled locally)
-        // updated="false"  => 🔄 更新 (Update Available / Remote registry has newer digest)
-        // updated="true"   => ✅ 最新 (Up-to-date)
-        if ($rawUpdated === 'ready') {
-            $rec = ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
-        } elseif ($rawUpdated === 'false') {
-            $rec = ['has_update' => true, 'status' => 'update', 'status_text' => '更新'];
-        } else {
-            $rec = ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新'];
-        }
-
-        $register($secName, $rec);
-        if (!empty($cName) && $cName !== $secName) {
-            $register($cName, $rec);
+    // -------------------------------------------------------------
+    // Source 2: Official Unraid unraid-update-status.json (Registry Digest Status)
+    // -------------------------------------------------------------
+    $statusFiles = [
+        '/var/lib/docker/unraid-update-status.json',
+        '/var/local/emhttp/plugins/dynamix.docker.manager/unraid-update-status.json'
+    ];
+    $imageUpdateStatus = [];
+    foreach ($statusFiles as $sf) {
+        if (!file_exists($sf) || !is_readable($sf)) continue;
+        $raw = @file_get_contents($sf);
+        if (!$raw) continue;
+        $arr = @json_decode($raw, true);
+        if (is_array($arr)) {
+            $imageUpdateStatus = $arr;
+            break;
         }
     }
 
-    // 2. Secondary Source: If Unraid's official DockerClient.php is present, read its authoritative container list
-    $dockerClientFile = '/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php';
-    if (file_exists($dockerClientFile)) {
-        try {
-            $docroot = $docroot ?? '/usr/local/emhttp';
-            @include_once $dockerClientFile;
-            if (class_exists('DockerClient')) {
-                $dc = new DockerClient();
-                if (method_exists($dc, 'getDockerContainers')) {
-                    $containers = $dc->getDockerContainers();
-                    if (is_array($containers)) {
-                        foreach ($containers as $c) {
-                            if (!is_array($c)) continue;
-                            $name = $c['Name'] ?? ($c['name'] ?? '');
-                            $id = $c['Id'] ?? ($c['id'] ?? '');
-                            $rawUpdated = strtolower(trim((string)($c['Updated'] ?? ($c['updated'] ?? ''))));
-
-                            if ($rawUpdated === 'ready') {
-                                $rec = ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
-                            } elseif ($rawUpdated === 'false') {
-                                $rec = ['has_update' => true, 'status' => 'update', 'status_text' => '更新'];
-                            } else {
-                                $rec = ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新'];
-                            }
-
-                            $register($name, $rec);
-                            if (!empty($id)) {
-                                $dockerUpdatesMap[substr($id, 0, 12)] = $rec;
-                                $dockerUpdatesMap[$id] = $rec;
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (\Throwable $e) {}
-    }
-
-    // 3. Fallback ONLY for standalone containers not tracked in docker.ini:
-    // Check if the container's running image ID differs from the locally tagged image ID
+    // -------------------------------------------------------------
+    // Source 3: Docker Engine Containers & Local Image Inspect
+    // -------------------------------------------------------------
     $inspectRaw = @shell_exec('docker inspect --format "{{.Name}}\t{{.Config.Image}}\t{{.Image}}\t{{.Id}}" $(docker ps -aq) 2>/dev/null');
     if (!empty($inspectRaw)) {
         $imagesRaw = @shell_exec('docker images --no-trunc --format "{{.Repository}}:{{.Tag}}\t{{.ID}}" 2>/dev/null');
@@ -773,23 +740,97 @@ function get_docker_updates_map() {
                 $cRunningId = preg_replace('/^sha256:/', '', trim($parts[2]));
                 $cFullId = isset($parts[3]) ? trim($parts[3]) : '';
 
-                // If already registered from docker.ini or DockerClient, DO NOT override with fallback heuristics!
-                if (isset($dockerUpdatesMap[$cName]) || isset($dockerUpdatesMap[strtolower($cName)])) {
+                // A. Check for "ready" state: local image pulled with different ID than running container
+                $localImgId = $tagToId[$cImageTag] ?? '';
+                if (!empty($localImgId) && !empty($cRunningId) && $localImgId !== $cRunningId) {
+                    $rec = ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
+                    $register($cName, $rec);
+                    if (!empty($cFullId)) {
+                        $dockerUpdatesMap[substr($cFullId, 0, 12)] = $rec;
+                        $dockerUpdatesMap[$cFullId] = $rec;
+                    }
                     continue;
                 }
 
-                // Strictly match exact tag
-                $localImgId = $tagToId[$cImageTag] ?? '';
-                if (!empty($localImgId) && !empty($cRunningId) && $localImgId !== $cRunningId) {
-                    $readyRec = ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
-                    $register($cName, $readyRec);
-                    if (!empty($cFullId)) {
-                        $dockerUpdatesMap[substr($cFullId, 0, 12)] = $readyRec;
-                        $dockerUpdatesMap[$cFullId] = $readyRec;
+                // B. Check if image has update in unraid-update-status.json
+                if (!empty($imageUpdateStatus) && !empty($cImageTag)) {
+                    $lookupImg = $cImageTag;
+                    if (strpos($lookupImg, ':') === false) $lookupImg .= ':latest';
+                    if (isset($imageUpdateStatus[$lookupImg])) {
+                        $st = $imageUpdateStatus[$lookupImg];
+                        $statusStr = strtolower(trim((string)($st['status'] ?? '')));
+                        $hasRemDiff = (!empty($st['remote']) && !empty($st['local']) && $st['remote'] !== $st['local']);
+                        
+                        if ($statusStr === 'false' || $hasRemDiff) {
+                            $rec = ['has_update' => true, 'status' => 'update', 'status_text' => '更新'];
+                            $register($cName, $rec);
+                            if (!empty($cFullId)) {
+                                $dockerUpdatesMap[substr($cFullId, 0, 12)] = $rec;
+                                $dockerUpdatesMap[$cFullId] = $rec;
+                            }
+                            continue;
+                        } elseif ($statusStr === 'true' && !$hasRemDiff) {
+                            $rec = ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新'];
+                            $register($cName, $rec);
+                            if (!empty($cFullId)) {
+                                $dockerUpdatesMap[substr($cFullId, 0, 12)] = $rec;
+                                $dockerUpdatesMap[$cFullId] = $rec;
+                            }
+                            continue;
+                        }
                     }
-                } else {
-                    $upToDateRec = ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新'];
-                    $register($cName, $upToDateRec);
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Source 4: CLI PHP invocation of DockerTemplates::getAllInfo() if map still empty
+    // -------------------------------------------------------------
+    if (empty($dockerUpdatesMap)) {
+        $cliJson = @shell_exec('php -r '
+            $_SERVER["DOCUMENT_ROOT"] = "/usr/local/emhttp";
+            $docroot = "/usr/local/emhttp";
+            @include_once "/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php";
+            if (class_exists("DockerTemplates")) {
+                $dt = new DockerTemplates();
+                echo json_encode($dt->getAllInfo());
+            }
+        ' 2>/dev/null');
+        if (!empty($cliJson)) {
+            $cliData = @json_decode($cliJson, true);
+            if (is_array($cliData)) {
+                foreach ($cliData as $cName => $cInfo) {
+                    if (!is_array($cInfo)) continue;
+                    $upVal = isset($cInfo['updated']) ? strtolower(trim((string)$cInfo['updated'])) : '';
+                    if ($upVal === 'false' || $upVal === '0') {
+                        $register($cName, ['has_update' => true, 'status' => 'update', 'status_text' => '更新']);
+                    } elseif ($upVal === 'ready') {
+                        $register($cName, ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪']);
+                    } elseif ($upVal === 'true' || $upVal === '1') {
+                        $register($cName, ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新']);
+                    }
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Source 5: Legacy docker.ini fallback (if present)
+    // -------------------------------------------------------------
+    $iniFile = '/var/local/emhttp/docker.ini';
+    if (file_exists($iniFile) && is_readable($iniFile)) {
+        $parsed = @parse_ini_file($iniFile, true);
+        if (is_array($parsed)) {
+            foreach ($parsed as $secName => $sec) {
+                if (!is_array($sec)) continue;
+                $rawUpdated = strtolower(trim((string)($sec['updated'] ?? ($sec['Updated'] ?? ''))));
+                if ($rawUpdated === 'ready') {
+                    $register($secName, ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪']);
+                } elseif ($rawUpdated === 'false') {
+                    $register($secName, ['has_update' => true, 'status' => 'update', 'status_text' => '更新']);
+                } elseif ($rawUpdated === 'true') {
+                    $register($secName, ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新']);
                 }
             }
         }
@@ -3875,18 +3916,31 @@ function handle_check_docker_updates() {
     @ini_set('max_execution_time', '180');
 
     $out = '';
-    $checkScript = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate';
-    if (file_exists($checkScript)) {
-        $out = @shell_exec("{$checkScript} check 2>&1");
-    } else {
-        $checkPhp = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate.php';
-        if (file_exists($checkPhp)) {
-            $out = @shell_exec("php {$checkPhp} check 2>&1");
+    // 1. Run official Unraid check via CLI PHP with DOCUMENT_ROOT set (exact WebGUI trigger)
+    $phpCmd = 'php -r \'
+        $_SERVER["DOCUMENT_ROOT"] = "/usr/local/emhttp";
+        $docroot = "/usr/local/emhttp";
+        @include_once "/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php";
+        if (class_exists("DockerTemplates")) {
+            $dt = new DockerTemplates();
+            $dt->downloadTemplates();
+            $dt->getAllInfo(true);
+            echo "DOCKER_TEMPLATES_CHECK_OK\n";
         }
+    \' 2>&1';
+    $out = (string)@shell_exec($phpCmd);
+
+    // 2. Also run official dockerupdate.php / DockerUpdate.php scripts if available
+    if (file_exists('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate.php')) {
+        $out .= "\n" . (string)@shell_exec('php /usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate.php check 2>&1');
+    } elseif (file_exists('/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerUpdate.php')) {
+        $out .= "\n" . (string)@shell_exec('php /usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerUpdate.php 2>&1');
+    } elseif (file_exists('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate')) {
+        $out .= "\n" . (string)@shell_exec('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check 2>&1');
     }
 
     @file_put_contents('/tmp/unraid_last_docker_update_check.txt', time());
-    usleep(300000); // 300ms for file writes to flush
+    usleep(500000); // 500ms for file writes to flush
 
     // Re-read docker updates map
     $dockerUpdatesMap = get_docker_updates_map();
