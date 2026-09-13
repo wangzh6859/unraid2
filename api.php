@@ -167,18 +167,34 @@ ob_start();
 // -------------------------------------------------------------
 // Authentication Configuration
 // -------------------------------------------------------------
-define('CONFIG_TOKEN_FILE', '/boot/config/plugins/unraid_api_token.txt');
 define('FALLBACK_TOKEN', 'unraid2026');
 
-function get_valid_tokens() {
-    $tokens = [FALLBACK_TOKEN];
-    if (file_exists(CONFIG_TOKEN_FILE)) {
-        $custom = trim(file_get_contents(CONFIG_TOKEN_FILE));
-        if (!empty($custom)) {
-            $tokens[] = $custom;
+function get_configured_token() {
+    // 1. Check for unraid_api_token.txt in the same directory as api.php
+    $sameDirFile = dirname(__FILE__) . '/unraid_api_token.txt';
+    if (file_exists($sameDirFile)) {
+        $content = trim((string)@file_get_contents($sameDirFile));
+        if ($content !== '') {
+            return $content;
         }
     }
-    return $tokens;
+
+    // 2. Also check standard Unraid plugin config location
+    $pluginFile = '/boot/config/plugins/unraid_api_token.txt';
+    if (file_exists($pluginFile)) {
+        $content = trim((string)@file_get_contents($pluginFile));
+        if ($content !== '') {
+            return $content;
+        }
+    }
+
+    // 3. Fallback to default token
+    return FALLBACK_TOKEN;
+}
+
+function get_valid_tokens() {
+    $token = get_configured_token();
+    return [$token];
 }
 
 $actionParam = isset($_GET['action']) ? $_GET['action'] : (isset($_POST['action']) ? $_POST['action'] : '');
@@ -217,9 +233,11 @@ function verify_auth() {
             echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Unraid API 正常运行中</title><style>body{font-family:system-ui,sans-serif;background:#111827;color:#f3f4f6;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0} .card{background:#1f2937;padding:32px;border-radius:16px;max-width:520px;box-shadow:0 10px 25px rgba(0,0,0,0.5)} h1{color:#10b981;font-size:22px;margin-top:0} code{background:#374151;padding:2px 8px;border-radius:4px;color:#f59e0b} a{color:#3b82f6;text-decoration:none} a:hover{text-decoration:underline}</style></head><body>';
             echo '<div class="card"><h1>✅ Unraid API 服务运行正常！</h1>';
             echo '<p>您正在访问 Unraid Mobile Manager 后端 API 接口。</p>';
+            $activeToken = get_configured_token();
+            $tokenSource = ($activeToken !== FALLBACK_TOKEN) ? ' <small style="color:#10b981">(读取自 unraid_api_token.txt)</small>' : ' <small style="color:#9ca3af">(默认内置)</small>';
             echo '<p>📱 <b>手机 App 连接配置：</b></p>';
-            echo '<ul><li><b>服务器地址：</b> <code>http://' . htmlspecialchars($host) . '</code></li><li><b>API Token：</b> <code>unraid2026</code></li></ul>';
-            echo '<p>🔗 <b>API 测试链接：</b><br><a href="?token=unraid2026&action=status">点击此处测试获取系统状态数据 (JSON) &rarr;</a></p>';
+            echo '<ul><li><b>服务器地址：</b> <code>http://' . htmlspecialchars($host) . '</code></li><li><b>API Token：</b> <code>' . htmlspecialchars($activeToken) . '</code>' . $tokenSource . '</li></ul>';
+            echo '<p>🔗 <b>API 测试链接：</b><br><a href="?token=' . urlencode($activeToken) . '&action=status">点击此处测试获取系统状态数据 (JSON) &rarr;</a></p>';
             echo '</div></body></html>';
             exit;
         }
