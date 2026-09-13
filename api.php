@@ -237,7 +237,7 @@ function verify_auth() {
             $tokenSource = ($activeToken !== FALLBACK_TOKEN) ? ' <small style="color:#10b981">(读取自 unraid_api_token.txt)</small>' : ' <small style="color:#9ca3af">(默认内置)</small>';
             echo '<p>📱 <b>手机 App 连接配置：</b></p>';
             echo '<ul><li><b>服务器地址：</b> <code>http://' . htmlspecialchars($host) . '</code></li><li><b>API Token：</b> <code>' . htmlspecialchars($activeToken) . '</code>' . $tokenSource . '</li></ul>';
-            echo '<p>⚙️ <b>API 版本：</b> <code>2026.09.13.4</code> <small style="color:#10b981">(Docker 原子重建引擎已就绪)</small><br>📁 <b>当前文件：</b> <code>' . htmlspecialchars(__FILE__) . '</code></p>';
+            echo '<p>⚙️ <b>API 版本：</b> <code>2026.09.13.5</code> <small style="color:#10b981">(Docker 原子重建引擎已就绪)</small><br>📁 <b>当前文件：</b> <code>' . htmlspecialchars(__FILE__) . '</code></p>';
             echo '<p>🔗 <b>API 测试链接：</b><br><a href="?token=' . urlencode($activeToken) . '&action=status">点击此处测试获取系统状态数据 (JSON) &rarr;</a></p>';
             echo '</div></body></html>';
             exit;
@@ -1221,7 +1221,7 @@ $disks[] = [
     }
 
     json_output([
-        'api_version' => '2026.09.13.4',
+        'api_version' => '2026.09.13.5',
         'api_features' => ['docker_recreate', 'token_file', 'self_update'],
         'api_file' => __FILE__,
         'stats' => [
@@ -1419,7 +1419,12 @@ function handle_update_docker() {
                     $trimL = trim($iLine);
                     if (strpos($trimL, '[') === 0 && substr($trimL, -1) === ']') {
                         $sName = substr($trimL, 1, -1);
-                        $inTargetSec = ($sName === $cleanTarget || ltrim($sName, '/') === $cleanTarget || strtolower($sName) === strtolower($cleanTarget));
+                        $inTargetSec = (
+                            $sName === $cleanTarget || 
+                            ltrim($sName, '/') === $cleanTarget || 
+                            strtolower($sName) === strtolower($cleanTarget) ||
+                            (!empty($imageName) && ($sName === $imageName || strtolower($sName) === strtolower($imageName)))
+                        );
                     } elseif ($inTargetSec && strpos($iLine, '=') !== false) {
                         $parts = explode('=', $iLine, 2);
                         $kTrim = strtolower(trim($parts[0]));
@@ -1429,6 +1434,8 @@ function handle_update_docker() {
                             $iLine = 'update="false"';
                         } elseif ($kTrim === 'status') {
                             $iLine = 'status=""';
+                        } elseif ($kTrim === 'install') {
+                            $iLine = 'install=""';
                         }
                     }
                     $outIniLines[] = $iLine;
@@ -1461,6 +1468,11 @@ function handle_update_docker() {
         // Touch docker.ini to notify Unraid emhttp file watchers
         if (file_exists($iniFile)) {
             @touch($iniFile);
+        }
+
+        // Trigger official Unraid dockerupdate check now that the container is on the new image
+        if (file_exists('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate')) {
+            @exec("nohup /usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check >/dev/null 2>&1 &");
         }
 
         $newContainerImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
