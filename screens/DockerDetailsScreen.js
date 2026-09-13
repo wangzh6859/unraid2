@@ -1070,6 +1070,7 @@ export default function DockerDetailsScreen({ route }) {
               </View>
             )}
           </ScrollView>
+        </View>
       ) : (
         <View style={{ flex: 1 }}>
 
