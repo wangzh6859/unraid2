@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.13.10
+ * Version: 2026.09.13.11
  * Release: 2026-09-13
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.13.10');
+define('UNRAID_API_VERSION', '2026.09.13.11');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -503,6 +503,10 @@ switch ($action) {
         handle_self_update_api();
         break;
 
+    case 'update_api_file':
+        handle_update_api_file();
+        break;
+
     default:
         if (empty($action)) {
             json_output([
@@ -558,6 +562,10 @@ function json_output($data, $code = 200) {
 
     if (empty($json)) {
         $json = '{"status":"error","message":"Unknown JSON generation failure"}';
+    }
+
+    if (!headers_sent()) {
+        header('Content-Length: ' . strlen($json));
     }
 
     echo $json;
@@ -631,19 +639,26 @@ function get_docker_updates_map() {
     $dockerUpdatesMap = [];
 
     $evalSecStatus = function($sec) {
-        $updateVal = strtolower(trim((string)($sec['update'] ?? '')));
-        $statusVal = strtolower(trim((string)($sec['status'] ?? '')));
-        $installVal = strtolower(trim((string)($sec['install'] ?? '')));
+        $s = [];
+        if (is_array($sec)) {
+            foreach ($sec as $k => $v) {
+                $s[strtolower(trim($k))] = is_string($v) ? strtolower(trim($v)) : $v;
+            }
+        }
+        $updatedVal = isset($s['updated']) ? (string)$s['updated'] : (isset($s['update']) ? (string)$s['update'] : '');
+        $statusVal = isset($s['status']) ? (string)$s['status'] : (isset($s['state']) ? (string)$s['state'] : '');
+        $installVal = isset($s['install']) ? (string)$s['install'] : '';
 
         // 1. Check for "ready" state (Ready to apply / ⚡ 更新就绪)
-        if (strpos($updateVal, 'ready') !== false ||
+        if (strpos($updatedVal, 'ready') !== false ||
             strpos($statusVal, 'ready') !== false ||
             strpos($installVal, 'ready') !== false) {
             return ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
         }
 
         // 2. Check for "update" state (Remote update available / 更新)
-        if ($updateVal === 'true' || $updateVal === 'yes' || $updateVal === '1' ||
+        if ($updatedVal === 'true' || $updatedVal === 'yes' || $updatedVal === '1' ||
+            (strpos($updatedVal, 'update') !== false && strpos($updatedVal, 'up-to-date') === false) ||
             strpos($installVal, 'update') !== false ||
             (strpos($statusVal, 'update') !== false && strpos($statusVal, 'up-to-date') === false)) {
             return ['has_update' => true, 'status' => 'update', 'status_text' => '更新'];
@@ -702,8 +717,19 @@ function get_docker_updates_map() {
                     $repoTag = trim($parts[0]);
                     $iId = preg_replace('/^sha256:/', '', trim($parts[1]));
                     $tagToId[$repoTag] = $iId;
+                    $tagToId[strtolower($repoTag)] = $iId;
                     if (strpos($repoTag, ':latest') !== false) {
-                        $tagToId[substr($repoTag, 0, -7)] = $iId;
+                        $noLatest = substr($repoTag, 0, -7);
+                        $tagToId[$noLatest] = $iId;
+                        $tagToId[strtolower($noLatest)] = $iId;
+                    }
+                    $cleanImg = preg_replace('#^[^/]+[:\d]+/|^docker\.io/(library/)?#', '', $repoTag);
+                    $tagToId[$cleanImg] = $iId;
+                    $tagToId[strtolower($cleanImg)] = $iId;
+                    if (strpos($cleanImg, ':latest') !== false) {
+                        $noLatestClean = substr($cleanImg, 0, -7);
+                        $tagToId[$noLatestClean] = $iId;
+                        $tagToId[strtolower($noLatestClean)] = $iId;
                     }
                 }
             }
@@ -716,7 +742,21 @@ function get_docker_updates_map() {
                 $cImageTag = trim($parts[1]);
                 $cRunningId = preg_replace('/^sha256:/', '', trim($parts[2]));
 
-                $currentTagId = isset($tagToId[$cImageTag]) ? $tagToId[$cImageTag] : (isset($tagToId[$cImageTag . ':latest']) ? $tagToId[$cImageTag . ':latest'] : '');
+                $cCandidates = [
+                    $cImageTag,
+                    strtolower($cImageTag),
+                    $cImageTag . ':latest',
+                    strtolower($cImageTag . ':latest'),
+                    preg_replace('#^[^/]+[:\d]+/|^docker\.io/(library/)?#', '', $cImageTag),
+                    strtolower(preg_replace('#^[^/]+[:\d]+/|^docker\.io/(library/)?#', '', $cImageTag)),
+                ];
+                $currentTagId = '';
+                foreach ($cCandidates as $cc) {
+                    if (isset($tagToId[$cc])) {
+                        $currentTagId = $tagToId[$cc];
+                        break;
+                    }
+                }
 
                 if (!empty($currentTagId) && !empty($cRunningId) && $currentTagId !== $cRunningId) {
                     $readyRecord = ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
@@ -732,7 +772,9 @@ function get_docker_updates_map() {
         '/var/local/emhttp/docker.ini',
         '/var/run/emhttp/docker.ini',
         '/var/run/emhttp.ini',
-        '/boot/config/plugins/dockerMan/templates-user/docker.ini'
+        '/boot/config/plugins/dockerMan/templates-user/docker.ini',
+        '/var/local/emhttp/plugins/dynamix.docker.manager/docker.ini',
+        '/tmp/docker.ini'
     ];
 
     foreach ($iniCandidates as $iniFile) {
@@ -1771,11 +1813,12 @@ function docker_recreate_container($cleanTarget, $imageName, $c) {
 // -------------------------------------------------------------
 function handle_self_update_api() {
     @set_time_limit(120);
+    $timestamp = time();
     $urls = [
-        'https://fastly.jsdelivr.net/gh/wangzh6859/unraid2@main/api.php',
-        'https://cdn.jsdelivr.net/gh/wangzh6859/unraid2@main/api.php',
-        'https://ghproxy.net/https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php',
-        'https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php'
+        'https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php?t=' . $timestamp,
+        'https://ghproxy.net/https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php?t=' . $timestamp,
+        'https://raw.fastgit.org/wangzh6859/unraid2/main/api.php?t=' . $timestamp,
+        'https://api.github.com/repos/wangzh6859/unraid2/contents/api.php?ref=main&t=' . $timestamp,
     ];
 
     $newContent = null;
@@ -1787,15 +1830,19 @@ function handle_self_update_api() {
         curl_setopt($ch, CURLOPT_URL, $u);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 20);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 25);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+        curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (compatible; Unraid-API-Updater/1.0)');
+        if (strpos($u, 'api.github.com') !== false) {
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Accept: application/vnd.github.v3.raw']);
+        }
         $res = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err = curl_error($ch);
         curl_close($ch);
 
-        if ($httpCode === 200 && $res && strlen($res) > 50000 && strpos($res, '<?php') !== false) {
+        if ($httpCode === 200 && $res && strlen($res) > 50000 && strpos($res, '<?php') !== false && strpos($res, 'UNRAID_API_VERSION') !== false) {
             $newContent = $res;
             $usedUrl = $u;
             break;
@@ -1830,11 +1877,53 @@ function handle_self_update_api() {
 
     @unlink($backupFile);
 
+    $updatedVer = '最新';
+    if (preg_match("/define\('UNRAID_API_VERSION',\s*'([^']+)'\)/", $newContent, $m)) {
+        $updatedVer = $m[1];
+    }
+
     json_output([
         'status' => 'success',
-        'message' => "api.php 在线更新成功！已更新至最新版本（大小: " . round($written / 1024, 1) . " KB）。",
+        'message' => "api.php 在线更新成功！已通过 GitHub 仓库更新至版本 {$updatedVer}（大小: " . round($written / 1024, 1) . " KB）。",
+        'api_version' => $updatedVer,
         'file' => $currentFile,
         'source' => $usedUrl,
+        'size' => $written
+    ]);
+}
+
+function handle_update_api_file() {
+    @set_time_limit(60);
+    $content = @file_get_contents('php://input');
+    if (empty($content) && isset($_POST['code'])) {
+        $content = $_POST['code'];
+    }
+    if (empty($content) || strlen($content) < 50000 || strpos($content, '<?php') === false || strpos($content, 'UNRAID_API_VERSION') === false) {
+        json_output(['status' => 'error', 'message' => '推送的 API 代码无效或不完整'], 400);
+    }
+    
+    $currentFile = __FILE__;
+    $backupFile = $currentFile . '.bak.' . time();
+    @copy($currentFile, $backupFile);
+
+    $written = @file_put_contents($currentFile, $content);
+    if ($written === false || $written < 50000) {
+        if (file_exists($backupFile)) {
+            @copy($backupFile, $currentFile);
+        }
+        json_output(['status' => 'error', 'message' => "写入文件 {$currentFile} 失败，可能缺少写入权限。"], 500);
+    }
+    @unlink($backupFile);
+
+    $version = 'latest';
+    if (preg_match("/define\('UNRAID_API_VERSION',\s*'([^']+)'\)/", $content, $m)) {
+        $version = $m[1];
+    }
+
+    json_output([
+        'status' => 'success',
+        'message' => "API 文件热更新成功！已直接升级至版本 {$version}（大小: " . round($written / 1024, 1) . " KB）。",
+        'api_version' => $version,
         'size' => $written
     ]);
 }
@@ -3800,12 +3889,15 @@ function handle_check_docker_updates() {
     $out = '';
     $scripts = [
         '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check',
+        '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate',
+        '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockercheck',
         '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/docker update',
         'php /usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate.php'
     ];
     foreach ($scripts as $cmd) {
-        $bin = explode(' ', $cmd)[0];
-        if (file_exists($bin)) {
+        $parts = explode(' ', $cmd);
+        $target = ($parts[0] === 'php') ? $parts[1] : $parts[0];
+        if (file_exists($target)) {
             $out .= @shell_exec("{$cmd} 2>&1") . "\n";
         }
     }
@@ -3832,14 +3924,35 @@ function handle_check_docker_updates() {
             $cImg = isset($parts[1]) ? trim($parts[1]) : '';
             if (empty($cName)) continue;
             $info = null;
-            $candidates = [$cName, strtolower($cName), 'my-' . $cName, 'my-' . strtolower($cName)];
+            $cleanName = ltrim($cName, '/');
+            $candidates = [
+                $cleanName,
+                strtolower($cleanName),
+                $cName,
+                strtolower($cName),
+                'my-' . $cleanName,
+                'my-' . strtolower($cleanName),
+            ];
+            if (strpos($cleanName, 'my-') === 0) {
+                $noMy = substr($cleanName, 3);
+                $candidates[] = $noMy;
+                $candidates[] = strtolower($noMy);
+            }
             if (!empty($cImg)) {
                 $candidates[] = $cImg;
                 $candidates[] = strtolower($cImg);
+                $cleanImg = preg_replace('#^[^/]+[:\d]+/|^docker\.io/(library/)?#', '', $cImg);
+                $candidates[] = $cleanImg;
+                $candidates[] = strtolower($cleanImg);
                 if (strpos($cImg, ':') !== false) {
                     $noTag = preg_replace('/:.*$/', '', $cImg);
                     $candidates[] = $noTag;
                     $candidates[] = strtolower($noTag);
+                }
+                if (strpos($cleanImg, ':') !== false) {
+                    $noTagClean = preg_replace('/:.*$/', '', $cleanImg);
+                    $candidates[] = $noTagClean;
+                    $candidates[] = strtolower($noTagClean);
                 }
             }
             foreach ($candidates as $cand) {

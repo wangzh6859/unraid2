@@ -107,76 +107,8 @@ class BackgroundTransferManager {
       this.activeTaskIds.add(taskId);
       this.currentTaskName = taskItem?.name || '文件';
       this.currentType = taskItem?.type || '上传';
-
-      const initialPct = taskItem?.progress || 0;
-      const initialSpeed = taskItem?.speedDisplay || '准备传输...';
-      const initialSize = taskItem?.sizeText || '';
-
-      if (Platform.OS !== 'android' || !this.isEnabled) return;
-
-      if (this.isServiceRunning && BackgroundService.isRunning()) {
-        this.updateForegroundProgress({
-          name: this.currentTaskName,
-          progress: initialPct,
-          speedStr: initialSpeed,
-          sizeText: initialSize,
-          force: true,
-        });
-        return;
-      }
-
-      if (this.isStartingService) return;
-      this.isStartingService = true;
-
-      try {
-        const hasPermission = await this.requestNotificationPermission();
-        if (!hasPermission) {
-          console.log('[BTM] Notification permission not granted, skipping foreground service keepalive');
-          this.isServiceRunning = false;
-          this.isStartingService = false;
-          return;
-        }
-
-        // Allow Android activity to fully settle into RESUMED state before starting FGS
-        await new Promise((r) => setTimeout(r, 350));
-
-        const options = {
-          taskName: 'UnraidTransferDaemon',
-          taskTitle: `Unraid 传输中: ${this.truncateName(this.currentTaskName)}`,
-          taskDesc: `${initialPct}% · ${initialSpeed} · ${initialSize}`,
-          taskIcon: {
-            name: 'ic_launcher',
-            type: 'mipmap',
-          },
-          color: '#3b82f6',
-          linkingURI: 'unraid://transfer',
-          foregroundServiceType: ['dataSync'],
-          parameters: {
-            delay: 1000,
-          },
-          progressBar: {
-            max: 100,
-            value: Math.min(100, Math.max(0, Math.round(initialPct))),
-            indeterminate: false,
-          },
-        };
-
-        this.isServiceRunning = true;
-        if (!BackgroundService.isRunning()) {
-          try {
-            await BackgroundService.start(this.backgroundDaemonTask, options);
-          } catch (bsErr) {
-            console.log('[BTM] BackgroundService.start caught error:', bsErr);
-            this.isServiceRunning = false;
-          }
-        }
-        this.lastUpdateTime = Date.now();
-      } catch (err) {
-        console.log('[BTM] Failed to start BackgroundService:', err);
-        this.isServiceRunning = false;
-      } finally {
-        this.isStartingService = false;
-      }
+      // Native FileSystem.createUploadTask executes on background OkHttp threads.
+      // We do not start native BackgroundService here to completely prevent Android 13/14 ForegroundServiceStartNotAllowedException crashes.
     } catch (err) {
       console.log('[BTM] notifyTransferStarted err:', err);
     }

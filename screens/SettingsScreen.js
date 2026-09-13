@@ -282,14 +282,69 @@ export default function SettingsScreen({ navigation }) {
     setIsUpdatingApi(true);
     try {
       const cleanUrl = unraidUrl.replace(/\/+$/, '');
-      const res = await fetch(`${cleanUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=self_update_api`);
-      const data = await res.json();
-      if (data && data.status === 'success') {
+      let updateSuccess = false;
+      let successMsg = '';
+
+      // Engine 1: Server-side self-update via direct GitHub repo URL (raw.githubusercontent.com)
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        const res = await fetch(`${cleanUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=self_update_api`, {
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        const data = await res.json().catch(() => null);
+        if (data && data.status === 'success') {
+          updateSuccess = true;
+          successMsg = data.message || '后端 API (api.php) 已成功通过 GitHub 仓库热更新至最新版本！';
+        }
+      } catch (srvErr) {
+        console.log('[SettingsScreen] Server-side self_update_api failed, trying client push fallback:', srvErr);
+      }
+
+      // Engine 2: Client relay fallback (App fetches raw api.php from GitHub and pushes directly to server)
+      if (!updateSuccess) {
+        const githubUrls = [
+          `https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php?t=${Date.now()}`,
+          `https://ghproxy.net/https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php?t=${Date.now()}`,
+        ];
+        let rawApiCode = null;
+        for (const gUrl of githubUrls) {
+          try {
+            const gRes = await fetch(gUrl);
+            if (gRes.ok) {
+              const text = await gRes.text();
+              if (text && text.length > 50000 && text.includes('<?php') && text.includes('UNRAID_API_VERSION')) {
+                rawApiCode = text;
+                break;
+              }
+            }
+          } catch (_) {}
+        }
+
+        if (rawApiCode) {
+          const pushRes = await fetch(`${cleanUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=update_api_file`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'text/plain; charset=utf-8',
+              'X-API-Token': apiToken,
+            },
+            body: rawApiCode,
+          });
+          const pushData = await pushRes.json().catch(() => null);
+          if (pushData && pushData.status === 'success') {
+            updateSuccess = true;
+            successMsg = pushData.message || '已成功通过手机直连 GitHub 仓库并将最新 API 脚本推送到服务器！';
+          }
+        }
+      }
+
+      if (updateSuccess) {
         await fetchServerApiVersion();
         showConfirm({
           type: 'success',
           title: 'API 更新成功',
-          message: data.message || '后端 API (api.php) 已自动热更新至最新版本！',
+          message: successMsg,
           confirmText: '好的',
           showCancel: false,
         });
@@ -297,7 +352,7 @@ export default function SettingsScreen({ navigation }) {
         showConfirm({
           type: 'error',
           title: 'API 更新失败',
-          message: data?.message || '请检查服务器网络或文件写入权限。',
+          message: '从 GitHub 获取最新 api.php 失败，请检查服务器及手机网络连接或稍后重试。',
           confirmText: '知道了',
           showCancel: false,
         });

@@ -373,6 +373,8 @@ export default function FilesScreen({ navigation }) {
       });
       return;
     }
+    // Allow the popup menu Modal to fully dismiss from window manager before opening file picker
+    await new Promise((r) => setTimeout(r, 200));
     try {
       const result = await DocumentPicker.getDocumentAsync({
         copyToCacheDirectory: true,
@@ -570,6 +572,8 @@ export default function FilesScreen({ navigation }) {
       const res = await uploadTask.uploadAsync();
 
       let savedPath = `${taskItem.targetPath}/${taskItem.name}`;
+      let isVerifiedSuccess = false;
+
       if (res && res.status >= 200 && res.status < 300) {
         let parsed = null;
         try {
@@ -578,12 +582,32 @@ export default function FilesScreen({ navigation }) {
           console.log('[Upload] Response JSON parse failed, raw body:', res?.body);
         }
 
-        if (!parsed || parsed.status !== 'success') {
-          const errMsg = parsed?.message || (res?.body ? String(res.body).substring(0, 120) : '服务端未确认写入');
-          throw new Error(`文件未写入服务端: ${errMsg}`);
-        }
-        if (parsed.path) {
-          savedPath = parsed.path;
+        if (parsed && parsed.status === 'success') {
+          isVerifiedSuccess = true;
+          if (parsed.path) savedPath = parsed.path;
+        } else {
+          // Secondary verification: on HTTP 2xx, if response body is empty or unparseable,
+          // verify directly whether the file actually exists on the server
+          try {
+            const checkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_list&path=${encodeURIComponent(taskItem.targetPath)}`;
+            const checkRes = await fetch(checkUrl);
+            const checkData = await checkRes.json();
+            if (checkData && checkData.status === 'success' && Array.isArray(checkData.items)) {
+              const fileFound = checkData.items.find(it => it.name === taskItem.name);
+              if (fileFound) {
+                isVerifiedSuccess = true;
+                savedPath = fileFound.path || `${taskItem.targetPath}/${taskItem.name}`;
+                console.log('[Upload] File verified on server via secondary check:', savedPath);
+              }
+            }
+          } catch (checkErr) {
+            console.log('[Upload] Secondary upload check error:', checkErr);
+          }
+
+          if (!isVerifiedSuccess) {
+            const errMsg = parsed?.message || (res?.body ? String(res.body).substring(0, 120) : '服务端未确认写入');
+            throw new Error(`文件未写入服务端: ${errMsg}`);
+          }
         }
       } else {
         let errorMsg = `HTTP ${res ? res.status : '未知错误'}`;
