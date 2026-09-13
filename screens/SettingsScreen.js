@@ -1092,7 +1092,7 @@ export default function SettingsScreen({ navigation }) {
             <Sparkles color={colors.accent} size={20} />
           </View>
           <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>当前版本</Text>
+            <Text style={styles.rowTitle}>手机 App 版本</Text>
             <Text style={styles.rowSub}>Unraid Mobile Manager v{appVersion}</Text>
           </View>
           <TouchableOpacity
@@ -1107,6 +1107,35 @@ export default function SettingsScreen({ navigation }) {
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <DownloadCloud color="#ffffff" size={14} style={{ marginRight: 4 }} />
                 <Text style={styles.updateCheckBtnText}>检查更新</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.divider} />
+
+        <View style={styles.row}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+            <ShieldCheck color={colors.green} size={20} />
+          </View>
+          <View style={styles.infoBox}>
+            <Text style={styles.rowTitle}>后端 API 核心版本</Text>
+            <Text style={styles.rowSub}>
+              {serverApiVersion ? `当前运行：v${serverApiVersion}` : '点击更新或刷新同步'}
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.updateCheckBtn, { backgroundColor: colors.green }]}
+            onPress={handleSelfUpdateApi}
+            disabled={isUpdatingApi}
+            activeOpacity={0.8}
+          >
+            {isUpdatingApi ? (
+              <ActivityIndicator size="small" color="#ffffff" />
+            ) : (
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <RotateCw color="#ffffff" size={13} style={{ marginRight: 4 }} />
+                <Text style={styles.updateCheckBtnText}>在线更新 API</Text>
               </View>
             )}
           </TouchableOpacity>

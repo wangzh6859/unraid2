@@ -1,4 +1,13 @@
 <?php
+/**
+ * =========================================================================
+ * Unraid Mobile Manager - Backend API (api.php)
+ * Version: 2026.09.13.8
+ * Release: 2026-09-13
+ * =========================================================================
+ */
+define('UNRAID_API_VERSION', '2026.09.13.8');
+
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
 @ini_set('memory_limit', '512M');
@@ -225,7 +234,7 @@ function verify_auth() {
     if (empty($reqToken) || !in_array($reqToken, $validTokens, true)) {
         // If accessed directly from a browser without token, show a friendly guide page instead of raw 401
         $accept = isset($_SERVER['HTTP_ACCEPT']) ? $_SERVER['HTTP_ACCEPT'] : '';
-        if (strpos($accept, 'text/html') !== false && empty($reqToken)) {
+        if (strpos($accept, 'text/html') !== false && (empty($reqToken) || empty($_GET['action']))) {
             $GLOBALS['__api_response_sent'] = true;
             header('Content-Type: text/html; charset=utf-8');
             http_response_code(200);
@@ -237,7 +246,7 @@ function verify_auth() {
             $tokenSource = ($activeToken !== FALLBACK_TOKEN) ? ' <small style="color:#10b981">(读取自 unraid_api_token.txt)</small>' : ' <small style="color:#9ca3af">(默认内置)</small>';
             echo '<p>📱 <b>手机 App 连接配置：</b></p>';
             echo '<ul><li><b>服务器地址：</b> <code>http://' . htmlspecialchars($host) . '</code></li><li><b>API Token：</b> <code>' . htmlspecialchars($activeToken) . '</code>' . $tokenSource . '</li></ul>';
-            echo '<p>⚙️ <b>API 版本：</b> <code>2026.09.13.5</code> <small style="color:#10b981">(Docker 原子重建引擎已就绪)</small><br>📁 <b>当前文件：</b> <code>' . htmlspecialchars(__FILE__) . '</code></p>';
+            echo '<p>⚙️ <b>API 版本：</b> <code>' . UNRAID_API_VERSION . '</code> <small style="color:#10b981">(与 Unraid 网页端实时同步)</small><br>📁 <b>当前文件：</b> <code>' . htmlspecialchars(__FILE__) . '</code></p>';
             echo '<p>🔗 <b>API 测试链接：</b><br><a href="?token=' . urlencode($activeToken) . '&action=status">点击此处测试获取系统状态数据 (JSON) &rarr;</a></p>';
             echo '</div></body></html>';
             exit;
@@ -483,12 +492,32 @@ switch ($action) {
         handle_file_compress();
         break;
 
+    case 'version':
+        json_output([
+            'status' => 'success',
+            'api_version' => UNRAID_API_VERSION,
+            'version' => UNRAID_API_VERSION,
+            'features' => ['docker_recreate', 'token_file', 'self_update', 'exact_update_sync'],
+            'file' => __FILE__
+        ]);
+        break;
+
     case 'self_update_api':
         handle_self_update_api();
         break;
 
     default:
-        json_output(['status' => 'error', 'message' => "Unknown action: {$action}"], 400);
+        if (empty($action)) {
+            json_output([
+                'status' => 'success',
+                'message' => 'Unraid Mobile Manager API 运行正常',
+                'api_version' => UNRAID_API_VERSION,
+                'version' => UNRAID_API_VERSION,
+                'file' => __FILE__
+            ]);
+        } else {
+            json_output(['status' => 'error', 'message' => "Unknown action: {$action}", 'api_version' => UNRAID_API_VERSION], 400);
+        }
         break;
 }
 
@@ -605,38 +634,39 @@ function get_docker_updates_map() {
     $dockerUpdatesMap = [];
     $iniFile = '/var/local/emhttp/docker.ini';
 
-    $evalSecHasUpdate = function($sec) {
+    // Strictly mirrors Unraid WebGUI:
+    // 1. update == "ready"  -> WebGUI displays "更新就绪"
+    // 2. update == "true"   -> WebGUI displays "更新"
+    // 3. update == "false"  -> WebGUI displays "最新" (Up-to-date)
+    $evalSecStatus = function($sec) {
         $updateVal = strtolower(trim((string)($sec['update'] ?? '')));
-        $updatedVal = strtolower(trim((string)($sec['updated'] ?? '')));
         $statusVal = strtolower(trim((string)($sec['status'] ?? '')));
-        $installVal = strtolower(trim((string)($sec['install'] ?? '')));
 
-        // Exactly matches Unraid WebGUI: update="ready" or status contains "update"/"ready" or updated="false"
-        return (
-            $updateVal === 'ready' || 
-            $updateVal === 'true' || 
-            $updateVal === 'yes' || 
-            $updateVal === '1' ||
-            $updatedVal === 'false' || 
-            $updatedVal === '0' || 
-            $updatedVal === 'no' ||
-            stripos($statusVal, 'ready') !== false || 
-            stripos($statusVal, 'update') !== false ||
-            stripos($installVal, 'ready') !== false ||
-            stripos($installVal, 'update') !== false
-        );
+        if ($updateVal === 'ready') {
+            return ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
+        }
+        if ($updateVal === 'true' || $updateVal === 'yes' || $updateVal === '1') {
+            return ['has_update' => true, 'status' => 'update', 'status_text' => '更新'];
+        }
+        if ($updateVal === 'false') {
+            return ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新'];
+        }
+
+        // Fallback only if 'update' key is not present:
+        if (stripos($statusVal, 'ready') !== false) {
+            return ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
+        }
+        if (stripos($statusVal, 'update') !== false && stripos($statusVal, 'up-to-date') === false) {
+            return ['has_update' => true, 'status' => 'update', 'status_text' => '更新'];
+        }
+
+        return ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新'];
     };
 
-    $registerContainer = function($name, $hasUpdate) use (&$dockerUpdatesMap) {
+    $registerContainer = function($name, $record) use (&$dockerUpdatesMap) {
         if (empty($name)) return;
         $clean = trim($name, " \t\n\r\0\x0B/'\"[]()");
         if (empty($clean) || strlen($clean) < 2) return;
-
-        $record = [
-            'has_update' => $hasUpdate,
-            'status' => $hasUpdate ? 'ready' : 'up-to-date',
-            'status_text' => $hasUpdate ? '更新就绪' : '最新',
-        ];
 
         $variants = [
             $clean,
@@ -664,12 +694,12 @@ function get_docker_updates_map() {
         if (is_array($ini)) {
             foreach ($ini as $secKey => $sec) {
                 if (!is_array($sec)) continue;
-                $hasUp = $evalSecHasUpdate($sec);
-                $registerContainer($secKey, $hasUp);
-                if (!empty($sec['Name'])) $registerContainer($sec['Name'], $hasUp);
-                if (!empty($sec['name'])) $registerContainer($sec['name'], $hasUp);
-                if (!empty($sec['Container'])) $registerContainer($sec['Container'], $hasUp);
-                if (!empty($sec['container'])) $registerContainer($sec['container'], $hasUp);
+                $record = $evalSecStatus($sec);
+                $registerContainer($secKey, $record);
+                if (!empty($sec['Name'])) $registerContainer($sec['Name'], $record);
+                if (!empty($sec['name'])) $registerContainer($sec['name'], $record);
+                if (!empty($sec['Container'])) $registerContainer($sec['Container'], $record);
+                if (!empty($sec['container'])) $registerContainer($sec['container'], $record);
             }
         }
 
@@ -680,12 +710,12 @@ function get_docker_updates_map() {
             $currSec = '';
             $currSecData = [];
 
-            $flushCurrSec = function() use (&$currSec, &$currSecData, $evalSecHasUpdate, $registerContainer) {
+            $flushCurrSec = function() use (&$currSec, &$currSecData, $evalSecStatus, $registerContainer) {
                 if ($currSec === '') return;
-                $hasUp = $evalSecHasUpdate($currSecData);
-                $registerContainer($currSec, $hasUp);
-                if (!empty($currSecData['name'])) $registerContainer($currSecData['name'], $hasUp);
-                if (!empty($currSecData['container'])) $registerContainer($currSecData['container'], $hasUp);
+                $record = $evalSecStatus($currSecData);
+                $registerContainer($currSec, $record);
+                if (!empty($currSecData['name'])) $registerContainer($currSecData['name'], $record);
+                if (!empty($currSecData['container'])) $registerContainer($currSecData['container'], $record);
             };
 
             foreach ($lines as $line) {
@@ -1166,7 +1196,7 @@ $disks[] = [
     }
 
     json_output([
-        'api_version' => '2026.09.13.7',
+        'api_version' => UNRAID_API_VERSION,
         'api_features' => ['docker_recreate', 'token_file', 'self_update'],
         'api_file' => __FILE__,
         'stats' => [

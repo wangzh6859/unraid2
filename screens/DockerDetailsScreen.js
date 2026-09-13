@@ -296,10 +296,8 @@ export default function DockerDetailsScreen({ route }) {
         type: 'info',
         title: '更新检查完成',
         message: foundCount > 0
-          ? `共发现 ${foundCount} 个容器需要更新${readyCount > 0 ? `（${readyCount} 个更新就绪，${newCount} 个有新版本）` : ''}。已为您在列表中标记。
-
-•「更新就绪」表示新镜像已在本地，点击可直接应用构筑；\n•「有新版本」表示需从镜像源拉取升级。`
-          : '当前所有 Docker 容器均已为最新版本，暂无可用更新。',
+          ? `共发现 ${foundCount} 个容器有新版本可用，已为您在列表中明确标记。${readyCount > 0 ? `\n（其中 ${readyCount} 个更新就绪）` : ''}`
+          : '当前所有 Docker 容器均为「最新」版本，暂无可用更新。',
         confirmText: '好的',
         showCancel: false,
       });
@@ -1459,20 +1457,30 @@ export default function DockerDetailsScreen({ route }) {
                     
                     {docker.update_available && (
                       <TouchableOpacity
-                        style={styles.updateBadge}
-                        onPress={() => handleUpdateDocker(docker.name)}
+                        style={[
+                          styles.updateBadge,
+                          docker.update_status === 'ready' && styles.updateBadgeReady
+                        ]}
+                        onPress={() => handleUpdateDocker(docker.name, docker.update_status)}
                         disabled={updatingDocker === docker.name}
                         activeOpacity={0.7}
                         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                        accessibilityLabel="更新就绪"
+                        accessibilityLabel={docker.update_status_text || "可更新"}
                       >
                         {updatingDocker === docker.name ? (
-                          <ActivityIndicator size="small" color="#f59e0b" style={{ marginRight: 4 }} />
+                          <ActivityIndicator size="small" color={docker.update_status === 'ready' ? "#10b981" : "#f59e0b"} style={{ marginRight: 4 }} />
+                        ) : docker.update_status === 'ready' ? (
+                          <RotateCw size={11} color="#10b981" style={{ marginRight: 3 }} />
                         ) : (
                           <ArrowUp size={11} color="#f59e0b" style={{ marginRight: 3 }} />
                         )}
-                        <Text style={styles.updateBadgeText}>
-                          {updatingDocker === docker.name ? '更新中...' : '更新就绪 · 升级'}
+                        <Text style={[
+                          styles.updateBadgeText,
+                          docker.update_status === 'ready' && styles.updateBadgeTextReady
+                        ]}>
+                          {updatingDocker === docker.name 
+                            ? '更新中...' 
+                            : (docker.update_status === 'ready' ? '更新就绪 · 升级' : '更新 · 升级')}
                         </Text>
                       </TouchableOpacity>
                     )}
