@@ -237,6 +237,7 @@ function verify_auth() {
             $tokenSource = ($activeToken !== FALLBACK_TOKEN) ? ' <small style="color:#10b981">(读取自 unraid_api_token.txt)</small>' : ' <small style="color:#9ca3af">(默认内置)</small>';
             echo '<p>📱 <b>手机 App 连接配置：</b></p>';
             echo '<ul><li><b>服务器地址：</b> <code>http://' . htmlspecialchars($host) . '</code></li><li><b>API Token：</b> <code>' . htmlspecialchars($activeToken) . '</code>' . $tokenSource . '</li></ul>';
+            echo '<p>⚙️ <b>API 版本：</b> <code>2026.09.13.3</code> <small style="color:#10b981">(Docker 原子重建引擎已就绪)</small><br>📁 <b>当前文件：</b> <code>' . htmlspecialchars(__FILE__) . '</code></p>';
             echo '<p>🔗 <b>API 测试链接：</b><br><a href="?token=' . urlencode($activeToken) . '&action=status">点击此处测试获取系统状态数据 (JSON) &rarr;</a></p>';
             echo '</div></body></html>';
             exit;
@@ -480,6 +481,10 @@ switch ($action) {
 
     case 'file_compress':
         handle_file_compress();
+        break;
+
+    case 'self_update_api':
+        handle_self_update_api();
         break;
 
     default:
@@ -1216,6 +1221,9 @@ $disks[] = [
     }
 
     json_output([
+        'api_version' => '2026.09.13.3',
+        'api_features' => ['docker_recreate', 'token_file', 'self_update'],
+        'api_file' => __FILE__,
         'stats' => [
             'cpu' => $cpuUsage,
             'memory' => $memUsage,
@@ -1691,6 +1699,79 @@ function docker_recreate_container($cleanTarget, $imageName, $c) {
             'output' => "CMD: {$runCmd}\nOUT: {$createOut}"
         ];
     }
+}
+
+// -------------------------------------------------------------
+// Self Update API.php
+// -------------------------------------------------------------
+function handle_self_update_api() {
+    @set_time_limit(120);
+    $urls = [
+        'https://fastly.jsdelivr.net/gh/wangzh6859/unraid2@main/api.php',
+        'https://cdn.jsdelivr.net/gh/wangzh6859/unraid2@main/api.php',
+        'https://ghproxy.net/https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php',
+        'https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php'
+    ];
+
+    $newContent = null;
+    $usedUrl = '';
+    $lastErr = '';
+
+    foreach ($urls as $u) {
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $u);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 20);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+        $res = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+
+        if ($httpCode === 200 && $res && strlen($res) > 50000 && strpos($res, '<?php') !== false) {
+            $newContent = $res;
+            $usedUrl = $u;
+            break;
+        } else {
+            $lastErr = "HTTP {$httpCode}: " . ($err ?: substr((string)$res, 0, 100));
+        }
+    }
+
+    if (!$newContent) {
+        json_output([
+            'status' => 'error',
+            'message' => "在线获取最新 api.php 失败，请检查服务器网络连接。错误：{$lastErr}"
+        ]);
+        return;
+    }
+
+    $currentFile = __FILE__;
+    $backupFile = $currentFile . '.bak.' . time();
+    @copy($currentFile, $backupFile);
+
+    $written = @file_put_contents($currentFile, $newContent);
+    if ($written === false || $written < 50000) {
+        if (file_exists($backupFile)) {
+            @copy($backupFile, $currentFile);
+        }
+        json_output([
+            'status' => 'error',
+            'message' => "写入文件 {$currentFile} 失败，可能缺少写入权限。"
+        ]);
+        return;
+    }
+
+    @unlink($backupFile);
+
+    json_output([
+        'status' => 'success',
+        'message' => "api.php 在线更新成功！已更新至最新版本（大小: " . round($written / 1024, 1) . " KB）。",
+        'file' => $currentFile,
+        'source' => $usedUrl,
+        'size' => $written
+    ]);
 }
 
 // -------------------------------------------------------------
