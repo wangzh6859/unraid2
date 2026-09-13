@@ -6,7 +6,7 @@
  * Release: 2026-09-13
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.13.13');
+define('UNRAID_API_VERSION', '2026.09.13.14');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -846,6 +846,7 @@ function get_docker_updates_map() {
                         $currentTagId = $tagToId[$cc];
                         break;
                     }
+                }
                 if (empty($currentTagId)) {
                     $directTagId = trim(@shell_exec("docker inspect --format '{{.Id}}' " . escapeshellarg($cImageTag) . " 2>/dev/null"));
                     $directTagId = preg_replace('/^sha256:/', '', $directTagId);
