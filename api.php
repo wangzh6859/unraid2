@@ -237,7 +237,7 @@ function verify_auth() {
             $tokenSource = ($activeToken !== FALLBACK_TOKEN) ? ' <small style="color:#10b981">(读取自 unraid_api_token.txt)</small>' : ' <small style="color:#9ca3af">(默认内置)</small>';
             echo '<p>📱 <b>手机 App 连接配置：</b></p>';
             echo '<ul><li><b>服务器地址：</b> <code>http://' . htmlspecialchars($host) . '</code></li><li><b>API Token：</b> <code>' . htmlspecialchars($activeToken) . '</code>' . $tokenSource . '</li></ul>';
-            echo '<p>⚙️ <b>API 版本：</b> <code>2026.09.13.3</code> <small style="color:#10b981">(Docker 原子重建引擎已就绪)</small><br>📁 <b>当前文件：</b> <code>' . htmlspecialchars(__FILE__) . '</code></p>';
+            echo '<p>⚙️ <b>API 版本：</b> <code>2026.09.13.4</code> <small style="color:#10b981">(Docker 原子重建引擎已就绪)</small><br>📁 <b>当前文件：</b> <code>' . htmlspecialchars(__FILE__) . '</code></p>';
             echo '<p>🔗 <b>API 测试链接：</b><br><a href="?token=' . urlencode($activeToken) . '&action=status">点击此处测试获取系统状态数据 (JSON) &rarr;</a></p>';
             echo '</div></body></html>';
             exit;
@@ -683,7 +683,7 @@ function get_docker_updates_map() {
     }
 
     // Method 3: Scan Unraid notification files in /tmp/notifications/
-    $notifDirs = ['/tmp/notifications/unread', '/tmp/notifications/archive', '/tmp/notifications/descriptions', '/tmp/notifications'];
+    $notifDirs = ['/tmp/notifications/unread'];
     $ignoreWords = ['docker', 'container', 'image', 'for', 'of', 'all', 'a', 'an', 'the', 'is', 'available', 'update', 'updates', 'version', 'new', 'notice', 'tower', 'server', 'unraid'];
 
     $registerCandidate = function($cand) use (&$dockerUpdatesMap, $ignoreWords) {
@@ -1221,7 +1221,7 @@ $disks[] = [
     }
 
     json_output([
-        'api_version' => '2026.09.13.3',
+        'api_version' => '2026.09.13.4',
         'api_features' => ['docker_recreate', 'token_file', 'self_update'],
         'api_file' => __FILE__,
         'stats' => [
@@ -1437,40 +1437,47 @@ function handle_update_docker() {
             }
         }
 
-        // Archive / remove unread notification in /tmp/notifications/unread/
-        $notifDir = '/tmp/notifications/unread';
-        if (is_dir($notifDir)) {
-            $nfiles = @scandir($notifDir);
-            if ($nfiles) {
-                foreach ($nfiles as $nf) {
-                    if ($nf === '.' || $nf === '..') continue;
-                    $nfp = "{$notifDir}/{$nf}";
-                    if (is_file($nfp)) {
-                        $nfc = @file_get_contents($nfp);
-                        if ($nfc && (stripos($nfc, $cleanTarget) !== false || stripos($nf, $cleanTarget) !== false)) {
-                            $archiveDir = '/tmp/notifications/archive';
-                            if (is_dir($archiveDir)) {
-                                @rename($nfp, "{$archiveDir}/{$nf}");
-                            } else {
-                                @unlink($nfp);
-                            }
-                        }
+        // Thoroughly purge old update notifications for this container across all notif folders
+        $allNotifDirs = ['/tmp/notifications/unread', '/tmp/notifications/descriptions', '/tmp/notifications/archive', '/tmp/notifications'];
+        foreach ($allNotifDirs as $chkDir) {
+            if (!is_dir($chkDir)) continue;
+            $cFiles = @scandir($chkDir);
+            if (!$cFiles) continue;
+            foreach ($cFiles as $cf) {
+                if ($cf === '.' || $cf === '..') continue;
+                $cfp = "{$chkDir}/{$cf}";
+                if (is_file($cfp)) {
+                    $cText = @file_get_contents($cfp);
+                    if ($cText && (stripos($cText, $cleanTarget) !== false || stripos($cf, $cleanTarget) !== false)) {
+                        @unlink($cfp);
                     }
                 }
             }
         }
 
-        // Trigger background check to refresh Unraid WebGUI status
-        if (file_exists('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate')) {
-            @exec("nohup /usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check >/dev/null 2>&1 &");
+        // Prune dangling images left by recreation
+        @shell_exec("docker image prune -f 2>/dev/null");
+
+        // Touch docker.ini to notify Unraid emhttp file watchers
+        if (file_exists($iniFile)) {
+            @touch($iniFile);
         }
+
+        $newContainerImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
+        $newContainerImgCreated = trim(@shell_exec("docker inspect --format '{{.Created}}' " . escapeshellarg($newContainerImgId) . " 2>/dev/null"));
+        $containerCreated = trim(@shell_exec("docker inspect --format '{{.Created}}' {$escaped} 2>/dev/null"));
 
         json_output([
             'status' => 'success',
             'message' => "容器 [{$cleanTarget}] 升级成功！已更新至最新版本" . ($wasRunning ? "并已重新运行。" : "（保持停止状态）。"),
             'details' => [
-                'old_id' => substr($oldId, 0, 12),
-                'new_id' => !empty($newId) ? substr($newId, 0, 12) : substr($oldId, 0, 12),
+                'container' => $cleanTarget,
+                'old_container_id' => substr($oldId, 0, 12),
+                'new_container_id' => !empty($newId) ? substr($newId, 0, 12) : substr($oldId, 0, 12),
+                'old_image_id' => substr($oldImgId, 0, 19),
+                'new_image_id' => substr($newContainerImgId, 0, 19),
+                'image_created' => $newContainerImgCreated,
+                'container_created' => $containerCreated,
                 'output' => trim($updaterOut)
             ]
         ]);

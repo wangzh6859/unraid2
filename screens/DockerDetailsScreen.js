@@ -391,15 +391,18 @@ export default function DockerDetailsScreen({ route }) {
           }
 
           if (data && data.status === 'success') {
+            const detailMsg = (data.details && data.details.new_container_id) 
+              ? `\n\n新容器 ID: ${data.details.new_container_id}\n镜像 ID: ${data.details.new_image_id || '最新'}`
+              : '';
             showConfirm({
               type: 'success',
               title: '升级成功',
-              message: data.message || `容器「${name}」已升级为最新版本！`,
+              message: (data.message || `容器「${name}」已升级为最新版本！`) + detailMsg,
               confirmText: '好的',
               showCancel: false,
             });
             await fetchDockerData();
-            setTimeout(() => fetchDockerData(), 2500);
+            setTimeout(() => fetchDockerData(), 2000);
           } else {
             showConfirm({
               type: 'error',
