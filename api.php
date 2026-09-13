@@ -6,7 +6,7 @@
  * Release: 2026-09-13
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.13.16');
+define('UNRAID_API_VERSION', '2026.09.14.01');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -752,8 +752,8 @@ function get_docker_updates_map() {
                     continue;
                 }
 
-                // B. Check if image has update in unraid-update-status.json
-                if (!empty($imageUpdateStatus) && !empty($cImageTag)) {
+                // B. If not already marked from docker.json, check unraid-update-status.json
+                if (!empty($imageUpdateStatus) && !empty($cImageTag) && !isset($dockerUpdatesMap[$cName])) {
                     $lookupImg = $cImageTag;
                     if (strpos($lookupImg, ':') === false) $lookupImg .= ':latest';
                     if (isset($imageUpdateStatus[$lookupImg])) {
@@ -768,7 +768,6 @@ function get_docker_updates_map() {
                                 $dockerUpdatesMap[substr($cFullId, 0, 12)] = $rec;
                                 $dockerUpdatesMap[$cFullId] = $rec;
                             }
-                            continue;
                         } elseif ($statusStr === 'true' && !$hasRemDiff) {
                             $rec = ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新'];
                             $register($cName, $rec);
@@ -776,7 +775,6 @@ function get_docker_updates_map() {
                                 $dockerUpdatesMap[substr($cFullId, 0, 12)] = $rec;
                                 $dockerUpdatesMap[$cFullId] = $rec;
                             }
-                            continue;
                         }
                     }
                 }
@@ -785,38 +783,7 @@ function get_docker_updates_map() {
     }
 
     // -------------------------------------------------------------
-    // Source 4: CLI PHP invocation of DockerTemplates::getAllInfo() if map still empty
-    // -------------------------------------------------------------
-    if (empty($dockerUpdatesMap)) {
-        $cliJson = @shell_exec('php -r '
-            $_SERVER["DOCUMENT_ROOT"] = "/usr/local/emhttp";
-            $docroot = "/usr/local/emhttp";
-            @include_once "/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php";
-            if (class_exists("DockerTemplates")) {
-                $dt = new DockerTemplates();
-                echo json_encode($dt->getAllInfo());
-            }
-        ' 2>/dev/null');
-        if (!empty($cliJson)) {
-            $cliData = @json_decode($cliJson, true);
-            if (is_array($cliData)) {
-                foreach ($cliData as $cName => $cInfo) {
-                    if (!is_array($cInfo)) continue;
-                    $upVal = isset($cInfo['updated']) ? strtolower(trim((string)$cInfo['updated'])) : '';
-                    if ($upVal === 'false' || $upVal === '0') {
-                        $register($cName, ['has_update' => true, 'status' => 'update', 'status_text' => '更新']);
-                    } elseif ($upVal === 'ready') {
-                        $register($cName, ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪']);
-                    } elseif ($upVal === 'true' || $upVal === '1') {
-                        $register($cName, ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新']);
-                    }
-                }
-            }
-        }
-    }
-
-    // -------------------------------------------------------------
-    // Source 5: Legacy docker.ini fallback (if present)
+    // Source 4: Legacy docker.ini fallback (if present in custom setups)
     // -------------------------------------------------------------
     $iniFile = '/var/local/emhttp/docker.ini';
     if (file_exists($iniFile) && is_readable($iniFile)) {
@@ -824,6 +791,7 @@ function get_docker_updates_map() {
         if (is_array($parsed)) {
             foreach ($parsed as $secName => $sec) {
                 if (!is_array($sec)) continue;
+                if (isset($dockerUpdatesMap[$secName])) continue;
                 $rawUpdated = strtolower(trim((string)($sec['updated'] ?? ($sec['Updated'] ?? ''))));
                 if ($rawUpdated === 'ready') {
                     $register($secName, ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪']);
@@ -3916,27 +3884,13 @@ function handle_check_docker_updates() {
     @ini_set('max_execution_time', '180');
 
     $out = '';
-    // 1. Run official Unraid check via CLI PHP with DOCUMENT_ROOT set (exact WebGUI trigger)
-    $phpCmd = 'php -r \'
-        $_SERVER["DOCUMENT_ROOT"] = "/usr/local/emhttp";
-        $docroot = "/usr/local/emhttp";
-        @include_once "/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php";
-        if (class_exists("DockerTemplates")) {
-            $dt = new DockerTemplates();
-            $dt->downloadTemplates();
-            $dt->getAllInfo(true);
-            echo "DOCKER_TEMPLATES_CHECK_OK\n";
-        }
-    \' 2>&1';
-    $out = (string)@shell_exec($phpCmd);
-
-    // 2. Also run official dockerupdate.php / DockerUpdate.php scripts if available
+    // Official Unraid scripts for checking docker updates
     if (file_exists('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate.php')) {
-        $out .= "\n" . (string)@shell_exec('php /usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate.php check 2>&1');
+        $out = (string)@shell_exec('php /usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate.php check 2>&1');
     } elseif (file_exists('/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerUpdate.php')) {
-        $out .= "\n" . (string)@shell_exec('php /usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerUpdate.php 2>&1');
+        $out = (string)@shell_exec('php /usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerUpdate.php 2>&1');
     } elseif (file_exists('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate')) {
-        $out .= "\n" . (string)@shell_exec('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check 2>&1');
+        $out = (string)@shell_exec('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check 2>&1');
     }
 
     @file_put_contents('/tmp/unraid_last_docker_update_check.txt', time());
