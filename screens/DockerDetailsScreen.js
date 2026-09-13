@@ -9,7 +9,7 @@ import * as Clipboard from 'expo-clipboard';
 import {
   ShoppingBag, Download, Cpu, Database, RotateCw, Play, Power, Terminal, ExternalLink,
   Search, Copy, Check, X, RefreshCw, Globe, Sliders, Box, Layers,
-  ChevronDown, ArrowUpDown, Filter, Sparkles, ArrowUp, FileCode, Plus, CheckCircle2, AlertTriangle, AlertCircle, Trash2, Folder } from 'lucide-react-native';
+  ChevronDown, ArrowUpDown, Filter, Sparkles, ArrowUp, Zap, FileCode, Plus, CheckCircle2, AlertTriangle, AlertCircle, Trash2, Folder } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import {
@@ -278,19 +278,27 @@ export default function DockerDetailsScreen({ route }) {
       const statusRes = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=status`);
       const statusData = await statusRes.json().catch(() => ({}));
       let foundCount = 0;
+      let readyCount = 0;
+      let newCount = 0;
       if (statusData && statusData.dockers && Array.isArray(statusData.dockers.list)) {
         setDockers(statusData.dockers.list);
         foundCount = statusData.dockers.list.filter(d => !!d.update_available).length;
+        readyCount = statusData.dockers.list.filter(d => d.update_status === 'ready').length;
+        newCount = statusData.dockers.list.filter(d => d.update_status === 'update').length;
       }
       if (foundCount === 0 && (data.update_count > 0 || data.updates_count > 0)) {
         foundCount = data.update_count || data.updates_count;
+        readyCount = data.ready_count || 0;
+        newCount = data.new_version_count || foundCount;
       }
 
       showConfirm({
         type: 'info',
         title: '更新检查完成',
         message: foundCount > 0
-          ? `共发现 ${foundCount} 个容器有新版本可用。已为您在列表中标记「可更新」。`
+          ? `共发现 ${foundCount} 个容器需要更新${readyCount > 0 ? `（${readyCount} 个更新就绪，${newCount} 个有新版本）` : ''}。已为您在列表中标记。
+
+•「更新就绪」表示新镜像已在本地，点击可直接应用构筑；\n•「有新版本」表示需从镜像源拉取升级。`
           : '当前所有 Docker 容器均已为最新版本，暂无可用更新。',
         confirmText: '好的',
         showCancel: false,
@@ -354,13 +362,16 @@ export default function DockerDetailsScreen({ route }) {
     }
   };
 
-  // 容器升级操作
-  const handleUpdateDocker = (name) => {
+  // 容器升级操作（支持“更新就绪 · 应用”与“有新版本 · 升级”）
+  const handleUpdateDocker = (name, updateStatus = 'update') => {
+    const isReady = updateStatus === 'ready';
     showConfirm({
-      type: 'warning',
-      title: '升级容器',
-      message: `确定要拉取最新镜像并重新创建容器「${name}」吗？\n拉取镜像与重建容器通常需要 1 至 3 分钟，升级过程中容器将短暂离线。`,
-      confirmText: '立即升级',
+      type: isReady ? 'info' : 'warning',
+      title: isReady ? '应用容器更新' : '升级容器',
+      message: isReady
+        ? `容器「${name}」的新镜像已在本地就绪，是否立即重新创建并启动该容器？\n\n应用过程通常需要 10 至 30 秒，容器将短暂离线。`
+        : `确定要拉取最新镜像并重新创建容器「${name}」吗？\n\n拉取镜像与重建容器通常需要 1 至 3 分钟，升级过程中容器将短暂离线。`,
+      confirmText: isReady ? '立即应用' : '立即升级',
       cancelText: '取消',
       showCancel: true,
       onConfirm: async () => {
@@ -396,8 +407,8 @@ export default function DockerDetailsScreen({ route }) {
               : '';
             showConfirm({
               type: 'success',
-              title: '升级成功',
-              message: (data.message || `容器「${name}」已升级为最新版本！`) + detailMsg,
+              title: isReady ? '应用成功' : '升级成功',
+              message: (data.message || `容器「${name}」${isReady ? '更新已应用' : '已升级为最新版本'}！`) + detailMsg,
               confirmText: '好的',
               showCancel: false,
             });
@@ -406,8 +417,8 @@ export default function DockerDetailsScreen({ route }) {
           } else {
             showConfirm({
               type: 'error',
-              title: '升级失败',
-              message: (data && data.message) ? data.message : '升级未能完成，未检测到容器重新创建',
+              title: isReady ? '应用失败' : '升级失败',
+              message: (data && data.message) ? data.message : '更新未能完成，未检测到容器重新创建',
               confirmText: '确定',
               showCancel: false,
             });
@@ -1451,20 +1462,30 @@ export default function DockerDetailsScreen({ route }) {
                     
                     {docker.update_available && (
                       <TouchableOpacity
-                        style={styles.updateBadge}
-                        onPress={() => handleUpdateDocker(docker.name)}
+                        style={[
+                          styles.updateBadge,
+                          docker.update_status === 'ready' && styles.updateBadgeReady
+                        ]}
+                        onPress={() => handleUpdateDocker(docker.name, docker.update_status)}
                         disabled={updatingDocker === docker.name}
                         activeOpacity={0.7}
                         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                        accessibilityLabel="升级容器"
+                        accessibilityLabel={docker.update_status === 'ready' ? "应用更新" : "升级容器"}
                       >
                         {updatingDocker === docker.name ? (
-                          <ActivityIndicator size="small" color="#f59e0b" style={{ marginRight: 4 }} />
+                          <ActivityIndicator size="small" color={docker.update_status === 'ready' ? "#10b981" : "#f59e0b"} style={{ marginRight: 4 }} />
+                        ) : docker.update_status === 'ready' ? (
+                          <Zap size={11} color="#10b981" style={{ marginRight: 3 }} />
                         ) : (
                           <ArrowUp size={11} color="#f59e0b" style={{ marginRight: 3 }} />
                         )}
-                        <Text style={styles.updateBadgeText}>
-                          {updatingDocker === docker.name ? '升级中...' : '有新版本 · 升级'}
+                        <Text style={[
+                          styles.updateBadgeText,
+                          docker.update_status === 'ready' && styles.updateBadgeTextReady
+                        ]}>
+                          {updatingDocker === docker.name 
+                            ? (docker.update_status === 'ready' ? '应用中...' : '升级中...') 
+                            : (docker.update_status === 'ready' ? '更新就绪 · 应用' : '有新版本 · 升级')}
                         </Text>
                       </TouchableOpacity>
                     )}
@@ -2635,10 +2656,17 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     borderWidth: 1,
     borderColor: '#f59e0b',
   },
+  updateBadgeReady: {
+    backgroundColor: 'rgba(16, 185, 129, 0.16)',
+    borderColor: '#10b981',
+  },
   updateBadgeText: {
     fontSize: 10,
     fontWeight: 'bold',
     color: '#f59e0b',
+  },
+  updateBadgeTextReady: {
+    color: '#10b981',
   },
 
   // Compose 英雄横幅
