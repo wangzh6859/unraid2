@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.13.11
+ * Version: 2026.09.13.12
  * Release: 2026-09-13
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.13.11');
+define('UNRAID_API_VERSION', '2026.09.13.13');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -645,22 +645,32 @@ function get_docker_updates_map() {
                 $s[strtolower(trim($k))] = is_string($v) ? strtolower(trim($v)) : $v;
             }
         }
-        $updatedVal = isset($s['updated']) ? (string)$s['updated'] : (isset($s['update']) ? (string)$s['update'] : '');
+        $rawUpdated = isset($s['updated']) ? (string)$s['updated'] : '';
+        $rawUpdate = isset($s['update']) ? (string)$s['update'] : '';
         $statusVal = isset($s['status']) ? (string)$s['status'] : (isset($s['state']) ? (string)$s['state'] : '');
         $installVal = isset($s['install']) ? (string)$s['install'] : '';
 
         // 1. Check for "ready" state (Ready to apply / ⚡ 更新就绪)
-        if (strpos($updatedVal, 'ready') !== false ||
+        if (strpos($rawUpdated, 'ready') !== false ||
+            strpos($rawUpdate, 'ready') !== false ||
             strpos($statusVal, 'ready') !== false ||
             strpos($installVal, 'ready') !== false) {
             return ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
         }
 
         // 2. Check for "update" state (Remote update available / 更新)
-        if ($updatedVal === 'true' || $updatedVal === 'yes' || $updatedVal === '1' ||
-            (strpos($updatedVal, 'update') !== false && strpos($updatedVal, 'up-to-date') === false) ||
-            strpos($installVal, 'update') !== false ||
-            (strpos($statusVal, 'update') !== false && strpos($statusVal, 'up-to-date') === false)) {
+        // Dynamix convention: updated="false" means local != remote (not updated)
+        // update="true" means update is available
+        $isRemoteUpdate = (
+            $rawUpdated === 'false' || $rawUpdated === '0' || $rawUpdated === 'no' ||
+            $rawUpdate === 'true' || $rawUpdate === 'yes' || $rawUpdate === '1' ||
+            (strpos($rawUpdated, 'update') !== false && strpos($rawUpdated, 'up-to-date') === false) ||
+            (strpos($rawUpdate, 'update') !== false && strpos($rawUpdate, 'up-to-date') === false) ||
+            (strpos($statusVal, 'update') !== false && strpos($statusVal, 'up-to-date') === false) ||
+            (strpos($installVal, 'update') !== false && strpos($installVal, 'up-to-date') === false)
+        );
+
+        if ($isRemoteUpdate) {
             return ['has_update' => true, 'status' => 'update', 'status_text' => '更新'];
         }
 
@@ -702,10 +712,90 @@ function get_docker_updates_map() {
         }
     };
 
-    // Method 1: Infallible Docker Engine inspection (Running Container ImageID vs Tag ImageID)
-    // When an image is pulled (or Unraid WebGUI shows "⚡ 更新就绪"),
-    // the running container was started with an older Image ID than the tag currently on the host.
-    // This provides 100% accurate "更新就绪" detection independent of webGUI cache.
+    // Method 0A: In-process Unraid DockerClient instance
+    $dockerClientFile = '/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php';
+    if (file_exists($dockerClientFile)) {
+        try {
+            $docroot = $docroot ?? '/usr/local/emhttp';
+            @include_once $dockerClientFile;
+            if (class_exists('DockerClient')) {
+                $dc = new DockerClient();
+                if (method_exists($dc, 'getDockerContainers')) {
+                    $containers = $dc->getDockerContainers();
+                    if (is_array($containers)) {
+                        foreach ($containers as $c) {
+                            if (!is_array($c)) continue;
+                            $name = $c['Name'] ?? ($c['name'] ?? '');
+                            $id = $c['Id'] ?? ($c['id'] ?? '');
+                            $rawUpdated = strtolower(trim((string)($c['Updated'] ?? ($c['updated'] ?? ''))));
+                            $rawStatus = strtolower(trim((string)($c['Status'] ?? ($c['status'] ?? ''))));
+                            $isReady = (strpos($rawUpdated, 'ready') !== false || strpos($rawStatus, 'ready') !== false);
+                            $hasUp = ($isReady || $rawUpdated === 'false' || $rawUpdated === 'update' || (strpos($rawStatus, 'update') !== false && strpos($rawStatus, 'up-to-date') === false));
+
+                            if ($hasUp) {
+                                $record = [
+                                    'has_update' => true,
+                                    'status' => $isReady ? 'ready' : 'update',
+                                    'status_text' => $isReady ? '更新就绪' : '更新',
+                                    'id' => $id,
+                                ];
+                                $registerContainer($name, $record);
+                                if (!empty($id)) {
+                                    $registerContainer(substr($id, 0, 12), $record);
+                                    $registerContainer($id, $record);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {}
+    }
+
+    // Method 0B: CLI PHP execution of DockerClient (clean environment with emhttp document root)
+    if (file_exists($dockerClientFile)) {
+        $cliJson = @shell_exec('php -r \'
+            $docroot = "/usr/local/emhttp";
+            $_SERVER["DOCUMENT_ROOT"] = "/usr/local/emhttp";
+            @include_once "/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php";
+            if (class_exists("DockerClient")) {
+                $dc = new DockerClient();
+                if (method_exists($dc, "getDockerContainers")) {
+                    echo json_encode($dc->getDockerContainers());
+                }
+            }
+        \' 2>/dev/null');
+        if (!empty($cliJson)) {
+            $cliContainers = @json_decode($cliJson, true);
+            if (is_array($cliContainers)) {
+                foreach ($cliContainers as $c) {
+                    if (!is_array($c)) continue;
+                    $name = $c['Name'] ?? ($c['name'] ?? '');
+                    $id = $c['Id'] ?? ($c['id'] ?? '');
+                    $rawUpdated = strtolower(trim((string)($c['Updated'] ?? ($c['updated'] ?? ''))));
+                    $rawStatus = strtolower(trim((string)($c['Status'] ?? ($c['status'] ?? ''))));
+                    $isReady = (strpos($rawUpdated, 'ready') !== false || strpos($rawStatus, 'ready') !== false);
+                    $hasUp = ($isReady || $rawUpdated === 'false' || $rawUpdated === 'update' || (strpos($rawStatus, 'update') !== false && strpos($rawStatus, 'up-to-date') === false));
+
+                    if ($hasUp) {
+                        $record = [
+                            'has_update' => true,
+                            'status' => $isReady ? 'ready' : 'update',
+                            'status_text' => $isReady ? '更新就绪' : '更新',
+                            'id' => $id,
+                        ];
+                        $registerContainer($name, $record);
+                        if (!empty($id)) {
+                            $registerContainer(substr($id, 0, 12), $record);
+                            $registerContainer($id, $record);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Method 1: Docker Engine inspection (Running Container ImageID vs Tag ImageID)
     $inspectRaw = @shell_exec('docker inspect --format "{{.Name}}\t{{.Config.Image}}\t{{.Image}}" $(docker ps -aq) 2>/dev/null');
     if (!empty($inspectRaw)) {
         $imagesRaw = @shell_exec('docker images --no-trunc --format "{{.Repository}}:{{.Tag}}\t{{.ID}}" 2>/dev/null');
@@ -756,6 +846,12 @@ function get_docker_updates_map() {
                         $currentTagId = $tagToId[$cc];
                         break;
                     }
+                if (empty($currentTagId)) {
+                    $directTagId = trim(@shell_exec("docker inspect --format '{{.Id}}' " . escapeshellarg($cImageTag) . " 2>/dev/null"));
+                    $directTagId = preg_replace('/^sha256:/', '', $directTagId);
+                    if (!empty($directTagId)) {
+                        $currentTagId = $directTagId;
+                    }
                 }
 
                 if (!empty($currentTagId) && !empty($cRunningId) && $currentTagId !== $cRunningId) {
@@ -767,7 +863,7 @@ function get_docker_updates_map() {
         }
     }
 
-    // Method 2: Check Unraid docker.ini files across standard locations
+    // Method 2: Check Unraid docker.ini and related config files across system
     $iniCandidates = [
         '/var/local/emhttp/docker.ini',
         '/var/run/emhttp/docker.ini',
@@ -776,6 +872,11 @@ function get_docker_updates_map() {
         '/var/local/emhttp/plugins/dynamix.docker.manager/docker.ini',
         '/tmp/docker.ini'
     ];
+    $dynamicInis = @glob('/var/local/emhttp/*.ini');
+    if (is_array($dynamicInis)) $iniCandidates = array_merge($iniCandidates, $dynamicInis);
+    $dynamicTmp = @glob('/tmp/*docker*.ini');
+    if (is_array($dynamicTmp)) $iniCandidates = array_merge($iniCandidates, $dynamicTmp);
+    $iniCandidates = array_unique($iniCandidates);
 
     foreach ($iniCandidates as $iniFile) {
         if (!file_exists($iniFile)) continue;
@@ -830,6 +931,55 @@ function get_docker_updates_map() {
                 }
             }
             $flushCurrSec();
+        }
+    }
+
+    // Method 3: Scan Unraid system notifications for docker updates
+    $notifDirs = [
+        '/tmp/notifications/unread',
+        '/tmp/notifications/descriptions',
+        '/tmp/notifications/archive',
+        '/tmp/notifications',
+        '/var/local/emhttp/notifications'
+    ];
+    $ignoreWords = ['docker', 'container', 'image', 'for', 'of', 'all', 'a', 'an', 'the', 'is', 'available', 'update', 'updates', 'version', 'new', 'notice', 'tower', 'server', 'unraid'];
+
+    foreach ($notifDirs as $nd) {
+        if (!is_dir($nd)) continue;
+        $nfiles = @scandir($nd);
+        if (!$nfiles) continue;
+        foreach ($nfiles as $nf) {
+            if ($nf === '.' || $nf === '..') continue;
+            $fp = "{$nd}/{$nf}";
+            if (is_dir($fp)) continue;
+            $ncontent = @file_get_contents($fp);
+            if (!$ncontent) continue;
+            $cleanContent = strip_tags($ncontent);
+
+            $patterns = [
+                '/(?:A\s+new\s+version\s+of|An?\s+update\s+(?:is\s+)?available\s+for|New\s+version\s+(?:available\s+)?for)\s+([a-zA-Z0-9_\-\.\/]+)/i',
+                '/(?:Version\s+update\s+(?:available\s+)?(?:of|for))\s+([a-zA-Z0-9_\-\.\/]+)/i',
+                '/(?:Docker\s+(?:container|image)\s+update\s+available\s+for|update\s+available\s+for(?:\s+container)?|container\s+update\s+available:?)\s+([a-zA-Z0-9_\-\.\/]+)/i',
+                '/([a-zA-Z0-9_\-\.\/]+)\s+(?:has\s+an?\s+update\s+available|update\s+is\s+available)/i',
+                '/(?:容器|镜像)\s*[\[【\x22\x27]?([a-zA-Z0-9_\-\.\/]+)[\]】\x22\x27]?\s*(?:更新就绪|有新版本|有可用更新|可更新|存在更新)/u',
+                '/([a-zA-Z0-9_\-\.\/]+)\s*(?:更新就绪|有新版本|有可用更新|存在更新)/u',
+            ];
+
+            foreach ($patterns as $pat) {
+                if (preg_match_all($pat, $cleanContent, $m)) {
+                    foreach ($m[1] as $c) {
+                        $cand = trim($c, " \t\n\r\0\x0B.:'\"[]()<>");
+                        if (empty($cand) || in_array(strtolower($cand), $ignoreWords) || strlen($cand) < 2) continue;
+                        $isReady = (stripos($cleanContent, '更新就绪') !== false || stripos($cleanContent, 'ready') !== false);
+                        $rec = [
+                            'has_update' => true,
+                            'status' => $isReady ? 'ready' : 'update',
+                            'status_text' => $isReady ? '更新就绪' : '更新',
+                        ];
+                        $registerContainer($cand, $rec);
+                    }
+                }
+            }
         }
     }
 
@@ -1455,6 +1605,33 @@ function handle_update_docker() {
         }
     }
 
+    // Native Unraid updater script (triggers WebGUI's official update process)
+    $unraidUpdater = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate';
+    if (!$updated && file_exists($unraidUpdater)) {
+        $upCmd = "{$unraidUpdater} update {$escaped} 2>&1";
+        $upOut = @shell_exec($upCmd);
+        if (!empty(trim($upOut)) && stripos($upOut, 'unknown command') === false && stripos($upOut, 'usage') === false) {
+            $updaterOut .= $upOut . "\n";
+            $newId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escaped} 2>/dev/null"));
+            $newImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
+            if (!empty($newId) && ($newId !== $oldId || $newImgId !== $oldImgId)) {
+                $updated = true;
+            }
+        }
+        if (!$updated) {
+            $upCmd2 = "{$unraidUpdater} {$escaped} 2>&1";
+            $upOut2 = @shell_exec($upCmd2);
+            if (!empty(trim($upOut2)) && stripos($upOut2, 'unknown command') === false && stripos($upOut2, 'usage') === false) {
+                $updaterOut .= $upOut2 . "\n";
+                $newId = trim(@shell_exec("docker inspect --format '{{.Id}}' {$escaped} 2>/dev/null"));
+                $newImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
+                if (!empty($newId) && ($newId !== $oldId || $newImgId !== $oldImgId)) {
+                    $updated = true;
+                }
+            }
+        }
+    }
+
     // 2. Standard Container Recreation: Pull Image -> Backup -> Recreate
     if (!$updated) {
         // Step A: Pull latest image first
@@ -1815,10 +1992,10 @@ function handle_self_update_api() {
     @set_time_limit(120);
     $timestamp = time();
     $urls = [
+        'https://api.github.com/repos/wangzh6859/unraid2/contents/api.php?ref=main&t=' . $timestamp,
         'https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php?t=' . $timestamp,
         'https://ghproxy.net/https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php?t=' . $timestamp,
-        'https://raw.fastgit.org/wangzh6859/unraid2/main/api.php?t=' . $timestamp,
-        'https://api.github.com/repos/wangzh6859/unraid2/contents/api.php?ref=main&t=' . $timestamp,
+        'https://cdn.jsdelivr.net/gh/wangzh6859/unraid2@main/api.php?t=' . $timestamp,
     ];
 
     $newContent = null;
@@ -1834,9 +2011,11 @@ function handle_self_update_api() {
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
         curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (compatible; Unraid-API-Updater/1.0)');
+        $headers = ['Cache-Control: no-cache', 'Pragma: no-cache'];
         if (strpos($u, 'api.github.com') !== false) {
-            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Accept: application/vnd.github.v3.raw']);
+            $headers[] = 'Accept: application/vnd.github.v3.raw';
         }
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
         $res = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err = curl_error($ch);
@@ -3887,22 +4066,14 @@ function handle_check_docker_updates() {
     @ini_set('max_execution_time', '180');
 
     $out = '';
-    $scripts = [
-        '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check',
-        '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate',
-        '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockercheck',
-        '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/docker update',
-        'php /usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate.php'
-    ];
-    foreach ($scripts as $cmd) {
-        $parts = explode(' ', $cmd);
-        $target = ($parts[0] === 'php') ? $parts[1] : $parts[0];
-        if (file_exists($target)) {
-            $out .= @shell_exec("{$cmd} 2>&1") . "\n";
+    $checkScript = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate';
+    if (file_exists($checkScript)) {
+        $out = @shell_exec("{$checkScript} check 2>&1");
+    } else {
+        $checkPhp = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate.php';
+        if (file_exists($checkPhp)) {
+            $out = @shell_exec("php {$checkPhp} check 2>&1");
         }
-    }
-    if (empty(trim($out))) {
-        $out = @shell_exec('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check 2>&1');
     }
 
     @file_put_contents('/tmp/unraid_last_docker_update_check.txt', time());
@@ -3972,9 +4143,17 @@ function handle_check_docker_updates() {
         }
     }
 
-    $msg = ($updatesCount > 0)
-        ? "检测完成，共发现 {$updatesCount} 个容器「更新就绪」！"
-        : "检测完成，所有 Docker 容器均为最新版本。";
+    if ($updatesCount > 0) {
+        if ($readyCount > 0 && $newVersionCount > 0) {
+            $msg = "检测完成，共发现 {$updatesCount} 个待更新容器（{$readyCount} 个更新就绪，{$newVersionCount} 个新版本待拉取）！";
+        } elseif ($readyCount > 0) {
+            $msg = "检测完成，共发现 {$readyCount} 个容器「更新就绪」，已在列表中为您标绿，可直接点击应用升级！";
+        } else {
+            $msg = "检测完成，共发现 {$newVersionCount} 个容器有新版本可用！";
+        }
+    } else {
+        $msg = "检测完成，所有 Docker 容器均为最新版本。";
+    }
 
     json_output([
         'status' => 'success',

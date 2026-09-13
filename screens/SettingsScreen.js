@@ -305,13 +305,14 @@ export default function SettingsScreen({ navigation }) {
       // Engine 2: Client relay fallback (App fetches raw api.php from GitHub and pushes directly to server)
       if (!updateSuccess) {
         const githubUrls = [
-          `https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php?t=${Date.now()}`,
-          `https://ghproxy.net/https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php?t=${Date.now()}`,
+          { url: `https://api.github.com/repos/wangzh6859/unraid2/contents/api.php?ref=main&t=${Date.now()}`, headers: { 'Accept': 'application/vnd.github.v3.raw' } },
+          { url: `https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php?t=${Date.now()}` },
+          { url: `https://ghproxy.net/https://raw.githubusercontent.com/wangzh6859/unraid2/main/api.php?t=${Date.now()}` },
         ];
         let rawApiCode = null;
-        for (const gUrl of githubUrls) {
+        for (const item of githubUrls) {
           try {
-            const gRes = await fetch(gUrl);
+            const gRes = await fetch(item.url, { headers: { ...(item.headers || {}), 'Cache-Control': 'no-cache' } });
             if (gRes.ok) {
               const text = await gRes.text();
               if (text && text.length > 50000 && text.includes('<?php') && text.includes('UNRAID_API_VERSION')) {
