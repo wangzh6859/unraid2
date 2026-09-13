@@ -6,7 +6,7 @@
  * Release: 2026-09-13
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.13.14');
+define('UNRAID_API_VERSION', '2026.09.13.15');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -638,50 +638,11 @@ function get_server_mac() {
 function get_docker_updates_map() {
     $dockerUpdatesMap = [];
 
-    $evalSecStatus = function($sec) {
-        $s = [];
-        if (is_array($sec)) {
-            foreach ($sec as $k => $v) {
-                $s[strtolower(trim($k))] = is_string($v) ? strtolower(trim($v)) : $v;
-            }
-        }
-        $rawUpdated = isset($s['updated']) ? (string)$s['updated'] : '';
-        $rawUpdate = isset($s['update']) ? (string)$s['update'] : '';
-        $statusVal = isset($s['status']) ? (string)$s['status'] : (isset($s['state']) ? (string)$s['state'] : '');
-        $installVal = isset($s['install']) ? (string)$s['install'] : '';
-
-        // 1. Check for "ready" state (Ready to apply / ⚡ 更新就绪)
-        if (strpos($rawUpdated, 'ready') !== false ||
-            strpos($rawUpdate, 'ready') !== false ||
-            strpos($statusVal, 'ready') !== false ||
-            strpos($installVal, 'ready') !== false) {
-            return ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
-        }
-
-        // 2. Check for "update" state (Remote update available / 更新)
-        // Dynamix convention: updated="false" means local != remote (not updated)
-        // update="true" means update is available
-        $isRemoteUpdate = (
-            $rawUpdated === 'false' || $rawUpdated === '0' || $rawUpdated === 'no' ||
-            $rawUpdate === 'true' || $rawUpdate === 'yes' || $rawUpdate === '1' ||
-            (strpos($rawUpdated, 'update') !== false && strpos($rawUpdated, 'up-to-date') === false) ||
-            (strpos($rawUpdate, 'update') !== false && strpos($rawUpdate, 'up-to-date') === false) ||
-            (strpos($statusVal, 'update') !== false && strpos($statusVal, 'up-to-date') === false) ||
-            (strpos($installVal, 'update') !== false && strpos($installVal, 'up-to-date') === false)
-        );
-
-        if ($isRemoteUpdate) {
-            return ['has_update' => true, 'status' => 'update', 'status_text' => '更新'];
-        }
-
-        // 3. Otherwise Up-to-date
-        return ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新'];
-    };
-
-    $registerContainer = function($name, $record) use (&$dockerUpdatesMap) {
-        if (empty($name)) return;
-        $clean = trim((string)$name, " \t\n\r\0\x0B/'\"[]()");
-        if (empty($clean) || strlen($clean) < 2) return;
+    // Helper to register container status strictly by container name and container ID
+    $register = function($key, $record) use (&$dockerUpdatesMap) {
+        if (empty($key)) return;
+        $clean = trim((string)$key, " \t\n\r\0\x0B/'\"[]()");
+        if (empty($clean)) return;
 
         $variants = [
             $clean,
@@ -693,26 +654,66 @@ function get_docker_updates_map() {
             $noMy = substr($clean, 3);
             $variants[] = $noMy;
             $variants[] = strtolower($noMy);
-        } else {
-            $variants[] = 'my-' . $clean;
-            $variants[] = 'my-' . strtolower($clean);
-        }
-        if (strpos($clean, ':') !== false) {
-            $noTag = preg_replace('/:.*$/', '', $clean);
-            $variants[] = $noTag;
-            $variants[] = strtolower($noTag);
         }
 
         foreach ($variants as $v) {
-            // Prioritize positive update detection over false/up-to-date
-            if (isset($dockerUpdatesMap[$v]) && !empty($dockerUpdatesMap[$v]['has_update']) && empty($record['has_update'])) {
-                continue;
-            }
             $dockerUpdatesMap[$v] = $record;
         }
     };
 
-    // Method 0A: In-process Unraid DockerClient instance
+    // 1. Primary Source of Truth: Read /var/local/emhttp/docker.ini directly (identical to Unraid WebGUI)
+    $iniFile = '/var/local/emhttp/docker.ini';
+    $iniData = [];
+    if (file_exists($iniFile) && is_readable($iniFile)) {
+        $parsed = @parse_ini_file($iniFile, true);
+        if (is_array($parsed) && !empty($parsed)) {
+            $iniData = $parsed;
+        } else {
+            // Line-by-line fallback parser in case parse_ini_file encounters syntax anomalies
+            $raw = @file_get_contents($iniFile);
+            if ($raw) {
+                $lines = explode("\n", $raw);
+                $currSec = '';
+                foreach ($lines as $line) {
+                    $line = trim($line);
+                    if ($line === '' || $line[0] === ';') continue;
+                    if (preg_match('/^\[(.*)\]$/', $line, $m)) {
+                        $currSec = trim($m[1]);
+                        $iniData[$currSec] = [];
+                    } elseif ($currSec !== '' && strpos($line, '=') !== false) {
+                        list($k, $v) = explode('=', $line, 2);
+                        $iniData[$currSec][trim($k)] = trim($v, " \t\n\r\0\x0B\"'");
+                    }
+                }
+            }
+        }
+    }
+
+    // Process official docker.ini entries
+    foreach ($iniData as $secName => $sec) {
+        if (!is_array($sec)) continue;
+        $cName = !empty($sec['Name']) ? $sec['Name'] : (!empty($sec['name']) ? $sec['name'] : $secName);
+        $rawUpdated = strtolower(trim((string)($sec['updated'] ?? ($sec['Updated'] ?? ''))));
+        
+        // Exact Unraid WebGUI Dynamix Docker logic:
+        // updated="ready"  => ⚡ 更新就绪 (Apply Update / Image pulled locally)
+        // updated="false"  => 🔄 更新 (Update Available / Remote registry has newer digest)
+        // updated="true"   => ✅ 最新 (Up-to-date)
+        if ($rawUpdated === 'ready') {
+            $rec = ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
+        } elseif ($rawUpdated === 'false') {
+            $rec = ['has_update' => true, 'status' => 'update', 'status_text' => '更新'];
+        } else {
+            $rec = ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新'];
+        }
+
+        $register($secName, $rec);
+        if (!empty($cName) && $cName !== $secName) {
+            $register($cName, $rec);
+        }
+    }
+
+    // 2. Secondary Source: If Unraid's official DockerClient.php is present, read its authoritative container list
     $dockerClientFile = '/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php';
     if (file_exists($dockerClientFile)) {
         try {
@@ -728,22 +729,19 @@ function get_docker_updates_map() {
                             $name = $c['Name'] ?? ($c['name'] ?? '');
                             $id = $c['Id'] ?? ($c['id'] ?? '');
                             $rawUpdated = strtolower(trim((string)($c['Updated'] ?? ($c['updated'] ?? ''))));
-                            $rawStatus = strtolower(trim((string)($c['Status'] ?? ($c['status'] ?? ''))));
-                            $isReady = (strpos($rawUpdated, 'ready') !== false || strpos($rawStatus, 'ready') !== false);
-                            $hasUp = ($isReady || $rawUpdated === 'false' || $rawUpdated === 'update' || (strpos($rawStatus, 'update') !== false && strpos($rawStatus, 'up-to-date') === false));
 
-                            if ($hasUp) {
-                                $record = [
-                                    'has_update' => true,
-                                    'status' => $isReady ? 'ready' : 'update',
-                                    'status_text' => $isReady ? '更新就绪' : '更新',
-                                    'id' => $id,
-                                ];
-                                $registerContainer($name, $record);
-                                if (!empty($id)) {
-                                    $registerContainer(substr($id, 0, 12), $record);
-                                    $registerContainer($id, $record);
-                                }
+                            if ($rawUpdated === 'ready') {
+                                $rec = ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
+                            } elseif ($rawUpdated === 'false') {
+                                $rec = ['has_update' => true, 'status' => 'update', 'status_text' => '更新'];
+                            } else {
+                                $rec = ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新'];
+                            }
+
+                            $register($name, $rec);
+                            if (!empty($id)) {
+                                $dockerUpdatesMap[substr($id, 0, 12)] = $rec;
+                                $dockerUpdatesMap[$id] = $rec;
                             }
                         }
                     }
@@ -752,51 +750,9 @@ function get_docker_updates_map() {
         } catch (\Throwable $e) {}
     }
 
-    // Method 0B: CLI PHP execution of DockerClient (clean environment with emhttp document root)
-    if (file_exists($dockerClientFile)) {
-        $cliJson = @shell_exec('php -r \'
-            $docroot = "/usr/local/emhttp";
-            $_SERVER["DOCUMENT_ROOT"] = "/usr/local/emhttp";
-            @include_once "/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php";
-            if (class_exists("DockerClient")) {
-                $dc = new DockerClient();
-                if (method_exists($dc, "getDockerContainers")) {
-                    echo json_encode($dc->getDockerContainers());
-                }
-            }
-        \' 2>/dev/null');
-        if (!empty($cliJson)) {
-            $cliContainers = @json_decode($cliJson, true);
-            if (is_array($cliContainers)) {
-                foreach ($cliContainers as $c) {
-                    if (!is_array($c)) continue;
-                    $name = $c['Name'] ?? ($c['name'] ?? '');
-                    $id = $c['Id'] ?? ($c['id'] ?? '');
-                    $rawUpdated = strtolower(trim((string)($c['Updated'] ?? ($c['updated'] ?? ''))));
-                    $rawStatus = strtolower(trim((string)($c['Status'] ?? ($c['status'] ?? ''))));
-                    $isReady = (strpos($rawUpdated, 'ready') !== false || strpos($rawStatus, 'ready') !== false);
-                    $hasUp = ($isReady || $rawUpdated === 'false' || $rawUpdated === 'update' || (strpos($rawStatus, 'update') !== false && strpos($rawStatus, 'up-to-date') === false));
-
-                    if ($hasUp) {
-                        $record = [
-                            'has_update' => true,
-                            'status' => $isReady ? 'ready' : 'update',
-                            'status_text' => $isReady ? '更新就绪' : '更新',
-                            'id' => $id,
-                        ];
-                        $registerContainer($name, $record);
-                        if (!empty($id)) {
-                            $registerContainer(substr($id, 0, 12), $record);
-                            $registerContainer($id, $record);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Method 1: Docker Engine inspection (Running Container ImageID vs Tag ImageID)
-    $inspectRaw = @shell_exec('docker inspect --format "{{.Name}}\t{{.Config.Image}}\t{{.Image}}" $(docker ps -aq) 2>/dev/null');
+    // 3. Fallback ONLY for standalone containers not tracked in docker.ini:
+    // Check if the container's running image ID differs from the locally tagged image ID
+    $inspectRaw = @shell_exec('docker inspect --format "{{.Name}}\t{{.Config.Image}}\t{{.Image}}\t{{.Id}}" $(docker ps -aq) 2>/dev/null');
     if (!empty($inspectRaw)) {
         $imagesRaw = @shell_exec('docker images --no-trunc --format "{{.Repository}}:{{.Tag}}\t{{.ID}}" 2>/dev/null');
         $tagToId = [];
@@ -804,23 +760,7 @@ function get_docker_updates_map() {
             foreach (explode("\n", trim($imagesRaw)) as $imgLine) {
                 $parts = explode("\t", trim($imgLine));
                 if (count($parts) >= 2) {
-                    $repoTag = trim($parts[0]);
-                    $iId = preg_replace('/^sha256:/', '', trim($parts[1]));
-                    $tagToId[$repoTag] = $iId;
-                    $tagToId[strtolower($repoTag)] = $iId;
-                    if (strpos($repoTag, ':latest') !== false) {
-                        $noLatest = substr($repoTag, 0, -7);
-                        $tagToId[$noLatest] = $iId;
-                        $tagToId[strtolower($noLatest)] = $iId;
-                    }
-                    $cleanImg = preg_replace('#^[^/]+[:\d]+/|^docker\.io/(library/)?#', '', $repoTag);
-                    $tagToId[$cleanImg] = $iId;
-                    $tagToId[strtolower($cleanImg)] = $iId;
-                    if (strpos($cleanImg, ':latest') !== false) {
-                        $noLatestClean = substr($cleanImg, 0, -7);
-                        $tagToId[$noLatestClean] = $iId;
-                        $tagToId[strtolower($noLatestClean)] = $iId;
-                    }
+                    $tagToId[trim($parts[0])] = preg_replace('/^sha256:/', '', trim($parts[1]));
                 }
             }
         }
@@ -831,154 +771,25 @@ function get_docker_updates_map() {
                 $cName = ltrim(trim($parts[0]), '/');
                 $cImageTag = trim($parts[1]);
                 $cRunningId = preg_replace('/^sha256:/', '', trim($parts[2]));
+                $cFullId = isset($parts[3]) ? trim($parts[3]) : '';
 
-                $cCandidates = [
-                    $cImageTag,
-                    strtolower($cImageTag),
-                    $cImageTag . ':latest',
-                    strtolower($cImageTag . ':latest'),
-                    preg_replace('#^[^/]+[:\d]+/|^docker\.io/(library/)?#', '', $cImageTag),
-                    strtolower(preg_replace('#^[^/]+[:\d]+/|^docker\.io/(library/)?#', '', $cImageTag)),
-                ];
-                $currentTagId = '';
-                foreach ($cCandidates as $cc) {
-                    if (isset($tagToId[$cc])) {
-                        $currentTagId = $tagToId[$cc];
-                        break;
+                // If already registered from docker.ini or DockerClient, DO NOT override with fallback heuristics!
+                if (isset($dockerUpdatesMap[$cName]) || isset($dockerUpdatesMap[strtolower($cName)])) {
+                    continue;
+                }
+
+                // Strictly match exact tag
+                $localImgId = $tagToId[$cImageTag] ?? '';
+                if (!empty($localImgId) && !empty($cRunningId) && $localImgId !== $cRunningId) {
+                    $readyRec = ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
+                    $register($cName, $readyRec);
+                    if (!empty($cFullId)) {
+                        $dockerUpdatesMap[substr($cFullId, 0, 12)] = $readyRec;
+                        $dockerUpdatesMap[$cFullId] = $readyRec;
                     }
-                }
-                if (empty($currentTagId)) {
-                    $directTagId = trim(@shell_exec("docker inspect --format '{{.Id}}' " . escapeshellarg($cImageTag) . " 2>/dev/null"));
-                    $directTagId = preg_replace('/^sha256:/', '', $directTagId);
-                    if (!empty($directTagId)) {
-                        $currentTagId = $directTagId;
-                    }
-                }
-
-                if (!empty($currentTagId) && !empty($cRunningId) && $currentTagId !== $cRunningId) {
-                    $readyRecord = ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
-                    $registerContainer($cName, $readyRecord);
-                    $registerContainer($cImageTag, $readyRecord);
-                }
-            }
-        }
-    }
-
-    // Method 2: Check Unraid docker.ini and related config files across system
-    $iniCandidates = [
-        '/var/local/emhttp/docker.ini',
-        '/var/run/emhttp/docker.ini',
-        '/var/run/emhttp.ini',
-        '/boot/config/plugins/dockerMan/templates-user/docker.ini',
-        '/var/local/emhttp/plugins/dynamix.docker.manager/docker.ini',
-        '/tmp/docker.ini'
-    ];
-    $dynamicInis = @glob('/var/local/emhttp/*.ini');
-    if (is_array($dynamicInis)) $iniCandidates = array_merge($iniCandidates, $dynamicInis);
-    $dynamicTmp = @glob('/tmp/*docker*.ini');
-    if (is_array($dynamicTmp)) $iniCandidates = array_merge($iniCandidates, $dynamicTmp);
-    $iniCandidates = array_unique($iniCandidates);
-
-    foreach ($iniCandidates as $iniFile) {
-        if (!file_exists($iniFile)) continue;
-
-        // Method 2A: parse_ini_file
-        $ini = @parse_ini_file($iniFile, true);
-        if (is_array($ini)) {
-            foreach ($ini as $secKey => $sec) {
-                if (!is_array($sec)) continue;
-                $record = $evalSecStatus($sec);
-                $registerContainer($secKey, $record);
-                if (!empty($sec['Name'])) $registerContainer($sec['Name'], $record);
-                if (!empty($sec['name'])) $registerContainer($sec['name'], $record);
-                if (!empty($sec['Container'])) $registerContainer($sec['Container'], $record);
-                if (!empty($sec['container'])) $registerContainer($sec['container'], $record);
-                if (!empty($sec['Repository'])) $registerContainer($sec['Repository'], $record);
-                if (!empty($sec['repository'])) $registerContainer($sec['repository'], $record);
-                if (!empty($sec['Registry'])) $registerContainer($sec['Registry'], $record);
-                if (!empty($sec['registry'])) $registerContainer($sec['registry'], $record);
-            }
-        }
-
-        // Method 2B: Robust Line-by-line fallback
-        $raw = @file_get_contents($iniFile);
-        if ($raw) {
-            $lines = explode("\n", $raw);
-            $currSec = '';
-            $currSecData = [];
-
-            $flushCurrSec = function() use (&$currSec, &$currSecData, $evalSecStatus, $registerContainer) {
-                if ($currSec === '') return;
-                $record = $evalSecStatus($currSecData);
-                $registerContainer($currSec, $record);
-                if (!empty($currSecData['name'])) $registerContainer($currSecData['name'], $record);
-                if (!empty($currSecData['container'])) $registerContainer($currSecData['container'], $record);
-                if (!empty($currSecData['repository'])) $registerContainer($currSecData['repository'], $record);
-                if (!empty($currSecData['registry'])) $registerContainer($currSecData['registry'], $record);
-            };
-
-            foreach ($lines as $line) {
-                $line = trim($line);
-                if ($line === '' || $line[0] === ';') continue;
-                if (preg_match('/^\[(.*)\]$/', $line, $sm)) {
-                    $flushCurrSec();
-                    $currSec = trim($sm[1]);
-                    $currSecData = [];
-                } elseif (strpos($line, '=') !== false) {
-                    list($key, $val) = explode('=', $line, 2);
-                    $key = strtolower(trim($key));
-                    $val = trim($val, " \t\n\r\0\x0B\"'");
-                    $currSecData[$key] = $val;
-                }
-            }
-            $flushCurrSec();
-        }
-    }
-
-    // Method 3: Scan Unraid system notifications for docker updates
-    $notifDirs = [
-        '/tmp/notifications/unread',
-        '/tmp/notifications/descriptions',
-        '/tmp/notifications/archive',
-        '/tmp/notifications',
-        '/var/local/emhttp/notifications'
-    ];
-    $ignoreWords = ['docker', 'container', 'image', 'for', 'of', 'all', 'a', 'an', 'the', 'is', 'available', 'update', 'updates', 'version', 'new', 'notice', 'tower', 'server', 'unraid'];
-
-    foreach ($notifDirs as $nd) {
-        if (!is_dir($nd)) continue;
-        $nfiles = @scandir($nd);
-        if (!$nfiles) continue;
-        foreach ($nfiles as $nf) {
-            if ($nf === '.' || $nf === '..') continue;
-            $fp = "{$nd}/{$nf}";
-            if (is_dir($fp)) continue;
-            $ncontent = @file_get_contents($fp);
-            if (!$ncontent) continue;
-            $cleanContent = strip_tags($ncontent);
-
-            $patterns = [
-                '/(?:A\s+new\s+version\s+of|An?\s+update\s+(?:is\s+)?available\s+for|New\s+version\s+(?:available\s+)?for)\s+([a-zA-Z0-9_\-\.\/]+)/i',
-                '/(?:Version\s+update\s+(?:available\s+)?(?:of|for))\s+([a-zA-Z0-9_\-\.\/]+)/i',
-                '/(?:Docker\s+(?:container|image)\s+update\s+available\s+for|update\s+available\s+for(?:\s+container)?|container\s+update\s+available:?)\s+([a-zA-Z0-9_\-\.\/]+)/i',
-                '/([a-zA-Z0-9_\-\.\/]+)\s+(?:has\s+an?\s+update\s+available|update\s+is\s+available)/i',
-                '/(?:容器|镜像)\s*[\[【\x22\x27]?([a-zA-Z0-9_\-\.\/]+)[\]】\x22\x27]?\s*(?:更新就绪|有新版本|有可用更新|可更新|存在更新)/u',
-                '/([a-zA-Z0-9_\-\.\/]+)\s*(?:更新就绪|有新版本|有可用更新|存在更新)/u',
-            ];
-
-            foreach ($patterns as $pat) {
-                if (preg_match_all($pat, $cleanContent, $m)) {
-                    foreach ($m[1] as $c) {
-                        $cand = trim($c, " \t\n\r\0\x0B.:'\"[]()<>");
-                        if (empty($cand) || in_array(strtolower($cand), $ignoreWords) || strlen($cand) < 2) continue;
-                        $isReady = (stripos($cleanContent, '更新就绪') !== false || stripos($cleanContent, 'ready') !== false);
-                        $rec = [
-                            'has_update' => true,
-                            'status' => $isReady ? 'ready' : 'update',
-                            'status_text' => $isReady ? '更新就绪' : '更新',
-                        ];
-                        $registerContainer($cand, $rec);
-                    }
+                } else {
+                    $upToDateRec = ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新'];
+                    $register($cName, $upToDateRec);
                 }
             }
         }
@@ -1284,17 +1095,14 @@ $disks[] = [
                     strtolower($cleanName),
                     $cName,
                     strtolower($cName),
-                    'my-' . $cleanName,
-                    'my-' . strtolower($cleanName),
                 ];
-                if (!empty($cImage)) {
-                    $candidates[] = $cImage;
-                    $candidates[] = strtolower($cImage);
-                    if (strpos($cImage, ':') !== false) {
-                        $noTag = preg_replace('/:.*$/', '', $cImage);
-                        $candidates[] = $noTag;
-                        $candidates[] = strtolower($noTag);
-                    }
+                if (strpos($cleanName, 'my-') === 0) {
+                    $candidates[] = substr($cleanName, 3);
+                    $candidates[] = strtolower(substr($cleanName, 3));
+                }
+                if (!empty($cId)) {
+                    $candidates[] = substr($cId, 0, 12);
+                    $candidates[] = $cId;
                 }
                 foreach ($candidates as $cand) {
                     if (isset($dockerUpdatesMap[$cand])) {
@@ -4087,13 +3895,13 @@ function handle_check_docker_updates() {
     $updatesCount = 0;
     $readyCount = 0;
     $newVersionCount = 0;
-    $rawDocker = @shell_exec('docker ps -a --format "{{.Names}}\t{{.Image}}" 2>/dev/null');
+    $rawDocker = @shell_exec('docker ps -a --format "{{.Names}}\t{{.ID}}" 2>/dev/null');
     if ($rawDocker) {
         $lines = explode("\n", trim($rawDocker));
         foreach ($lines as $line) {
             $parts = explode("\t", trim($line));
             $cName = isset($parts[0]) ? ltrim(trim($parts[0]), '/') : '';
-            $cImg = isset($parts[1]) ? trim($parts[1]) : '';
+            $cId = isset($parts[1]) ? trim($parts[1]) : '';
             if (empty($cName)) continue;
             $info = null;
             $cleanName = ltrim($cName, '/');
@@ -4102,30 +3910,14 @@ function handle_check_docker_updates() {
                 strtolower($cleanName),
                 $cName,
                 strtolower($cName),
-                'my-' . $cleanName,
-                'my-' . strtolower($cleanName),
             ];
             if (strpos($cleanName, 'my-') === 0) {
-                $noMy = substr($cleanName, 3);
-                $candidates[] = $noMy;
-                $candidates[] = strtolower($noMy);
+                $candidates[] = substr($cleanName, 3);
+                $candidates[] = strtolower(substr($cleanName, 3));
             }
-            if (!empty($cImg)) {
-                $candidates[] = $cImg;
-                $candidates[] = strtolower($cImg);
-                $cleanImg = preg_replace('#^[^/]+[:\d]+/|^docker\.io/(library/)?#', '', $cImg);
-                $candidates[] = $cleanImg;
-                $candidates[] = strtolower($cleanImg);
-                if (strpos($cImg, ':') !== false) {
-                    $noTag = preg_replace('/:.*$/', '', $cImg);
-                    $candidates[] = $noTag;
-                    $candidates[] = strtolower($noTag);
-                }
-                if (strpos($cleanImg, ':') !== false) {
-                    $noTagClean = preg_replace('/:.*$/', '', $cleanImg);
-                    $candidates[] = $noTagClean;
-                    $candidates[] = strtolower($noTagClean);
-                }
+            if (!empty($cId)) {
+                $candidates[] = substr($cId, 0, 12);
+                $candidates[] = $cId;
             }
             foreach ($candidates as $cand) {
                 if (isset($dockerUpdatesMap[$cand])) {
