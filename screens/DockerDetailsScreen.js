@@ -362,16 +362,13 @@ export default function DockerDetailsScreen({ route }) {
     }
   };
 
-  // 容器升级操作（支持“更新就绪 · 应用”与“有新版本 · 升级”）
-  const handleUpdateDocker = (name, updateStatus = 'update') => {
-    const isReady = updateStatus === 'ready';
+  // 容器更新操作（与 Unraid 网页端“更新就绪”完全对齐）
+  const handleUpdateDocker = (name) => {
     showConfirm({
-      type: isReady ? 'info' : 'warning',
-      title: isReady ? '应用容器更新' : '升级容器',
-      message: isReady
-        ? `容器「${name}」的新镜像已在本地就绪，是否立即重新创建并启动该容器？\n\n应用过程通常需要 10 至 30 秒，容器将短暂离线。`
-        : `确定要拉取最新镜像并重新创建容器「${name}」吗？\n\n拉取镜像与重建容器通常需要 1 至 3 分钟，升级过程中容器将短暂离线。`,
-      confirmText: isReady ? '立即应用' : '立即升级',
+      type: 'warning',
+      title: '更新容器',
+      message: `确定要拉取最新镜像并重新构筑容器「${name}」吗？\n升级过程中容器将短暂离线，通常耗时 1 至 3 分钟。`,
+      confirmText: '立即更新',
       cancelText: '取消',
       showCancel: true,
       onConfirm: async () => {
@@ -407,8 +404,8 @@ export default function DockerDetailsScreen({ route }) {
               : '';
             showConfirm({
               type: 'success',
-              title: isReady ? '应用成功' : '升级成功',
-              message: (data.message || `容器「${name}」${isReady ? '更新已应用' : '已升级为最新版本'}！`) + detailMsg,
+              title: '更新成功',
+              message: (data.message || `容器「${name}」已更新为最新版本！`) + detailMsg,
               confirmText: '好的',
               showCancel: false,
             });
@@ -417,7 +414,7 @@ export default function DockerDetailsScreen({ route }) {
           } else {
             showConfirm({
               type: 'error',
-              title: isReady ? '应用失败' : '升级失败',
+              title: '更新失败',
               message: (data && data.message) ? data.message : '更新未能完成，未检测到容器重新创建',
               confirmText: '确定',
               showCancel: false,
@@ -1380,7 +1377,7 @@ export default function DockerDetailsScreen({ route }) {
                 statusFilter === 'updates' && styles.tabBtnTextActive,
                 updateCount > 0 && { color: '#f59e0b', fontWeight: 'bold' }
               ]}>
-                有更新 {updateCount}
+                更新就绪 {updateCount}
               </Text>
             </TouchableOpacity>
 
@@ -1462,30 +1459,20 @@ export default function DockerDetailsScreen({ route }) {
                     
                     {docker.update_available && (
                       <TouchableOpacity
-                        style={[
-                          styles.updateBadge,
-                          docker.update_status === 'ready' && styles.updateBadgeReady
-                        ]}
-                        onPress={() => handleUpdateDocker(docker.name, docker.update_status)}
+                        style={styles.updateBadge}
+                        onPress={() => handleUpdateDocker(docker.name)}
                         disabled={updatingDocker === docker.name}
                         activeOpacity={0.7}
                         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                        accessibilityLabel={docker.update_status === 'ready' ? "应用更新" : "升级容器"}
+                        accessibilityLabel="更新就绪"
                       >
                         {updatingDocker === docker.name ? (
-                          <ActivityIndicator size="small" color={docker.update_status === 'ready' ? "#10b981" : "#f59e0b"} style={{ marginRight: 4 }} />
-                        ) : docker.update_status === 'ready' ? (
-                          <Zap size={11} color="#10b981" style={{ marginRight: 3 }} />
+                          <ActivityIndicator size="small" color="#f59e0b" style={{ marginRight: 4 }} />
                         ) : (
                           <ArrowUp size={11} color="#f59e0b" style={{ marginRight: 3 }} />
                         )}
-                        <Text style={[
-                          styles.updateBadgeText,
-                          docker.update_status === 'ready' && styles.updateBadgeTextReady
-                        ]}>
-                          {updatingDocker === docker.name 
-                            ? (docker.update_status === 'ready' ? '应用中...' : '升级中...') 
-                            : (docker.update_status === 'ready' ? '更新就绪 · 应用' : '有新版本 · 升级')}
+                        <Text style={styles.updateBadgeText}>
+                          {updatingDocker === docker.name ? '更新中...' : '更新就绪 · 升级'}
                         </Text>
                       </TouchableOpacity>
                     )}

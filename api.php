@@ -603,46 +603,39 @@ function get_server_mac() {
 
 function get_docker_updates_map() {
     $dockerUpdatesMap = [];
-    $iniKnownContainers = [];
     $iniFile = '/var/local/emhttp/docker.ini';
 
-    $evalSecStatus = function($sec) {
+    $evalSecHasUpdate = function($sec) {
         $updateVal = strtolower(trim((string)($sec['update'] ?? '')));
         $updatedVal = strtolower(trim((string)($sec['updated'] ?? '')));
         $statusVal = strtolower(trim((string)($sec['status'] ?? '')));
         $installVal = strtolower(trim((string)($sec['install'] ?? '')));
 
-        // 1. Ready: new image is already downloaded locally, waiting to be applied/recreated
-        if ($updateVal === 'ready' || stripos($statusVal, 'ready') !== false || stripos($installVal, 'ready') !== false) {
-            return 'ready';
-        }
-
-        // 2. Update available: remote registry has newer version
-        if (
-            in_array($updateVal, ['true', '1', 'yes', 'update']) ||
-            in_array($updatedVal, ['false', '0', 'no']) ||
-            (stripos($statusVal, 'update') !== false && stripos($statusVal, 'ready') === false) ||
-            (stripos($installVal, 'update') !== false && stripos($installVal, 'ready') === false)
-        ) {
-            return 'update';
-        }
-
-        // 3. Up to date
-        return 'up-to-date';
+        // Exactly matches Unraid WebGUI: update="ready" or status contains "update"/"ready" or updated="false"
+        return (
+            $updateVal === 'ready' || 
+            $updateVal === 'true' || 
+            $updateVal === 'yes' || 
+            $updateVal === '1' ||
+            $updatedVal === 'false' || 
+            $updatedVal === '0' || 
+            $updatedVal === 'no' ||
+            stripos($statusVal, 'ready') !== false || 
+            stripos($statusVal, 'update') !== false ||
+            stripos($installVal, 'ready') !== false ||
+            stripos($installVal, 'update') !== false
+        );
     };
 
-    $registerStatus = function($name, $status, $isFromIni = false) use (&$dockerUpdatesMap, &$iniKnownContainers) {
+    $registerContainer = function($name, $hasUpdate) use (&$dockerUpdatesMap) {
         if (empty($name)) return;
         $clean = trim($name, " \t\n\r\0\x0B/'\"[]()");
         if (empty($clean) || strlen($clean) < 2) return;
 
-        $hasUpdate = ($status === 'ready' || $status === 'update');
-        $statusText = ($status === 'ready') ? '更新就绪' : (($status === 'update') ? '有可用更新' : '最新');
-
         $record = [
             'has_update' => $hasUpdate,
-            'status' => $status,
-            'status_text' => $statusText,
+            'status' => $hasUpdate ? 'ready' : 'up-to-date',
+            'status_text' => $hasUpdate ? '更新就绪' : '最新',
         ];
 
         $variants = [
@@ -661,15 +654,7 @@ function get_docker_updates_map() {
         }
 
         foreach ($variants as $v) {
-            if ($isFromIni) {
-                $dockerUpdatesMap[$v] = $record;
-                $iniKnownContainers[$v] = true;
-            } else {
-                // Notifications only apply to containers not registered in docker.ini
-                if (!isset($iniKnownContainers[$v])) {
-                    $dockerUpdatesMap[$v] = $record;
-                }
-            }
+            $dockerUpdatesMap[$v] = $record;
         }
     };
 
@@ -679,28 +664,28 @@ function get_docker_updates_map() {
         if (is_array($ini)) {
             foreach ($ini as $secKey => $sec) {
                 if (!is_array($sec)) continue;
-                $secStatus = $evalSecStatus($sec);
-                $registerStatus($secKey, $secStatus, true);
-                if (!empty($sec['Name'])) $registerStatus($sec['Name'], $secStatus, true);
-                if (!empty($sec['name'])) $registerStatus($sec['name'], $secStatus, true);
-                if (!empty($sec['Container'])) $registerStatus($sec['Container'], $secStatus, true);
-                if (!empty($sec['container'])) $registerStatus($sec['container'], $secStatus, true);
+                $hasUp = $evalSecHasUpdate($sec);
+                $registerContainer($secKey, $hasUp);
+                if (!empty($sec['Name'])) $registerContainer($sec['Name'], $hasUp);
+                if (!empty($sec['name'])) $registerContainer($sec['name'], $hasUp);
+                if (!empty($sec['Container'])) $registerContainer($sec['Container'], $hasUp);
+                if (!empty($sec['container'])) $registerContainer($sec['container'], $hasUp);
             }
         }
 
-        // Method 2: Line-by-line parsing fallback
+        // Method 2: Robust Line-by-line fallback
         $raw = @file_get_contents($iniFile);
         if ($raw) {
             $lines = explode("\n", $raw);
             $currSec = '';
             $currSecData = [];
 
-            $flushCurrSec = function() use (&$currSec, &$currSecData, $evalSecStatus, $registerStatus) {
+            $flushCurrSec = function() use (&$currSec, &$currSecData, $evalSecHasUpdate, $registerContainer) {
                 if ($currSec === '') return;
-                $sStatus = $evalSecStatus($currSecData);
-                $registerStatus($currSec, $sStatus, true);
-                if (!empty($currSecData['name'])) $registerStatus($currSecData['name'], $sStatus, true);
-                if (!empty($currSecData['container'])) $registerStatus($currSecData['container'], $sStatus, true);
+                $hasUp = $evalSecHasUpdate($currSecData);
+                $registerContainer($currSec, $hasUp);
+                if (!empty($currSecData['name'])) $registerContainer($currSecData['name'], $hasUp);
+                if (!empty($currSecData['container'])) $registerContainer($currSecData['container'], $hasUp);
             };
 
             foreach ($lines as $line) {
@@ -718,43 +703,6 @@ function get_docker_updates_map() {
                 }
             }
             $flushCurrSec();
-        }
-    }
-
-    // Method 3: Scan /tmp/notifications/unread ONLY for containers not already known in docker.ini
-    $notifDir = '/tmp/notifications/unread';
-    $ignoreWords = ['docker', 'container', 'image', 'for', 'of', 'all', 'a', 'an', 'the', 'is', 'available', 'update', 'updates', 'version', 'new', 'notice', 'tower', 'server', 'unraid'];
-
-    if (is_dir($notifDir)) {
-        $nfiles = @scandir($notifDir);
-        if ($nfiles) {
-            foreach ($nfiles as $nf) {
-                if ($nf === '.' || $nf === '..') continue;
-                $filePath = "{$notifDir}/{$nf}";
-                if (is_dir($filePath)) continue;
-                $ncontent = @file_get_contents($filePath);
-                if (!$ncontent) continue;
-                $cleanContent = strip_tags($ncontent);
-
-                $patterns = [
-                    '/(?:A\s+new\s+version\s+of|An?\s+update\s+(?:is\s+)?available\s+for|New\s+version\s+(?:available\s+)?for)\s+([a-zA-Z0-9_\-\.\/]+)/i',
-                    '/(?:Version\s+update\s+(?:available\s+)?(?:of|for))\s+([a-zA-Z0-9_\-\.\/]+)/i',
-                    '/(?:Docker\s+(?:container|image)\s+update\s+available\s+for|update\s+available\s+for(?:\s+container)?|container\s+update\s+available:?)\s+([a-zA-Z0-9_\-\.\/]+)/i',
-                    '/([a-zA-Z0-9_\-\.\/]+)\s+(?:has\s+an?\s+update\s+available|update\s+is\s+available)/i',
-                    '/(?:容器|镜像)\s*[\[【\x22\x27]?([a-zA-Z0-9_\-\.\/]+)[\]】\x22\x27]?\s*(?:有新版本|有可用更新|可更新|更新可用|存在更新)/u',
-                    '/([a-zA-Z0-9_\-\.\/]+)\s*(?:有新版本|有可用更新|存在更新)/u',
-                ];
-
-                foreach ($patterns as $pat) {
-                    if (preg_match_all($pat, $cleanContent, $m)) {
-                        foreach ($m[1] as $c) {
-                            $cand = trim($c, " \t\n\r\0\x0B.:'\"[]()<>");
-                            if (empty($cand) || in_array(strtolower($cand), $ignoreWords) || strlen($cand) < 2) continue;
-                            $registerStatus($cand, 'update', false);
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -1218,7 +1166,7 @@ $disks[] = [
     }
 
     json_output([
-        'api_version' => '2026.09.13.6',
+        'api_version' => '2026.09.13.7',
         'api_features' => ['docker_recreate', 'token_file', 'self_update'],
         'api_file' => __FILE__,
         'stats' => [
@@ -3785,16 +3733,14 @@ function handle_check_docker_updates() {
     }
 
     $msg = ($updatesCount > 0)
-        ? "检测到 {$updatesCount} 个容器有待更新" . ($readyCount > 0 ? "（{$readyCount} 个更新就绪待应用，{$newVersionCount} 个新版本待拉取）" : "")
-        : "所有 Docker 容器均已为最新版本，暂无可用更新。";
+        ? "检测完成，共发现 {$updatesCount} 个容器「更新就绪」！"
+        : "检测完成，所有 Docker 容器均为最新版本。";
 
     json_output([
         'status' => 'success',
         'message' => $msg,
         'update_count' => $updatesCount,
         'updates_count' => $updatesCount,
-        'ready_count' => $readyCount,
-        'new_version_count' => $newVersionCount,
         'output' => trim($out)
     ]);
 }
