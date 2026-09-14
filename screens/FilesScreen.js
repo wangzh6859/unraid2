@@ -368,10 +368,11 @@ export default function FilesScreen({ navigation }) {
   };
 
   // =========================================================================
-  // Advanced Upload Task Manager (Create, Pause/Cancel, Resume, Delete record)
+  // Advanced Upload Task Manager (Complete Refactored Version)
   // =========================================================================
   const handleUpload = async () => {
     setIsMenuVisible(false);
+
     if (currentPath === '/mnt' || currentPath === DEFAULT_ROOT) {
       showConfirm({
         type: 'warning',
@@ -384,6 +385,7 @@ export default function FilesScreen({ navigation }) {
     }
 
     try {
+      // Direct SAF document picker call without Modal wrapper
       const result = await DocumentPicker.getDocumentAsync({
         type: '*/*',
         copyToCacheDirectory: true,
@@ -408,7 +410,7 @@ export default function FilesScreen({ navigation }) {
           size: file.size || 0,
           targetPath: currentPath,
           type: '上传',
-          status: 'running', // 'running' | 'paused' | 'success' | 'error'
+          status: 'running',
           progress: 0,
           transferredBytes: 0,
           totalBytes: file.size || 0,
@@ -423,7 +425,7 @@ export default function FilesScreen({ navigation }) {
           return next;
         });
 
-        // Start upload immediately in background
+        // Trigger upload execution
         startUploadTask(newTask);
       }
     } catch (e) {
@@ -443,25 +445,19 @@ export default function FilesScreen({ navigation }) {
     const abortController = new AbortController();
     activeTasksRef.current[taskId] = { abortController, cancelled: false };
 
-    // Register with Android Foreground Service for lockscreen background transfer
     try {
       await backgroundTransferManager.notifyTransferStarted(taskItem);
     } catch (_) {}
 
-    // DocumentPicker with copyToCacheDirectory:true already copies to file:// cache
-    // Using the URI directly avoids double-copy failure and content:// issues
-    let workingUri = taskItem.uri;
-    let tempCached = false;
+    const workingUri = taskItem.uri;
+
     try {
-      // Check if file exists and get real size
+      // Determine real file size
       let totalSize = taskItem.size || 0;
       try {
         const fileInfo = await FileSystem.getInfoAsync(workingUri);
         if (fileInfo && fileInfo.exists && fileInfo.size !== undefined && fileInfo.size !== null) {
           totalSize = fileInfo.size;
-        } else if (workingUri && workingUri.startsWith('content://')) {
-          // For content:// URIs, FileSystem.getInfoAsync may not return size, use taskItem.size
-          totalSize = taskItem.size || 0;
         }
       } catch (_) {}
 
@@ -469,23 +465,19 @@ export default function FilesScreen({ navigation }) {
       const activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
       const csrfQuery = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
 
-      // Immediately set initial running state
+      // Update transfer status
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
         status: 'running',
-        progress: 20,
-        transferredBytes: Math.round(totalSize * 0.2),
+        progress: 30,
+        transferredBytes: Math.round(totalSize * 0.3),
         totalBytes: totalSize,
-        sizeText: `${formatBytesFixed(totalSize * 0.2)} / ${formatBytesFixed(totalSize)}`,
-        speedDisplay: '正在极速上传...',
+        sizeText: `${formatBytesFixed(totalSize * 0.3)} / ${formatBytesFixed(totalSize)}`,
+        speedDisplay: '正在上传到 Unraid...',
       } : t)));
 
-      // High-Reliability Native Multipart Upload via FileSystem.uploadAsync
-      // This avoids expo-file-system createUploadTask native crash and bridge queue flood
+      // Perform RFC standard multipart upload via native FileSystem.uploadAsync
       const uploadUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}&size=${totalSize}`;
-
-      let serverResult = null;
-      let savedPath = `${taskItem.targetPath}/${taskItem.name}`;
 
       const res = await FileSystem.uploadAsync(uploadUrl, workingUri, {
         fieldName: 'file',
@@ -502,6 +494,8 @@ export default function FilesScreen({ navigation }) {
         return;
       }
 
+      // Parse and strictly validate server response
+      let serverResult = null;
       if (res && res.status >= 200 && res.status < 300) {
         try {
           const rawBody = typeof res.body === 'string' ? res.body.trim() : '';
@@ -524,71 +518,22 @@ export default function FilesScreen({ navigation }) {
         try {
           errBody = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
         } catch (_) {}
-        throw new Error(errBody?.message || `服务端响应错误 (HTTP ${res?.status || 'Unknown'})`);
+        throw new Error(errBody?.message || `服务端响应异常 (HTTP ${res?.status || 'Unknown'})`);
       }
 
-      if (serverResult && serverResult.status === 'error') {
-        throw new Error(serverResult.message || '服务端拒绝写入文件');
-      }
-      
-      // Validate file size reported by server (if available)
-      if (serverResult && serverResult.size !== undefined && totalSize > 0 && serverResult.size === 0) {
-        throw new Error(`服务端写入的文件大小为 0 字节（期望 ${formatBytesFixed(totalSize)}），可能超出了 Nginx 的 post_max_size 限制或上传流中断`);
+      if (!serverResult || serverResult.status !== 'success') {
+        throw new Error(serverResult?.message || '服务端拒绝写入文件或未确认保存');
       }
 
-      // Verification: Ensure file presence on server
-      let isVerifiedSuccess = false;
-      if (serverResult && (serverResult.status === 'success' || serverResult.path)) {
-        isVerifiedSuccess = true;
-        if (serverResult.path) savedPath = serverResult.path;
+      if (serverResult.size !== undefined && totalSize > 0 && serverResult.size === 0) {
+        throw new Error(`服务端接收到 0 字节文件（预期 ${formatBytesFixed(totalSize)}），可能超出服务器上传限制`);
       }
 
-      // Allow Unraid FUSE cache to sync and verify with directory query if needed
-      if (!isVerifiedSuccess) {
-        await new Promise(r => setTimeout(r, 400));
-        let checkAttempts = 0;
-        while (checkAttempts < 3) {
-          try {
-            const checkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_list&path=${encodeURIComponent(taskItem.targetPath)}`;
-            const checkData = await apiFetchJson(checkUrl, {}, 6000, 1);
-            if (checkData && checkData.status === 'success' && Array.isArray(checkData.items)) {
-              const targetNameNorm = (taskItem.name || '').normalize('NFC').trim().toLowerCase();
-              const targetNameDecoded = decodeURIComponent(taskItem.name || '').toLowerCase();
-              const fileFound = checkData.items.find(it => {
-                const itNameNorm = (it.name || '').normalize('NFC').trim().toLowerCase();
-                const itNameDecoded = decodeURIComponent(it.name || '').toLowerCase();
-                return (
-                  itNameNorm === targetNameNorm ||
-                  itNameDecoded === targetNameDecoded ||
-                  it.path === savedPath ||
-                  it.name === serverResult?.name ||
-                  it.name === taskItem.name
-                );
-              });
-              if (fileFound) {
-                isVerifiedSuccess = true;
-                savedPath = fileFound.path || savedPath;
-                break;
-              }
-            }
-          } catch (checkErr) {
-            console.log('[Upload] Secondary check attempt err:', checkErr);
-          }
-          checkAttempts++;
-          if (checkAttempts < 3) {
-            await new Promise(r => setTimeout(r, 500));
-          }
-        }
-      }
-
-      // If not yet verified, throw error to tell user the file was not confirmed
-      if (!isVerifiedSuccess) {
-        throw new Error('文件写入未被服务端确认，目标目录未检测到该文件，请检查目录权限或文件大小是否超出 Nginx 限制');
-      }
+      const savedPath = serverResult.path || `${taskItem.targetPath}/${taskItem.name}`;
 
       delete activeTasksRef.current[taskId];
-      // Clean up any temp cache files (DocumentPicker caches are managed by the OS)
 
+      // Mark success in transfer list
       setTransfers(prev => {
         const next = prev.map(t => (t.id === taskId ? {
           ...t,
@@ -604,31 +549,41 @@ export default function FilesScreen({ navigation }) {
         return next;
       });
 
+      // Directly refresh file list of current directory
       const dirToReload = taskItem.targetPath || currentPath;
       await loadDirectory(cleanBaseUrl, apiToken, dirToReload);
-      await backgroundTransferManager.notifyTransferEnded(taskId, 'success', {
-        name: taskItem.name,
-        sizeText: formatBytesFixed(totalSize),
-      });
+
+      try {
+        await backgroundTransferManager.notifyTransferEnded(taskId, 'success', {
+          name: taskItem.name,
+          sizeText: formatBytesFixed(totalSize),
+        });
+      } catch (_) {}
+
       showConfirm({
         type: 'success',
         title: '上传成功',
-        message: `文件已成功写入 Unraid 存储：\n${savedPath}`,
+        message: `文件 "${taskItem.name}" 已成功上传至 Unraid 存储：\n${savedPath}`,
         confirmText: '好的',
         showCancel: false,
       });
+
     } catch (err) {
       delete activeTasksRef.current[taskId];
       const isCancelled = abortController.signal.aborted || err.name === 'AbortError' || (err.message && err.message.includes('abort'));
-      await backgroundTransferManager.notifyTransferEnded(taskId, isCancelled ? 'paused' : 'error', {
-        name: taskItem.name,
-      });
+
+      try {
+        await backgroundTransferManager.notifyTransferEnded(taskId, isCancelled ? 'paused' : 'error', {
+          name: taskItem.name,
+        });
+      } catch (_) {}
+
       if (isCancelled) {
         setTransfers(prev => {
           const next = prev.map(t => (t.id === taskId ? {
             ...t,
             status: 'paused',
-            speedDisplay: '已暂停(可重试)',
+            speedDisplay: '已暂停',
           } : t));
           saveTransfersQueue(next);
           return next;
@@ -638,11 +593,12 @@ export default function FilesScreen({ navigation }) {
           const next = prev.map(t => (t.id === taskId ? {
             ...t,
             status: 'error',
-            speedDisplay: '中断(可重试)',
+            speedDisplay: '失败',
           } : t));
           saveTransfersQueue(next);
           return next;
         });
+
         showConfirm({
           type: 'warning',
           title: '上传失败',
@@ -654,7 +610,7 @@ export default function FilesScreen({ navigation }) {
     }
   };
 
-  // Pause / Cancel active upload
+    // Pause / Cancel active upload
   const pauseUploadTask = (taskId) => {
     try {
       const task = activeTasksRef.current[taskId];

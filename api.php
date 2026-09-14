@@ -3186,6 +3186,7 @@ function handle_file_upload() {
     @ini_set('memory_limit', '512M');
     @ignore_user_abort(true);
 
+    // 1. Validate destination path
     $rawPath = isset($_GET['path']) ? $_GET['path'] : (isset($_POST['path']) ? $_POST['path'] : ALLOWED_ROOT);
     $targetDir = sanitize_path($rawPath);
     
@@ -3193,7 +3194,7 @@ function handle_file_upload() {
     if ($targetDir === '/mnt' || $targetDir === '/mnt/user') {
         json_output([
             'status' => 'error',
-            'message' => '无法直接上传到共享根目录 /mnt/user，请先点击进入具体的共享文件夹（例如 downloads、appdata 等）后再上传。'
+            'message' => '无法直接上传到共享根目录 /mnt/user，请先进入具体的共享文件夹（例如 downloads、appdata 等）后再上传。'
         ], 400);
     }
 
@@ -3206,10 +3207,21 @@ function handle_file_upload() {
         @chgrp($targetDir, 'users');
     }
 
+    // 2. Resolve destination file name
     $filename = isset($_GET['filename']) ? trim($_GET['filename']) : (isset($_POST['filename']) ? trim($_POST['filename']) : '');
     if (stripos($filename, '%') !== false) {
         $filename = rawurldecode($filename);
     }
+
+    $destName = !empty($filename) ? $filename : (!empty($_FILES['file']['name']) ? $_FILES['file']['name'] : ('upload_' . date('Ymd_His')));
+    $cleanDestName = safe_basename($destName);
+    if (empty($cleanDestName)) {
+        $cleanDestName = 'upload_' . date('Ymd_His');
+    }
+    $destPath = rtrim($targetDir, '/') . '/' . $cleanDestName;
+
+    // 3. Write file data
+    $writeSuccess = false;
 
     if (!empty($_FILES['file'])) {
         $file = $_FILES['file'];
@@ -3227,139 +3239,90 @@ function handle_file_upload() {
             json_output(['status' => 'error', 'message' => "上传失败: {$detail}"], 400);
         }
 
-        $destName = !empty($filename) ? $filename : $file['name'];
-        $cleanDestName = safe_basename($destName);
-        if (empty($cleanDestName)) {
-            $cleanDestName = 'upload_' . time();
-        }
-        $destPath = rtrim($targetDir, '/') . '/' . $cleanDestName;
-
-        $uploadSuccess = false;
         if (@move_uploaded_file($file['tmp_name'], $destPath)) {
-            $uploadSuccess = true;
+            $writeSuccess = true;
         } elseif (@copy($file['tmp_name'], $destPath)) {
-            $uploadSuccess = true;
+            $writeSuccess = true;
             @unlink($file['tmp_name']);
         } else {
-            // Stream copy fallback
+            // Buffered stream copy fallback
             $in = @fopen($file['tmp_name'], 'rb');
             $out = @fopen($destPath, 'wb');
             if ($in && $out) {
                 while (!feof($in)) {
-                    $buf = fread($in, 65536);
-                    if ($buf !== false && strlen($buf) > 0) {
-                        fwrite($out, $buf);
-                    }
+                    $buf = fread($in, 1048576);
+                    if ($buf !== false && strlen($buf) > 0) fwrite($out, $buf);
                 }
                 fclose($in);
                 fclose($out);
                 @unlink($file['tmp_name']);
-                $uploadSuccess = true;
+                $writeSuccess = true;
             }
         }
-
-        if (!$uploadSuccess) {
-            $err = error_get_last();
-            $msg = $err ? $err['message'] : '未知权限错误';
-            log_upload_debug("file_upload write failed for {$destPath}: {$msg}");
-            json_output(['status' => 'error', 'message' => "无法将文件写入目标路径: {$destPath} ({$msg})"], 500);
-        }
-
-        @chmod($destPath, 0666);
-        if (function_exists('posix_getuid') && @posix_getuid() === 0) {
-            @chown($destPath, 'nobody');
-            @chgrp($destPath, 'users');
-        }
-        clearstatcache(true, $destPath);
-        $finalSize = @filesize($destPath);
-        $expectedSize = isset($_GET['size']) ? floatval($_GET['size']) : -1;
-        
-        // Verify file size: if expected > 0 but actual is 0, it means nothing was uploaded
-        if ($finalSize === 0 && $expectedSize > 0) {
-            @unlink($destPath);
-            log_upload_debug("file_upload zero-size after move: dest={$destPath}, expected={$expectedSize}");
-            json_output(['status' => 'error', 'message' => '上传文件为空（0字节），可能超出了服务器的 post_max_size 或 upload_max_filesize 限制，请检查 Nginx/PHP 配置'], 400);
-        }
-        log_upload_debug("file_upload ok: dest={$destPath}, size={$finalSize}");
-
-        json_output([
-            'status' => 'success',
-            'message' => '文件已成功上传至 Unraid 存储',
-            'path' => $destPath,
-            'size' => $finalSize
-        ]);
     } else {
-        // Direct stream / chunk upload
-        $destName = !empty($filename) ? $filename : '';
-        if (empty($destName) || $destName === 'undefined') {
-            $destName = 'upload_' . date('Ymd_His');
-        }
-        $cleanDestName = safe_basename($destName);
-        if (empty($cleanDestName) || $cleanDestName === 'undefined') {
-            $cleanDestName = 'upload_' . date('Ymd_His');
-        }
-        $destPath = rtrim($targetDir, '/') . '/' . $cleanDestName;
-        
+        // Direct stream fallback from php://input
         $in = @fopen('php://input', 'rb');
-        if (!$in) {
-            json_output(['status' => 'error', 'message' => 'Failed to open php://input stream'], 500);
-        }
         $out = @fopen($destPath, 'wb');
-        if (!$out) {
+        if ($in && $out) {
+            $bytesWritten = 0;
+            while (!feof($in)) {
+                $buff = fread($in, 1048576);
+                if ($buff === false || $buff === '') break;
+                $w = fwrite($out, $buff);
+                if ($w === false) break;
+                $bytesWritten += $w;
+            }
+            @fflush($out);
+            @fclose($out);
             @fclose($in);
-            json_output(['status' => 'error', 'message' => 'Failed to open destination file for writing: ' . $destPath], 500);
-        }
-
-        $bytesWritten = 0;
-        while (!feof($in)) {
-            @set_time_limit(60);
-            $buff = fread($in, 1048576);
-            if ($buff === false || $buff === '') {
-                break;
+            if ($bytesWritten > 0 || (isset($_GET['size']) && floatval($_GET['size']) === 0.0)) {
+                $writeSuccess = true;
             }
-            $w = fwrite($out, $buff);
-            if ($w === false) {
-                break;
-            }
-            $bytesWritten += $w;
         }
-        @fflush($out);
-        @fclose($out);
-        @fclose($in);
-
-        clearstatcache(true, $destPath);
-        clearstatcache(true, $targetDir);
-        $fileSize = @filesize($destPath);
-        $expectedSize = isset($_GET['size']) ? floatval($_GET['size']) : (isset($_POST['size']) ? floatval($_POST['size']) : -1);
-
-        if ($bytesWritten === 0 && $expectedSize !== 0.0) {
-            @unlink($destPath);
-            json_output(['status' => 'error', 'message' => '未接收到上传数据（0 字节）。若文件较大，可能超出了 Unraid Nginx/PHP 的 post_max_size 限制。'], 400);
-        }
-
-        @chmod($destPath, 0666);
-        if (function_exists('posix_getuid') && @posix_getuid() === 0) {
-            @chown($destPath, 'nobody');
-            @chgrp($destPath, 'users');
-        }
-        clearstatcache(true, $destPath);
-        clearstatcache(true, $targetDir);
-        log_upload_debug("file_upload stream ok: dest={$destPath}, size=" . $fileSize);
-        json_output([
-            'status' => 'success',
-            'message' => '文件已成功上传至 Unraid 存储',
-            'path' => $destPath,
-            'name' => $cleanDestName,
-            'size' => $fileSize
-        ]);
     }
+
+    // 4. Verify physical file creation and size
+    clearstatcache(true, $destPath);
+    clearstatcache(true, $targetDir);
+
+    if (!$writeSuccess || !file_exists($destPath)) {
+        @unlink($destPath);
+        $err = error_get_last();
+        $msg = $err ? $err['message'] : '写入失败或目标磁盘无写权限';
+        log_upload_debug("file_upload failed: dest={$destPath}, err={$msg}");
+        json_output(['status' => 'error', 'message' => "无法将文件写入目标路径: {$destPath} ({$msg})"], 500);
+    }
+
+    $finalSize = (float)@filesize($destPath);
+    $expectedSize = isset($_GET['size']) ? floatval($_GET['size']) : (isset($_POST['size']) ? floatval($_POST['size']) : -1);
+
+    if ($finalSize === 0.0 && $expectedSize > 0.0) {
+        @unlink($destPath);
+        log_upload_debug("file_upload 0-byte: dest={$destPath}, expected={$expectedSize}");
+        json_output(['status' => 'error', 'message' => '上传文件大小为 0 字节，可能超出了服务器 Nginx/PHP 的 post_max_size 限制或网络流中断'], 400);
+    }
+
+    // 5. Apply standard Unraid permissions (nobody:users 0666)
+    @chmod($destPath, 0666);
+    if (function_exists('posix_getuid') && @posix_getuid() === 0) {
+        @chown($destPath, 'nobody');
+        @chgrp($destPath, 'users');
+    }
+    clearstatcache(true, $destPath);
+    clearstatcache(true, $targetDir);
+
+    log_upload_debug("file_upload success: dest={$destPath}, size={$finalSize}");
+
+    json_output([
+        'status' => 'success',
+        'message' => '文件已成功上传至 Unraid 存储',
+        'path' => $destPath,
+        'name' => $cleanDestName,
+        'size' => $finalSize,
+        'mtime' => date('Y-m-d H:i:s', @filemtime($destPath))
+    ]);
 }
 
-/**
- * Robust chunked upload handler:
- * Receives chunks via Multipart ($_FILES['chunk']) OR Base64 JSON payload,
- * writes into file at specified offset, bypassing PHP post_max_size limits.
- */
 function handle_file_chunk() {
     @set_time_limit(0);
     @ini_set('max_execution_time', '0');
