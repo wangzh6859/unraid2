@@ -299,10 +299,18 @@ export default function DockerDetailsScreen({ route }) {
 
   // 容器更新操作（与 Unraid 网页端“更新就绪”完全对齐）
   const handleUpdateDocker = (name) => {
+    const targetDocker = dockers.find(d => d.name === name);
+    const localInfo = targetDocker?.local_digest 
+      ? `\n\n当前镜像摘要:\n${targetDocker.local_digest}` 
+      : (targetDocker?.image_id ? `\n\n当前镜像ID:\n${targetDocker.image_id}` : '');
+    const remoteInfo = targetDocker?.remote_digest 
+      ? `\n\n最新仓库摘要:\n${targetDocker.remote_digest}` 
+      : '';
+
     showConfirm({
       type: 'warning',
       title: '更新容器',
-      message: `确定要拉取最新镜像并重新构筑容器「${name}」吗？\n升级过程中容器将短暂离线，通常耗时 1 至 3 分钟。`,
+      message: `确定要拉取最新镜像并重新构筑容器「${name}」吗？${localInfo}${remoteInfo}\n\n升级过程中容器将短暂离线，通常耗时 1 至 3 分钟。`,
       confirmText: '立即更新',
       cancelText: '取消',
       showCancel: true,
@@ -345,7 +353,8 @@ export default function DockerDetailsScreen({ route }) {
               showCancel: false,
             });
             await fetchDockerData();
-            setTimeout(() => fetchDockerData(), 2000);
+            setTimeout(() => fetchDockerData(), 1500);
+            setTimeout(() => fetchDockerData(), 3500);
           } else {
             showConfirm({
               type: 'error',

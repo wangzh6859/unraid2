@@ -6,7 +6,7 @@
  * Release: 2026-09-13
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.14.01');
+define('UNRAID_API_VERSION', '2026.09.14.02');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -719,7 +719,7 @@ function get_docker_updates_map() {
     // -------------------------------------------------------------
     // Source 3: Docker Engine Containers & Local Image Inspect
     // -------------------------------------------------------------
-    $inspectRaw = @shell_exec('docker inspect --format "{{.Name}}\t{{.Config.Image}}\t{{.Image}}\t{{.Id}}" $(docker ps -aq) 2>/dev/null');
+    $inspectRaw = @shell_exec('docker inspect --format "{{.Name}}\t{{.Config.Image}}\t{{.Image}}\t{{.Id}}\t{{range .RepoDigests}}{{.}} {{end}}" $(docker ps -aq) 2>/dev/null');
     if (!empty($inspectRaw)) {
         $imagesRaw = @shell_exec('docker images --no-trunc --format "{{.Repository}}:{{.Tag}}\t{{.ID}}" 2>/dev/null');
         $tagToId = [];
@@ -739,11 +739,49 @@ function get_docker_updates_map() {
                 $cImageTag = trim($parts[1]);
                 $cRunningId = preg_replace('/^sha256:/', '', trim($parts[2]));
                 $cFullId = isset($parts[3]) ? trim($parts[3]) : '';
+                $repoDigestsStr = isset($parts[4]) ? trim($parts[4]) : '';
+
+                // Extract local repo digest if present
+                $localDigest = '';
+                if (!empty($repoDigestsStr)) {
+                    $digests = explode(' ', $repoDigestsStr);
+                    foreach ($digests as $d) {
+                        $d = trim($d);
+                        if (strpos($d, '@sha256:') !== false) {
+                            $localDigest = substr($d, strpos($d, '@sha256:') + 1);
+                            break;
+                        }
+                    }
+                }
+
+                // Check status from unraid-update-status.json
+                $remoteDigest = '';
+                $stStatus = '';
+                if (!empty($imageUpdateStatus) && !empty($cImageTag)) {
+                    $lookupImg = $cImageTag;
+                    if (strpos($lookupImg, ':') === false) $lookupImg .= ':latest';
+                    if (isset($imageUpdateStatus[$lookupImg])) {
+                        $st = $imageUpdateStatus[$lookupImg];
+                        $stStatus = strtolower(trim((string)($st['status'] ?? '')));
+                        $remoteDigest = trim((string)($st['remote'] ?? ''));
+                        if (empty($localDigest) && !empty($st['local'])) {
+                            $localDigest = trim((string)$st['local']);
+                        }
+                    }
+                }
 
                 // A. Check for "ready" state: local image pulled with different ID than running container
                 $localImgId = $tagToId[$cImageTag] ?? '';
                 if (!empty($localImgId) && !empty($cRunningId) && $localImgId !== $cRunningId) {
-                    $rec = ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪'];
+                    $rec = [
+                        'has_update' => true,
+                        'status' => 'ready',
+                        'status_text' => '更新就绪',
+                        'local_digest' => $localDigest,
+                        'remote_digest' => $remoteDigest,
+                        'running_image_id' => $cRunningId,
+                        'latest_image_id' => $localImgId,
+                    ];
                     $register($cName, $rec);
                     if (!empty($cFullId)) {
                         $dockerUpdatesMap[substr($cFullId, 0, 12)] = $rec;
@@ -754,29 +792,44 @@ function get_docker_updates_map() {
 
                 // B. If not already marked from docker.json, check unraid-update-status.json
                 if (!empty($imageUpdateStatus) && !empty($cImageTag) && !isset($dockerUpdatesMap[$cName])) {
-                    $lookupImg = $cImageTag;
-                    if (strpos($lookupImg, ':') === false) $lookupImg .= ':latest';
-                    if (isset($imageUpdateStatus[$lookupImg])) {
-                        $st = $imageUpdateStatus[$lookupImg];
-                        $statusStr = strtolower(trim((string)($st['status'] ?? '')));
-                        $hasRemDiff = (!empty($st['remote']) && !empty($st['local']) && $st['remote'] !== $st['local']);
-                        
-                        if ($statusStr === 'false' || $hasRemDiff) {
-                            $rec = ['has_update' => true, 'status' => 'update', 'status_text' => '更新'];
-                            $register($cName, $rec);
-                            if (!empty($cFullId)) {
-                                $dockerUpdatesMap[substr($cFullId, 0, 12)] = $rec;
-                                $dockerUpdatesMap[$cFullId] = $rec;
-                            }
-                        } elseif ($statusStr === 'true' && !$hasRemDiff) {
-                            $rec = ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新'];
-                            $register($cName, $rec);
-                            if (!empty($cFullId)) {
-                                $dockerUpdatesMap[substr($cFullId, 0, 12)] = $rec;
-                                $dockerUpdatesMap[$cFullId] = $rec;
-                            }
+                    $hasRemDiff = (!empty($remoteDigest) && !empty($localDigest) && $remoteDigest !== $localDigest);
+                    if ($stStatus === 'false' || $hasRemDiff) {
+                        $rec = [
+                            'has_update' => true,
+                            'status' => 'update',
+                            'status_text' => '更新',
+                            'local_digest' => $localDigest,
+                            'remote_digest' => $remoteDigest,
+                            'running_image_id' => $cRunningId,
+                            'latest_image_id' => $localImgId,
+                        ];
+                        $register($cName, $rec);
+                        if (!empty($cFullId)) {
+                            $dockerUpdatesMap[substr($cFullId, 0, 12)] = $rec;
+                            $dockerUpdatesMap[$cFullId] = $rec;
+                        }
+                    } elseif ($stStatus === 'true' && !$hasRemDiff) {
+                        $rec = [
+                            'has_update' => false,
+                            'status' => 'up-to-date',
+                            'status_text' => '最新',
+                            'local_digest' => $localDigest,
+                            'remote_digest' => $remoteDigest,
+                            'running_image_id' => $cRunningId,
+                            'latest_image_id' => $localImgId,
+                        ];
+                        $register($cName, $rec);
+                        if (!empty($cFullId)) {
+                            $dockerUpdatesMap[substr($cFullId, 0, 12)] = $rec;
+                            $dockerUpdatesMap[$cFullId] = $rec;
                         }
                     }
+                } elseif (isset($dockerUpdatesMap[$cName])) {
+                    // Enrich existing record with digest details
+                    $dockerUpdatesMap[$cName]['local_digest'] = $localDigest;
+                    $dockerUpdatesMap[$cName]['remote_digest'] = $remoteDigest;
+                    $dockerUpdatesMap[$cName]['running_image_id'] = $cRunningId;
+                    $dockerUpdatesMap[$cName]['latest_image_id'] = $localImgId;
                 }
             }
         }
@@ -1136,6 +1189,10 @@ $disks[] = [
                     'update_available' => $hasUpdate,
                     'update_status' => $updateStatus,
                     'update_status_text' => $updateStatusText,
+                    'image' => $cImage,
+                    'image_id' => !empty($info['running_image_id']) ? $info['running_image_id'] : '',
+                    'local_digest' => !empty($info['local_digest']) ? $info['local_digest'] : '',
+                    'remote_digest' => !empty($info['remote_digest']) ? $info['remote_digest'] : '',
                 ];
             }
         }
@@ -1486,6 +1543,88 @@ function handle_update_docker() {
     }
 
     if ($updated) {
+        // 1. Immediately update Unraid official docker.json to mark container up-to-date
+        $jsonCandidates = [
+            '/usr/local/emhttp/state/plugins/dynamix.docker.manager/docker.json',
+            '/var/local/emhttp/plugins/dynamix.docker.manager/docker.json',
+            '/var/local/emhttp/docker.json',
+            '/tmp/docker.json'
+        ];
+        foreach ($jsonCandidates as $jf) {
+            if (file_exists($jf)) {
+                $rawJ = @file_get_contents($jf);
+                if ($rawJ) {
+                    $arrJ = @json_decode($rawJ, true);
+                    if (is_array($arrJ)) {
+                        $targetKeys = [$cleanTarget, 'my-' . $cleanTarget, ltrim($cleanTarget, '/')];
+                        $modifiedJ = false;
+                        foreach ($targetKeys as $tk) {
+                            if (isset($arrJ[$tk]) && is_array($arrJ[$tk])) {
+                                $arrJ[$tk]['updated'] = 'true';
+                                $modifiedJ = true;
+                            }
+                        }
+                        if ($modifiedJ) {
+                            @file_put_contents($jf, json_encode($arrJ, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+                            @touch($jf);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Immediately update Unraid unraid-update-status.json to synchronize local digest with remote
+        $statusFiles = [
+            '/var/lib/docker/unraid-update-status.json',
+            '/var/local/emhttp/plugins/dynamix.docker.manager/unraid-update-status.json'
+        ];
+        $newDigestRaw = trim(@shell_exec("docker inspect --format '{{range .RepoDigests}}{{.}} {{end}}' " . escapeshellarg($imageName) . " 2>/dev/null"));
+        $newDigest = '';
+        if (!empty($newDigestRaw)) {
+            $partsD = explode(' ', $newDigestRaw);
+            foreach ($partsD as $pd) {
+                if (strpos($pd, '@sha256:') !== false) {
+                    $newDigest = substr($pd, strpos($pd, '@sha256:') + 1);
+                    break;
+                }
+            }
+        }
+        foreach ($statusFiles as $sf) {
+            if (file_exists($sf)) {
+                $rawS = @file_get_contents($sf);
+                if ($rawS) {
+                    $arrS = @json_decode($rawS, true);
+                    if (is_array($arrS)) {
+                        $lookupImgs = [$imageName, $imageName . ':latest', preg_replace('/:latest$/', '', $imageName)];
+                        $modS = false;
+                        foreach ($lookupImgs as $li) {
+                            if (isset($arrS[$li]) && is_array($arrS[$li])) {
+                                $arrS[$li]['status'] = 'true';
+                                if (!empty($newDigest)) {
+                                    $arrS[$li]['local'] = $newDigest;
+                                    $arrS[$li]['remote'] = $newDigest;
+                                } elseif (!empty($arrS[$li]['remote'])) {
+                                    $arrS[$li]['local'] = $arrS[$li]['remote'];
+                                }
+                                $modS = true;
+                            }
+                        }
+                        if ($modS) {
+                            @file_put_contents($sf, json_encode($arrS, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+                            @touch($sf);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Trigger official Unraid dockerupdate check in background
+        if (file_exists('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate.php')) {
+            @exec("nohup php /usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate.php check >/dev/null 2>&1 &");
+        } elseif (file_exists('/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerUpdate.php')) {
+            @exec("nohup php /usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerUpdate.php >/dev/null 2>&1 &");
+        }
+
         // Clean up Unraid docker.ini entry to mark updated
         $iniFile = '/var/local/emhttp/docker.ini';
         if (file_exists($iniFile)) {
