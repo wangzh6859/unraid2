@@ -4,13 +4,17 @@
 
 ---
 
-## [v1.3.1] - 2026-09-14
-> **核心主题**：传输引擎暴风加速、落盘真实性强校验、FastCGI协议修复、版本更新日志系统上线
+## [v1.3.186 / api.php v2026.09.14.07] - 2026-09-14
+> **核心主题**：服务端 FastCGI 传输协议彻底修复、流式上传 1MB 循环直写、准确 Content-Length 响应头、杜绝二次校验空响应
+
+### 🔧 服务端 API 协议彻底修复 (api.php v2026.09.14.07)
+- **精准 Content-Length 响应头**：在 `json_output()` 中重新确立 `header('Content-Length: ' . strlen($json))` 与 `header('Connection: close')`，彻底消除由于缺少报文长度导致 Android OkHttp / Expo 偶发读取到空响应体（`res.body === ""`）的底层隐患。
+- **剔除过早 FastCGI 终止 (`fastcgi_finish_request`)**：移除在脚本退出前调用的 `fastcgi_finish_request()`，防止 Nginx 在 FastCGI 尚未将 JSON 字节流全部推入 TCP 缓冲区时过早切断连接，彻底根治“空响应 (HTTP 200)”和二次校验阶段 `file_list` 异常引起的“文件写入未被服务端确认”报错。
+- **1MB 稳健分块写入循环**：后端 `handle_file_upload()` 采用稳健的 1MB `fread` 循环持续读取 `php://input` 流并写入目标文件，免除不可靠的 `stream_copy_to_stream` 流包装兼容性问题。
 
 ### 🚀 传输引擎革命性提速 (Native Streaming)
-- **原生二进制流直连 (Native Binary Stream)**：彻底重构上传逻辑，弃用低效的 JavaScript Base64 编码与 JSON 切片打包方案，改用基于底层 OkHttp 的原生二进制流直连传输（`FileSystem.createUploadTask`）。
+- **原生二进制流直连 (Native Binary Stream)**：重构上传逻辑，弃用低效的 JavaScript Base64 编码与 JSON 切片打包方案，改用基于底层 OkHttp 的原生二进制流直连传输（`FileSystem.createUploadTask`）。
 - **性能飞跃**：消除了 33% 的 Base64 额外网络体积开销与 JS 桥接内存卡顿，在局域网与 Wi-Fi 6 环境下实测传输速率从原本的 1~2 MB/s 暴增至 **50 MB/s ~ 100 MB/s**，完全跑满网络线速。
-- **I/O 缓冲区扩容**：后端 `api.php` 的流式写入与管道转发缓冲区由 512 KB 扩充至 **2 MB (2097152 bytes)**，显著减少磁盘系统调用与 CPU 上下文切换。
 
 ### 🛡️ 严格落盘二次校验（彻底解决“虚假成功”）
 - **杜绝误报**：修复了旧版本在未检测到文件落盘时仍误报“上传成功”的逻辑漏洞。
@@ -19,14 +23,8 @@
 ### 🚫 根目录写入智能拦截
 - **前端+后端双重防护**：Unraid 用户共享目录 `/mnt/user` 根路径受 FUSE 保护，不允许直接散落存放孤立文件。在 App 界面点击上传时增加即时拦截弹窗，指引用户进入具体的子共享目录（如 `downloads`、`appdata` 等）后再上传，防止无意写入根目录造成数据丢失。
 
-### 🔧 FastCGI 与 Nginx 压缩深度适配
-- **后端 `api.php` (升级至 `2026.09.14.06`)**：
-  - 彻底清理 `json_output()` 中的静态 `Content-Length` 响应头，避免与 Unraid Nginx 的 gzip 动态压缩产生协议长度冲突（解决 `空响应 (HTTP 200)` 问题）。
-  - 增补 `fastcgi_finish_request()` 显式调用，确保长连接在 FastCGI 进程销毁前将数据完整推送至客户端。
-  - 在文件写入与重命名完成后立即执行 `clearstatcache(true, $targetDir)`，保证后续列表查询即时刷新。
-
 ### 📝 版本专属更新日志体系
-- **告别千篇一律**：在「设置」页点击「手机 App 版本」即可随时查看当前版本的专属变更明细；检查更新弹窗亦会智能抓取对应版本的详细修复清单，不再显示模糊的通用说明。
+- **专属版本说明**：更新日志明确对齐当前发布版本，告别千篇一律的通用占位文案。
 
 ---
 

@@ -6,7 +6,7 @@
  * Release: 2026-09-13
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.14.06');
+define('UNRAID_API_VERSION', '2026.09.14.07');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -139,35 +139,36 @@ register_shutdown_function(function() {
         while (ob_get_level() > 0) {
             @ob_end_clean();
         }
-        if (!headers_sent()) {
-            http_response_code(500);
-            header('Content-Type: application/json; charset=utf-8');
-        }
-        log_upload_debug("FATAL ERROR: " . $err['message'] . " in " . basename($err['file']) . ":" . $err['line']);
-        echo json_encode([
+        $msg = json_encode([
             'status' => 'error',
             'message' => 'PHP Fatal Error: ' . $err['message'] . ' in ' . basename($err['file']) . ':' . $err['line']
         ], JSON_UNESCAPED_UNICODE);
-        @flush();
-        if (function_exists('fastcgi_finish_request')) {
-            @fastcgi_finish_request();
+        if (!headers_sent()) {
+            http_response_code(500);
+            header('Content-Type: application/json; charset=utf-8');
+            header('Content-Length: ' . strlen($msg));
+            header('Connection: close');
         }
+        log_upload_debug("FATAL ERROR: " . $err['message'] . " in " . basename($err['file']) . ":" . $err['line']);
+        echo $msg;
+        @flush();
         exit;
     }
 
     // Guard against silent empty termination
     if (ob_get_length() === 0) {
-        if (!headers_sent()) {
-            header('Content-Type: application/json; charset=utf-8');
-        }
-        echo json_encode([
+        $msg = json_encode([
             'status' => 'error',
             'message' => 'PHP script terminated unexpectedly with empty output'
         ], JSON_UNESCAPED_UNICODE);
-        @flush();
-        if (function_exists('fastcgi_finish_request')) {
-            @fastcgi_finish_request();
+        if (!headers_sent()) {
+            http_response_code(500);
+            header('Content-Type: application/json; charset=utf-8');
+            header('Content-Length: ' . strlen($msg));
+            header('Connection: close');
         }
+        echo $msg;
+        @flush();
     }
 });
 
@@ -536,10 +537,6 @@ function json_output($data, $code = 200) {
     while (ob_get_level() > 0) {
         @ob_end_clean();
     }
-    if (!headers_sent()) {
-        http_response_code($code);
-        header('Content-Type: application/json; charset=utf-8');
-    }
 
     // Recursively guarantee all string values are valid UTF-8
     if (function_exists('mb_check_encoding') && function_exists('mb_convert_encoding')) {
@@ -574,11 +571,15 @@ function json_output($data, $code = 200) {
 
     $GLOBALS['__api_response_sent'] = true;
 
+    if (!headers_sent()) {
+        http_response_code($code);
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Length: ' . strlen($json));
+        header('Connection: close');
+    }
+
     echo $json;
     @flush();
-    if (function_exists('fastcgi_finish_request')) {
-        @fastcgi_finish_request();
-    }
     exit;
 }
 
@@ -3301,32 +3302,18 @@ function handle_file_upload() {
             json_output(['status' => 'error', 'message' => 'Failed to open destination file for writing: ' . $destPath], 500);
         }
 
-        if (function_exists('stream_set_chunk_size')) {
-            @stream_set_chunk_size($in, 2097152);
-            @stream_set_chunk_size($out, 2097152);
-        }
-        if (function_exists('stream_set_write_buffer')) {
-            @stream_set_write_buffer($out, 0);
-        }
-
         $bytesWritten = 0;
-        if (function_exists('stream_copy_to_stream')) {
-            $bytesWritten = @stream_copy_to_stream($in, $out);
-        }
-        if ($bytesWritten === 0 || $bytesWritten === false) {
-            $bytesWritten = 0;
-            while (!feof($in)) {
-                @set_time_limit(0);
-                $buff = fread($in, 2097152);
-                if ($buff === false || $buff === '') {
-                    break;
-                }
-                $w = fwrite($out, $buff);
-                if ($w === false) {
-                    break;
-                }
-                $bytesWritten += $w;
+        while (!feof($in)) {
+            @set_time_limit(60);
+            $buff = fread($in, 1048576);
+            if ($buff === false || $buff === '') {
+                break;
             }
+            $w = fwrite($out, $buff);
+            if ($w === false) {
+                break;
+            }
+            $bytesWritten += $w;
         }
         @fflush($out);
         @fclose($out);
