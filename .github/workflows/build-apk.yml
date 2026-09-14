@@ -87,22 +87,27 @@ jobs:
             try {
               logText = execSync('git log -n 5 --pretty=format:\"- %s (%h)\"').toString();
             } catch (e) {}
+
+            let changelogSection = '';
+            try {
+              if (fs.existsSync('CHANGELOG.md')) {
+                const cl = fs.readFileSync('CHANGELOG.md', 'utf8');
+                const parts = cl.split(/^##\s+/m);
+                if (parts.length > 1) {
+                  changelogSection = '## ' + parts[1].trim();
+                }
+              }
+            } catch (e) {}
+
             const lines = [
-              '## 📱 Unraid Mobile Manager v1.3.${{ github.run_number }}',
+              changelogSection || ('## 📱 Unraid Mobile Manager v1.3.${{ github.run_number }}'),
               '',
-              '### 🌟 本次版本核心更新与功能特性',
-              '- ⚡ **新增网络唤醒远程开机 (Wake-on-LAN / WOL)**：深度集成 Android 原生 UDP 广播底层，支持向局域网广播 Magic Packet 唤醒魔术包。',
-              '- 🔍 **物理 MAC 地址自动探测**：服务器端自动抓取物理网卡 MAC 地址并在 App 连接时静默同步缓存，彻底免去手动输入背诵繁琐。',
-              '- 🔌 **离线智能感知与一键唤醒**：首页检测到 Unraid 离线或关机时，自动弹出醒目的网络唤醒卡片；点击一键唤醒并自动轮询等待服务器上线。',
-              '- ⚙️ **设置页 WOL 深度配置与快速测试**：支持自定义或修改物理 MAC、局域网广播 IP（默认 255.255.255.255）及唤醒端口（默认 9），并支持一键测试广播。',
-              '- 🛡️ **远程电源管理全闭环**：与此前的安全锁远程关机、重启相配合，实现全生命周期无忧远程电源中控。',
-              '',
-              '### 📦 提交历史目录 (Changelog)',
+              '### 📦 本次提交历史 (Git Commits)',
               logText,
               '',
               '### 📥 下载与服务端同步',
               '- **Android 客户端**: 请下载下方 Assets 中的 \`unraid-v1.3.${{ github.run_number }}.apk\`',
-              '- **服务端 API 脚本**: 请在 Unraid 服务器端同步更新 \`/usr/local/emhttp/api.php\` 并执行 \`chmod 755 /usr/local/emhttp/api.php\`'
+              '- **服务端 API 脚本**: 请在 Unraid 服务器端通过终端命令同步更新 \`/boot/config/my_api/api.php\`'
             ];
             fs.writeFileSync('release_notes.md', lines.join('\n'));
           "
