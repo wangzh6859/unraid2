@@ -342,9 +342,13 @@ export default function DockerDetailsScreen({ route }) {
           }
 
           if (data && data.status === 'success') {
-            const detailMsg = (data.details && data.details.new_container_id) 
-              ? `\n\n新容器 ID: ${data.details.new_container_id}\n镜像 ID: ${data.details.new_image_id || '最新'}`
-              : '';
+            let detailMsg = '';
+            if (data.details) {
+              const cid = data.details.new_container_id ? data.details.new_container_id.substring(0, 12) : '';
+              const iid = data.details.new_image_id ? data.details.new_image_id.replace('sha256:', '').substring(0, 12) : '';
+              const sha = data.details.new_digest_short || (data.details.new_digest ? (data.details.new_digest.substring(0, 16) + '...') : '');
+              detailMsg = (cid ? `\n\n新容器 ID: ${cid}` : '') + (iid ? `\n镜像 ID: ${iid}` : '') + (sha ? `\n镜像 SHA256: ${sha}` : '');
+            }
             showConfirm({
               type: 'success',
               title: '更新成功',
@@ -408,18 +412,37 @@ export default function DockerDetailsScreen({ route }) {
       up: '启动',
       down: '停止',
       restart: '重启',
-      pull: '拉取更新',
+      pull: '拉取更新并升级',
     };
     const label = cmdLabels[cmd] || cmd;
 
     const runAction = async () => {
       setComposeActionLoading(prev => ({ ...prev, [target]: cmd }));
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 mins for pulling images
       try {
         const savedUrl = await AsyncStorage.getItem('@server_url');
         const savedToken = await AsyncStorage.getItem('@api_token');
-        const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=compose_action&target=${encodeURIComponent(target)}&compose_cmd=${cmd}`);
-        const data = await res.json();
-        if (data.status === 'success') {
+        const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=compose_action&target=${encodeURIComponent(target)}&compose_cmd=${cmd}`, {
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        const rawText = await res.text();
+        let data = null;
+        try {
+          data = JSON.parse(rawText);
+        } catch (parseErr) {
+          showConfirm({
+            type: 'error',
+            title: '服务端异常',
+            message: rawText ? (rawText.length > 300 ? rawText.substring(0, 300) + '...' : rawText) : '服务端未返回有效响应',
+            confirmText: '确定',
+            showCancel: false,
+          });
+          return;
+        }
+
+        if (data && data.status === 'success') {
           showConfirm({
             type: 'success',
             title: '操作完成',
@@ -428,16 +451,18 @@ export default function DockerDetailsScreen({ route }) {
             showCancel: false,
           });
           fetchComposeProjects();
+          fetchDockerData();
         } else {
           showConfirm({
             type: 'error',
             title: '执行失败',
-            message: data.message || '执行 Compose 操作失败',
+            message: (data && data.message) ? data.message : '执行 Compose 操作失败',
             confirmText: '确定',
             showCancel: false,
           });
         }
       } catch (e) {
+        clearTimeout(timeoutId);
         showConfirm({
           type: 'warning',
           title: '网络异常',
@@ -450,7 +475,17 @@ export default function DockerDetailsScreen({ route }) {
       }
     };
 
-    if (cmd === 'down') {
+    if (cmd === 'pull') {
+      showConfirm({
+        type: 'info',
+        title: '更新 Compose 堆栈',
+        message: `确定要拉取最新镜像并更新重建堆栈「${target}」的全部容器吗？`,
+        confirmText: '确认更新升级',
+        cancelText: '取消',
+        showCancel: true,
+        onConfirm: runAction,
+      });
+    } else if (cmd === 'down') {
       showConfirm({
         type: 'danger',
         title: '停止 Compose 堆栈',
@@ -480,17 +515,31 @@ export default function DockerDetailsScreen({ route }) {
     setSelectedComposeProject(project);
     setYamlModalVisible(true);
     setYamlLoading(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     try {
       const savedUrl = await AsyncStorage.getItem('@server_url');
       const savedToken = await AsyncStorage.getItem('@api_token');
-      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=compose_file&target=${encodeURIComponent(project.name)}`);
-      const data = await res.json();
-      if (data.status === 'success') {
+      const pathParam = (project.yaml_file || project.path) ? `&path=${encodeURIComponent(project.yaml_file || project.path)}` : '';
+      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=compose_file&target=${encodeURIComponent(project.name)}${pathParam}`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      const rawText = await res.text();
+      let data = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch (pe) {
+        setYamlContent(`# 服务端响应异常:\n${rawText || '空响应'}`);
+        return;
+      }
+      if (data && data.status === 'success') {
         setYamlContent(data.content || '');
       } else {
-        setYamlContent(`# 加载失败: ${data.message || '未知错误'}`);
+        setYamlContent(`# 加载失败: ${(data && data.message) || '未知错误'}`);
       }
     } catch (e) {
+      clearTimeout(timeoutId);
       setYamlContent(`# 加载失败: ${e.message}`);
     } finally {
       setYamlLoading(false);
@@ -501,16 +550,28 @@ export default function DockerDetailsScreen({ route }) {
   const saveYamlFile = async () => {
     if (!selectedComposeProject) return;
     setYamlSaving(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     try {
       const savedUrl = await AsyncStorage.getItem('@server_url');
       const savedToken = await AsyncStorage.getItem('@api_token');
-      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=compose_save&target=${encodeURIComponent(selectedComposeProject.name)}`, {
+      const pathParam = (selectedComposeProject.yaml_file || selectedComposeProject.path) ? `&path=${encodeURIComponent(selectedComposeProject.yaml_file || selectedComposeProject.path)}` : '';
+      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=compose_save&target=${encodeURIComponent(selectedComposeProject.name)}${pathParam}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `content=${encodeURIComponent(yamlContent)}`
+        body: `content=${encodeURIComponent(yamlContent)}`,
+        signal: controller.signal
       });
-      const data = await res.json();
-      if (data.status === 'success') {
+      clearTimeout(timeoutId);
+      const rawText = await res.text();
+      let data = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch (pe) {
+        showConfirm({ type: 'error', title: '保存异常', message: rawText || '服务端响应异常', showCancel: false });
+        return;
+      }
+      if (data && data.status === 'success') {
         showConfirm({
           type: 'success',
           title: '保存成功',
@@ -528,9 +589,10 @@ export default function DockerDetailsScreen({ route }) {
           }
         });
       } else {
-        showConfirm({ type: 'error', title: '保存失败', message: data.message || '无法保存 YAML 文件', showCancel: false });
+        showConfirm({ type: 'error', title: '保存失败', message: (data && data.message) || '无法保存 YAML 文件', showCancel: false });
       }
     } catch (e) {
+      clearTimeout(timeoutId);
       showConfirm({ type: 'warning', title: '网络异常', message: e.message, showCancel: false });
     } finally {
       setYamlSaving(false);
@@ -543,20 +605,34 @@ export default function DockerDetailsScreen({ route }) {
     setComposeLogsModalVisible(true);
     setComposeLogsLoading(true);
     setComposeLogsContent('');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
     try {
       const savedUrl = await AsyncStorage.getItem('@server_url');
       const savedToken = await AsyncStorage.getItem('@api_token');
-      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=compose_logs&target=${encodeURIComponent(project.name)}&lines=250`);
-      const data = await res.json();
-      if (data.status === 'success') {
+      const pathParam = (project.yaml_file || project.path) ? `&path=${encodeURIComponent(project.yaml_file || project.path)}` : '';
+      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=compose_logs&target=${encodeURIComponent(project.name)}&lines=250${pathParam}`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      const rawText = await res.text();
+      let data = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch (pe) {
+        setComposeLogsContent(`服务端响应异常:\n${rawText || '空响应'}`);
+        return;
+      }
+      if (data && data.status === 'success') {
         setComposeLogsContent(data.logs || '暂无日志输出');
         setTimeout(() => {
           if (composeLogScrollRef.current) composeLogScrollRef.current.scrollToEnd({ animated: true });
         }, 300);
       } else {
-        setComposeLogsContent(`获取日志失败: ${data.message}`);
+        setComposeLogsContent(`获取日志失败: ${(data && data.message) || '未知错误'}`);
       }
     } catch (e) {
+      clearTimeout(timeoutId);
       setComposeLogsContent(`网络异常: ${e.message}`);
     } finally {
       setComposeLogsLoading(false);

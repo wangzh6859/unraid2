@@ -6,7 +6,7 @@
  * Release: 2026-09-13
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.14.02');
+define('UNRAID_API_VERSION', '2026.09.14.03');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -526,7 +526,6 @@ switch ($action) {
 // Helper Output Function
 // -------------------------------------------------------------
 function json_output($data, $code = 200) {
-    $GLOBALS['__api_response_sent'] = true;
     while (ob_get_level() > 0) {
         @ob_end_clean();
     }
@@ -536,13 +535,15 @@ function json_output($data, $code = 200) {
     }
 
     // Recursively guarantee all string values are valid UTF-8
-    array_walk_recursive($data, function(&$val) {
-        if (is_string($val)) {
-            if (!mb_check_encoding($val, 'UTF-8')) {
-                $val = @mb_convert_encoding($val, 'UTF-8', 'UTF-8, GB18030, GBK, BIG5, ISO-8859-1');
+    if (function_exists('mb_check_encoding') && function_exists('mb_convert_encoding')) {
+        array_walk_recursive($data, function(&$val) {
+            if (is_string($val)) {
+                if (!mb_check_encoding($val, 'UTF-8')) {
+                    $val = @mb_convert_encoding($val, 'UTF-8', 'UTF-8, GB18030, GBK, BIG5, ISO-8859-1');
+                }
             }
-        }
-    });
+        });
+    }
 
     $flags = JSON_UNESCAPED_UNICODE;
     if (defined('JSON_PARTIAL_OUTPUT_ON_ERROR')) {
@@ -563,6 +564,8 @@ function json_output($data, $code = 200) {
     if (empty($json)) {
         $json = '{"status":"error","message":"Unknown JSON generation failure"}';
     }
+
+    $GLOBALS['__api_response_sent'] = true;
 
     if (!headers_sent()) {
         header('Content-Length: ' . strlen($json));
@@ -1698,6 +1701,21 @@ function handle_update_docker() {
         }
 
         $newContainerImgId = trim(@shell_exec("docker inspect --format '{{.Image}}' {$escaped} 2>/dev/null"));
+        $cleanShortImgId = preg_replace('/^sha256:/', '', $newContainerImgId);
+        $cleanShortImgId = substr($cleanShortImgId, 0, 12);
+
+        // Get actual RepoDigest SHA256 (e.g. c555c6e1c8af2aea...)
+        $newRepoDigestsRaw = trim(@shell_exec("docker inspect --format '{{range .RepoDigests}}{{.}} {{end}}' " . escapeshellarg($imageName) . " 2>/dev/null"));
+        if (empty($newRepoDigestsRaw) && !empty($newContainerImgId)) {
+            $newRepoDigestsRaw = trim(@shell_exec("docker inspect --format '{{range .RepoDigests}}{{.}} {{end}}' " . escapeshellarg($newContainerImgId) . " 2>/dev/null"));
+        }
+        $newSha256 = '';
+        if (!empty($newRepoDigestsRaw)) {
+            if (preg_match('/sha256:([a-f0-9]{64})/', $newRepoDigestsRaw, $m)) {
+                $newSha256 = $m[1];
+            }
+        }
+
         $newContainerImgCreated = trim(@shell_exec("docker inspect --format '{{.Created}}' " . escapeshellarg($newContainerImgId) . " 2>/dev/null"));
         $containerCreated = trim(@shell_exec("docker inspect --format '{{.Created}}' {$escaped} 2>/dev/null"));
 
@@ -1708,8 +1726,10 @@ function handle_update_docker() {
                 'container' => $cleanTarget,
                 'old_container_id' => substr($oldId, 0, 12),
                 'new_container_id' => !empty($newId) ? substr($newId, 0, 12) : substr($oldId, 0, 12),
-                'old_image_id' => substr($oldImgId, 0, 19),
-                'new_image_id' => substr($newContainerImgId, 0, 19),
+                'old_image_id' => substr(preg_replace('/^sha256:/', '', $oldImgId), 0, 12),
+                'new_image_id' => $cleanShortImgId,
+                'new_digest' => $newSha256,
+                'new_digest_short' => !empty($newSha256) ? (substr($newSha256, 0, 16) . '...') : '',
                 'image_created' => $newContainerImgCreated,
                 'container_created' => $containerCreated,
                 'output' => trim($updaterOut)
@@ -2082,6 +2102,75 @@ function get_compose_cmd() {
     return $cmd;
 }
 
+function find_compose_file($target, $path = '') {
+    $target = trim((string)$target);
+    $path = trim((string)$path);
+
+    if (!empty($path)) {
+        if (is_file($path)) return $path;
+        if (is_dir($path)) {
+            $candidates = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
+            foreach ($candidates as $c) {
+                if (file_exists("{$path}/{$c}")) return "{$path}/{$c}";
+            }
+        }
+    }
+
+    // 1. Authoritative: Inspect Docker container labels for this compose project
+    if (!empty($target)) {
+        $escapedTarget = escapeshellarg("label=com.docker.compose.project={$target}");
+        $cFilesRaw = @shell_exec("docker ps -a --filter {$escapedTarget} --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' 2>/dev/null");
+        if (!empty($cFilesRaw)) {
+            $cFiles = array_filter(array_map('trim', explode("\n", $cFilesRaw)));
+            foreach ($cFiles as $cf) {
+                if (file_exists($cf) && is_file($cf)) return $cf;
+            }
+        }
+        $cWorkingDirRaw = @shell_exec("docker ps -a --filter {$escapedTarget} --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null");
+        if (!empty($cWorkingDirRaw)) {
+            $dirs = array_filter(array_map('trim', explode("\n", $cWorkingDirRaw)));
+            foreach ($dirs as $d) {
+                $candidates = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
+                foreach ($candidates as $c) {
+                    if (file_exists("{$d}/{$c}")) return "{$d}/{$c}";
+                }
+            }
+        }
+    }
+
+    // 2. Search standard Unraid and AppData directories
+    $searchDirs = [
+        '/boot/config/plugins/compose.manager/projects',
+        '/boot/config/plugins/docker.compose/projects',
+        '/mnt/user/appdata/compose',
+        '/mnt/user/appdata/docker-compose',
+        '/mnt/user/appdata'
+    ];
+    $candidates = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
+
+    foreach ($searchDirs as $d) {
+        if (!is_dir($d)) continue;
+        // Direct match
+        foreach ($candidates as $c) {
+            if (file_exists("{$d}/{$target}/{$c}")) return "{$d}/{$target}/{$c}";
+        }
+        // Case-insensitive match
+        $items = @scandir($d);
+        if ($items) {
+            foreach ($items as $item) {
+                if ($item === '.' || $item === '..') continue;
+                if (strcasecmp($item, $target) === 0 && is_dir("{$d}/{$item}")) {
+                    foreach ($candidates as $c) {
+                        if (file_exists("{$d}/{$item}/{$c}")) return "{$d}/{$item}/{$c}";
+                    }
+                }
+            }
+        }
+    }
+
+    return '';
+}
+
 function handle_compose_list() {
     $searchDirs = [
         '/boot/config/plugins/compose.manager/projects',
@@ -2092,6 +2181,20 @@ function handle_compose_list() {
     
     if (!empty($_GET['root_dir']) && is_dir($_GET['root_dir'])) {
         array_unshift($searchDirs, rtrim($_GET['root_dir'], '/'));
+    }
+
+    // Discover working directories from compose containers directly
+    $psDirsRaw = @shell_exec('docker ps -a --filter "label=com.docker.compose.project" --format "{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}" 2>/dev/null');
+    if ($psDirsRaw) {
+        foreach (explode("\n", trim($psDirsRaw)) as $pDir) {
+            $pDir = trim($pDir);
+            if (!empty($pDir) && is_dir($pDir)) {
+                $parentDir = dirname($pDir);
+                if (!in_array($parentDir, $searchDirs)) {
+                    $searchDirs[] = $parentDir;
+                }
+            }
+        }
     }
 
     $projects = [];
@@ -2193,78 +2296,70 @@ function handle_compose_list() {
 }
 
 function handle_compose_action() {
+    @set_time_limit(300);
     $target = isset($_GET['target']) ? trim($_GET['target']) : '';
     $cmd = isset($_GET['compose_cmd']) ? trim($_GET['compose_cmd']) : (isset($_GET['cmd']) ? trim($_GET['cmd']) : 'up');
     $path = isset($_GET['path']) ? trim($_GET['path']) : '';
 
     if (empty($target) && empty($path)) {
-        json_output(['status' => 'error', 'message' => 'Missing target project name or path'], 400);
+        json_output(['status' => 'error', 'message' => '缺少堆栈项目名称或路径'], 400);
     }
 
-    // Locate yaml file
-    $yamlFile = '';
-    if (!empty($path) && file_exists($path)) {
-        $yamlFile = is_dir($path) ? "{$path}/docker-compose.yml" : $path;
-    } else {
-        $searchDirs = [
-            '/boot/config/plugins/compose.manager/projects',
-            '/boot/config/plugins/docker.compose/projects',
-            '/mnt/user/appdata/compose',
-            '/mnt/user/appdata/docker-compose'
-        ];
-        foreach ($searchDirs as $d) {
-            $candidates = [
-                "{$d}/{$target}/docker-compose.yml",
-                "{$d}/{$target}/docker-compose.yaml",
-                "{$d}/{$target}/compose.yml",
-                "{$d}/{$target}/compose.yaml"
-            ];
-            foreach ($candidates as $c) {
-                if (file_exists($c)) {
-                    $yamlFile = $c;
-                    break 2;
-                }
-            }
-        }
-    }
-
-    if (!file_exists($yamlFile)) {
-        json_output(['status' => 'error', 'message' => "Compose file not found for project [{$target}]"], 404);
+    $yamlFile = find_compose_file($target, $path);
+    if (empty($yamlFile) || !file_exists($yamlFile)) {
+        json_output(['status' => 'error', 'message' => "未能找到堆栈 [{$target}] 的 Compose 配置文件"], 404);
     }
 
     $composeBin = get_compose_cmd();
     $escapedFile = escapeshellarg($yamlFile);
     $dir = dirname($yamlFile);
     $escapedDir = escapeshellarg($dir);
+    $projectName = !empty($target) ? $target : basename($dir);
+    $escapedProject = escapeshellarg($projectName);
 
     $execCmd = '';
     switch ($cmd) {
         case 'up':
         case 'start':
-            $execCmd = "cd {$escapedDir} && {$composeBin} -f {$escapedFile} up -d 2>&1";
+            $execCmd = "cd {$escapedDir} && {$composeBin} -p {$escapedProject} -f {$escapedFile} up -d 2>&1";
             break;
         case 'down':
         case 'stop':
-            $execCmd = "cd {$escapedDir} && {$composeBin} -f {$escapedFile} down 2>&1";
+            $execCmd = "cd {$escapedDir} && {$composeBin} -p {$escapedProject} -f {$escapedFile} down 2>&1";
             break;
         case 'restart':
-            $execCmd = "cd {$escapedDir} && {$composeBin} -f {$escapedFile} restart 2>&1";
+            $execCmd = "cd {$escapedDir} && {$composeBin} -p {$escapedProject} -f {$escapedFile} restart 2>&1";
             break;
         case 'pull':
-            $execCmd = "cd {$escapedDir} && {$composeBin} -f {$escapedFile} pull 2>&1";
+        case 'upgrade':
+        case 'update':
+            // Crucial fix: pull downloads latest images, and up -d immediately recreates the containers with the new images!
+            $execCmd = "cd {$escapedDir} && {$composeBin} -p {$escapedProject} -f {$escapedFile} pull 2>&1 && {$composeBin} -p {$escapedProject} -f {$escapedFile} up -d --remove-orphans 2>&1";
             break;
         default:
-            json_output(['status' => 'error', 'message' => "Unsupported compose command: {$cmd}"], 400);
+            json_output(['status' => 'error', 'message' => "不支持的操作指令: {$cmd}"], 400);
     }
 
     $out = @shell_exec($execCmd);
+
+    // If upgrading or updating, clean up dangling images and refresh Unraid status check
+    if (in_array($cmd, ['pull', 'upgrade', 'update'])) {
+        @shell_exec("docker image prune -f 2>/dev/null");
+        if (file_exists('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate.php')) {
+            @exec("nohup php /usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate.php check >/dev/null 2>&1 &");
+        } elseif (file_exists('/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate')) {
+            @exec("nohup /usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check >/dev/null 2>&1 &");
+        }
+    }
+
     json_output([
         'status' => 'success',
-        'project' => $target,
+        'project' => $projectName,
         'action' => $cmd,
-        'ready_count' => $readyCount,
-        'new_version_count' => $newVersionCount,
-        'output' => trim($out)
+        'message' => in_array($cmd, ['pull', 'upgrade', 'update'])
+            ? "堆栈 [{$projectName}] 已成功拉取最新镜像并完成容器重建升级！"
+            : "堆栈 [{$projectName}] 操作 [{$cmd}] 执行完成。",
+        'output' => trim((string)$out)
     ]);
 }
 
@@ -2272,29 +2367,17 @@ function handle_compose_file() {
     $target = isset($_GET['target']) ? trim($_GET['target']) : '';
     $path = isset($_GET['path']) ? trim($_GET['path']) : '';
     
-    $yamlFile = '';
-    if (!empty($path) && file_exists($path)) {
-        $yamlFile = $path;
-    } else {
-        $searchDirs = [
-            '/boot/config/plugins/compose.manager/projects',
-            '/boot/config/plugins/docker.compose/projects',
-            '/mnt/user/appdata/compose',
-            '/mnt/user/appdata/docker-compose'
-        ];
-        foreach ($searchDirs as $d) {
-            $candidates = ["{$d}/{$target}/docker-compose.yml", "{$d}/{$target}/compose.yml"];
-            foreach ($candidates as $c) {
-                if (file_exists($c)) { $yamlFile = $c; break 2; }
-            }
-        }
-    }
+    $yamlFile = find_compose_file($target, $path);
 
-    if (!file_exists($yamlFile)) {
-        json_output(['status' => 'error', 'message' => "Compose file not found"], 404);
+    if (empty($yamlFile) || !file_exists($yamlFile)) {
+        json_output(['status' => 'error', 'message' => "未找到堆栈 [{$target}] 的 YAML 配置文件"], 404);
     }
 
     $content = @file_get_contents($yamlFile);
+    if ($content === false) {
+        json_output(['status' => 'error', 'message' => "读取配置文件失败: {$yamlFile}"], 500);
+    }
+
     json_output([
         'status' => 'success',
         'file' => $yamlFile,
@@ -2315,7 +2398,7 @@ function handle_compose_save() {
         json_output(['status' => 'error', 'message' => 'Missing project name or path'], 400);
     }
 
-    $yamlFile = $path;
+    $yamlFile = !empty($path) ? $path : find_compose_file($target);
     if (empty($yamlFile)) {
         $baseDir = '/boot/config/plugins/compose.manager/projects';
         if (!is_dir($baseDir)) {
@@ -2340,36 +2423,48 @@ function handle_compose_save() {
 }
 
 function handle_compose_logs() {
+    @set_time_limit(30);
     $target = isset($_GET['target']) ? trim($_GET['target']) : '';
     $path = isset($_GET['path']) ? trim($_GET['path']) : '';
     $lines = isset($_GET['lines']) ? (int)$_GET['lines'] : 150;
+    if ($lines <= 0 || $lines > 1000) $lines = 150;
 
-    $yamlFile = $path;
-    if (empty($yamlFile)) {
-        $searchDirs = [
-            '/boot/config/plugins/compose.manager/projects',
-            '/boot/config/plugins/docker.compose/projects',
-            '/mnt/user/appdata/compose'
-        ];
-        foreach ($searchDirs as $d) {
-            if (file_exists("{$d}/{$target}/docker-compose.yml")) {
-                $yamlFile = "{$d}/{$target}/docker-compose.yml";
-                break;
+    $yamlFile = find_compose_file($target, $path);
+    $out = '';
+
+    if (!empty($yamlFile) && file_exists($yamlFile)) {
+        $composeBin = get_compose_cmd();
+        $escapedFile = escapeshellarg($yamlFile);
+        $escapedDir = escapeshellarg(dirname($yamlFile));
+        $projectName = !empty($target) ? $target : basename(dirname($yamlFile));
+        $escapedProject = escapeshellarg($projectName);
+
+        $out = @shell_exec("cd {$escapedDir} && timeout 6s {$composeBin} -p {$escapedProject} -f {$escapedFile} logs --no-color --tail={$lines} --timestamps 2>&1");
+    }
+
+    // Direct container fallback if compose logs returned empty or timed out
+    if (empty(trim((string)$out)) && !empty($target)) {
+        $escapedLabel = escapeshellarg("label=com.docker.compose.project={$target}");
+        $cNamesRaw = @shell_exec("docker ps -a --filter {$escapedLabel} --format '{{.Names}}' 2>/dev/null");
+        if (!empty($cNamesRaw)) {
+            $cNames = array_filter(array_map('trim', explode("\n", $cNamesRaw)));
+            $combinedLogs = [];
+            foreach ($cNames as $cn) {
+                $cLog = @shell_exec("timeout 4s docker logs --tail={$lines} --timestamps " . escapeshellarg($cn) . " 2>&1");
+                if (!empty(trim((string)$cLog))) {
+                    $combinedLogs[] = "=== 容器 [{$cn}] 日志 ===\n" . trim((string)$cLog);
+                }
+            }
+            if (!empty($combinedLogs)) {
+                $out = implode("\n\n", $combinedLogs);
             }
         }
     }
 
-    if (!file_exists($yamlFile)) {
-        json_output(['status' => 'error', 'message' => 'Compose file not found'], 404);
-    }
-
-    $composeBin = get_compose_cmd();
-    $escapedFile = escapeshellarg($yamlFile);
-    $out = @shell_exec("{$composeBin} -f {$escapedFile} logs --tail={$lines} --timestamps 2>&1");
     json_output([
         'status' => 'success',
         'project' => $target,
-        'logs' => $out ? trim($out) : '暂无日志输出'
+        'logs' => (!empty(trim((string)$out))) ? trim((string)$out) : '暂无日志输出或容器尚未生成日志'
     ]);
 }
 
@@ -3025,10 +3120,12 @@ function handle_file_read() {
 
     $content = file_get_contents($filePath);
     // Convert to UTF-8 if encoded in GBK/GB2312/CP936/etc.
-    if (!mb_check_encoding($content, 'UTF-8')) {
-        $converted = @mb_convert_encoding($content, 'UTF-8', 'GB18030, GBK, BIG5, ISO-8859-1, ASCII');
-        if ($converted !== false) {
-            $content = $converted;
+    if (function_exists('mb_check_encoding') && !mb_check_encoding($content, 'UTF-8')) {
+        if (function_exists('mb_convert_encoding')) {
+            $converted = @mb_convert_encoding($content, 'UTF-8', 'GB18030, GBK, BIG5, ISO-8859-1, ASCII');
+            if ($converted !== false) {
+                $content = $converted;
+            }
         }
     }
 

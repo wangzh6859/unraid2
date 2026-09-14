@@ -437,11 +437,25 @@ export default function FilesScreen({ navigation }) {
       await backgroundTransferManager.notifyTransferStarted(taskItem);
     } catch (_) {}
 
+    let workingUri = taskItem.uri;
+    let tempCached = false;
     try {
       const fileUri = taskItem.uri;
+      if (fileUri && fileUri.startsWith('content://')) {
+        try {
+          const safeName = (taskItem.name || 'upload').replace(/[^a-zA-Z0-9._-]/g, '_');
+          const cachePath = `${FileSystem.cacheDirectory}up_${Date.now()}_${safeName}`;
+          await FileSystem.copyAsync({ from: fileUri, to: cachePath });
+          workingUri = cachePath;
+          tempCached = true;
+        } catch (copyErr) {
+          console.log('[Upload] Copy content URI to cache failed:', copyErr);
+          workingUri = fileUri;
+        }
+      }
 
       // Check if file exists and get real size
-      const fileInfo = await FileSystem.getInfoAsync(fileUri);
+      const fileInfo = await FileSystem.getInfoAsync(workingUri);
       if (!fileInfo.exists) {
         throw new Error('本地文件无法读取或已丢失');
       }
@@ -491,7 +505,7 @@ export default function FilesScreen({ navigation }) {
         // Read chunk slice as Base64 string
         let base64Data = '';
         if (currentChunkLen > 0) {
-          base64Data = await FileSystem.readAsStringAsync(fileUri, {
+          base64Data = await FileSystem.readAsStringAsync(workingUri, {
             encoding: FileSystem.EncodingType.Base64,
             position: offset,
             length: currentChunkLen,
@@ -531,23 +545,21 @@ export default function FilesScreen({ navigation }) {
               signal: abortController.signal,
             });
 
-            if (chunkRes.ok) {
-              const resJson = await chunkRes.json();
-              if (resJson && resJson.status === 'success') {
-                chunkSuccess = true;
-                currentChunkRes = resJson;
-                if (resJson.path) savedPath = resJson.path;
-                break;
-              } else {
-                throw new Error(resJson?.message || `服务端处理异常 (HTTP ${chunkRes.status})`);
-              }
+            const rawChunkText = await chunkRes.text();
+            let resJson = null;
+            try {
+              resJson = JSON.parse(rawChunkText);
+            } catch (pErr) {
+              throw new Error(`服务端响应异常: ${rawChunkText ? (rawChunkText.length > 200 ? rawChunkText.substring(0, 200) + '...' : rawChunkText) : '空响应 (HTTP ' + chunkRes.status + ')'}`);
+            }
+
+            if (chunkRes.ok && resJson && resJson.status === 'success') {
+              chunkSuccess = true;
+              currentChunkRes = resJson;
+              if (resJson.path) savedPath = resJson.path;
+              break;
             } else {
-              let errText = `HTTP ${chunkRes.status}`;
-              try {
-                const ej = await chunkRes.json();
-                if (ej?.message) errText = ej.message;
-              } catch (_) {}
-              throw new Error(errText);
+              throw new Error(resJson?.message || `服务端处理异常 (HTTP ${chunkRes.status})`);
             }
           } catch (chunkErr) {
             if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
@@ -641,6 +653,9 @@ export default function FilesScreen({ navigation }) {
 
       delete activeTasksRef.current[taskId];
 
+      if (tempCached && workingUri && workingUri.startsWith(FileSystem.cacheDirectory)) {
+        FileSystem.deleteAsync(workingUri, { idempotent: true }).catch(() => {});
+      }
       if (taskItem.uri && taskItem.uri.startsWith(FileSystem.cacheDirectory + 'up_')) {
         FileSystem.deleteAsync(taskItem.uri, { idempotent: true }).catch(() => {});
       }
@@ -768,8 +783,9 @@ export default function FilesScreen({ navigation }) {
     setTransfers(prev => {
       try {
         const itemToDelete = prev.find(t => t.id === taskId);
-        if (itemToDelete?.uri && FileSystem?.cacheDirectory && itemToDelete.uri.startsWith(FileSystem.cacheDirectory + 'up_')) {
-          FileSystem.deleteAsync(itemToDelete.uri, { idempotent: true }).catch(() => {});
+        const delUri = itemToDelete?.cachedUri || itemToDelete?.uri;
+        if (delUri && FileSystem?.cacheDirectory && delUri.startsWith(FileSystem.cacheDirectory + 'up_')) {
+          FileSystem.deleteAsync(delUri, { idempotent: true }).catch(() => {});
         }
       } catch (_) {}
       const next = prev.filter(t => t.id !== taskId);
