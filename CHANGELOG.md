@@ -4,6 +4,17 @@
 
 ---
 
+## [v1.3.193] - 2026-09-14
+> **核心主题**：根除 HTTP 200 空响应（清除 Connection: close 规避 TCP 提前断开、引入 FastCGI 强制输出冲刷、HTTP 200 空体自动目录核验成功兜底）
+
+### 📡 彻底解决“服务端响应格式异常（HTTP 200）：空响应（0字节）”
+- **根本原因 1 - TCP FIN 提前切断连接**：此前在客户端与服务端均注入了 `Connection: close` 头。在 PHP 执行 `echo $json; @flush(); exit;` 后，Nginx 收到 FastCGI 结束信号立即向移动端 OkHttp 发送 TCP FIN 切断连接包，导致数据包尚在缓冲区时连接即被强行中断，Android 端读取到的响应体直接为 0 字节空字符串。已彻底移除 `Connection: close` 头，改为由 Nginx 自适应维持 Keep-Alive。
+- **根本原因 2 - FastCGI 进程缓冲未强制刷盘**：在 PHP-FPM SAPI 架构下，单纯的 `flush()` 无法强制将字节推送给 Nginx。现已改用 `fastcgi_finish_request()`，保证 JSON 数据在 PHP 进程回收前完整交付给 Nginx 网关并传输给客户端。
+- **根本原因 3 - Expo SDK 50 Multipart 空响应容错与自动物理核验**：针对 Expo SDK 50 在 Android 端上传后偶尔返回空响应的已知平台缺陷，客户端新增自动化物理目录扫描机制——若服务端返回 HTTP 200 但响应体为空，前端自动向 Unraid 目标目录发起单次毫秒级 `file_list` 查询；一旦确认刚刚上传的文件已真实存在，立即无缝认定为上传成功并刷新界面，彻底消除假失败误报。
+- **服务端版本号递增**：`2026.09.14.10`。
+
+---
+
 ## [v1.3.192] - 2026-09-14
 > **核心主题**：根除初次上传闪退（Android 触控响应器解绑时序修复）、根除服务端响应截断（彻底清除 PHP Content-Length 头与真实响应透传）、移除假 30% 进度卡顿
 

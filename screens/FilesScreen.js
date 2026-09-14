@@ -484,7 +484,6 @@ export default function FilesScreen({ navigation }) {
         httpMethod: 'POST',
         uploadType: FileSystem.FileSystemUploadType.MULTIPART,
         headers: {
-          'Connection': 'close',
           'X-API-Token': apiToken,
           ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
         },
@@ -512,6 +511,40 @@ export default function FilesScreen({ navigation }) {
         }
       } else if (typeof res?.body === 'object' && res.body !== null) {
         serverResult = res.body;
+      }
+
+      // If serverResult is not yet parsed, but HTTP status is 2xx (e.g. empty body from FastCGI buffer),
+      // perform an active directory query to check whether the file was physically saved to Unraid
+      if (!serverResult && res && res.status >= 200 && res.status < 300) {
+        try {
+          await new Promise(r => setTimeout(r, 350));
+          const checkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_list&path=${encodeURIComponent(taskItem.targetPath)}`;
+          const checkData = await apiFetchJson(checkUrl, {}, 6000, 1);
+          if (checkData && checkData.status === 'success' && Array.isArray(checkData.items)) {
+            const targetNameNorm = (taskItem.name || '').normalize('NFC').trim().toLowerCase();
+            const targetNameDecoded = decodeURIComponent(taskItem.name || '').toLowerCase();
+            const fileFound = checkData.items.find(it => {
+              const itNameNorm = (it.name || '').normalize('NFC').trim().toLowerCase();
+              const itNameDecoded = decodeURIComponent(it.name || '').toLowerCase();
+              return (
+                itNameNorm === targetNameNorm ||
+                itNameDecoded === targetNameDecoded ||
+                it.name === taskItem.name
+              );
+            });
+            if (fileFound) {
+              serverResult = {
+                status: 'success',
+                message: '文件已成功上传至 Unraid 存储',
+                path: fileFound.path,
+                size: fileFound.size,
+                name: fileFound.name,
+              };
+            }
+          }
+        } catch (checkErr) {
+          console.log('[Upload] Fallback check error:', checkErr);
+        }
       }
 
       if (!serverResult) {
