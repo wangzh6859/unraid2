@@ -4,7 +4,7 @@ import {
   TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Modal,
   Linking, Dimensions, AppState
 } from 'react-native';
-import { apiFetch, apiFetchJson } from '../utils/apiClient';
+import { apiFetch, apiFetchJson, resetNetworkPool } from '../utils/apiClient';
 import Svg, { Path, Circle, Defs, LinearGradient, Stop, G, Rect } from 'react-native-svg';
 import {
   Cpu, Database, HardDrive, Box, Monitor, Wifi, Zap, Server, Key,
@@ -537,6 +537,7 @@ export default function DashboardScreen({ navigation }) {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    resetNetworkPool();
     await Promise.all([fetchServerData(), fetchNotifications()]);
     setRefreshing(false);
   }, []);
@@ -545,8 +546,11 @@ export default function DashboardScreen({ navigation }) {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState) => {
       if (nextAppState === 'active') {
-        fetchServerData();
-        fetchNotifications();
+        resetNetworkPool();
+        setTimeout(() => {
+          fetchServerData();
+          fetchNotifications();
+        }, 200);
       }
     });
     return () => {

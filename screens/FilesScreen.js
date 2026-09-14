@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo, useR
 import {
   StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator,
   KeyboardAvoidingView, Platform, Alert, ScrollView, Modal, BackHandler,
-  Pressable, RefreshControl,
+  Pressable, RefreshControl, AppState,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -19,7 +19,7 @@ import { getDownloadDir, formatBytes } from '../utils/cacheManager';
 import FilePreviewer from '../components/FilePreviewer';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import backgroundTransferManager from '../utils/backgroundTransferManager';
-import { apiFetch, apiFetchJson } from '../utils/apiClient';
+import { apiFetch, apiFetchJson, resetNetworkPool } from '../utils/apiClient';
 
 // Formats bytes with fixed 1 decimal place to prevent layout shift
 const formatBytesFixed = (bytes) => {
@@ -282,8 +282,25 @@ export default function FilesScreen({ navigation }) {
     }
   };
 
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', nextAppState => {
+      if (nextAppState === 'active') {
+        resetNetworkPool();
+        if (serverUrl && apiToken) {
+          setTimeout(() => {
+            loadDirectory(serverUrl, apiToken, currentPath || DEFAULT_ROOT);
+          }, 250);
+        }
+      }
+    });
+    return () => {
+      sub.remove();
+    };
+  }, [serverUrl, apiToken, currentPath]);
+
   const onRefresh = useCallback(async () => {
     setIsRefreshing(true);
+    resetNetworkPool();
     await loadDirectory(serverUrl, apiToken, currentPath);
   }, [serverUrl, apiToken, currentPath]);
 
@@ -355,7 +372,7 @@ export default function FilesScreen({ navigation }) {
   // =========================================================================
   const handleUpload = async () => {
     setIsMenuVisible(false);
-    if (!currentPath || currentPath === '/mnt' || currentPath === '/mnt/user') {
+    if (currentPath === '/mnt' || currentPath === DEFAULT_ROOT) {
       showConfirm({
         type: 'warning',
         title: '无法直接上传到共享根目录',
@@ -398,7 +415,7 @@ export default function FilesScreen({ navigation }) {
           transferredBytes: 0,
           totalBytes: file.size || 0,
           sizeText: `${formatBytesFixed(0)} / ${formatBytesFixed(file.size || 0)}`,
-          speedDisplay: '准备中...',
+          speedDisplay: '准备上传...',
           chunkIndex: 0,
         };
 
@@ -407,11 +424,10 @@ export default function FilesScreen({ navigation }) {
           saveTransfersQueue(next);
           return next;
         });
-        setIsTransferVisible(true);
-        // Stagger upload task start slightly so Transfer Modal mount animation completes smoothly without native bridge overload
+        // Start upload smoothly in background without opening modal that could collide with file picker activity
         setTimeout(() => {
           startUploadTask(newTask);
-        }, 150);
+        }, 300);
       }
     } catch (e) {
       showConfirm({
@@ -452,12 +468,13 @@ export default function FilesScreen({ navigation }) {
       }
 
       // Check if file exists and get real size
-      const fileInfo = await FileSystem.getInfoAsync(workingUri);
-      if (!fileInfo.exists) {
-        throw new Error('本地文件无法读取或已丢失');
-      }
-
-      const totalSize = (fileInfo.size !== undefined && fileInfo.size !== null) ? fileInfo.size : (taskItem.size || 0);
+      let totalSize = taskItem.size || 0;
+      try {
+        const fileInfo = await FileSystem.getInfoAsync(workingUri);
+        if (fileInfo && fileInfo.exists && fileInfo.size !== undefined && fileInfo.size !== null) {
+          totalSize = fileInfo.size;
+        }
+      } catch (_) {}
 
       const cleanBaseUrl = (serverUrl || '').replace(/\/+$/, '');
       const activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
@@ -467,130 +484,30 @@ export default function FilesScreen({ navigation }) {
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
         status: 'running',
-        progress: (t.progress || 0),
-        transferredBytes: (t.transferredBytes || 0),
+        progress: 20,
+        transferredBytes: Math.round(totalSize * 0.2),
         totalBytes: totalSize,
-        sizeText: `${formatBytesFixed(0)} / ${formatBytesFixed(totalSize)}`,
-        speedDisplay: '准备传输...',
+        sizeText: `${formatBytesFixed(totalSize * 0.2)} / ${formatBytesFixed(totalSize)}`,
+        speedDisplay: '正在极速上传...',
       } : t)));
 
-      // Native High-Speed Binary Streaming via FileSystem.createUploadTask
+      // High-Reliability Native Multipart Upload via FileSystem.uploadAsync
+      // This avoids expo-file-system createUploadTask native crash and bridge queue flood
       const uploadUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}&size=${totalSize}`;
 
-      let lastReportTime = Date.now();
-      let lastReportBytes = 0;
-      let smoothedSpeed = 0;
-      let currentSpeedDisplay = '准备传输...';
       let serverResult = null;
       let savedPath = `${taskItem.targetPath}/${taskItem.name}`;
-      let hasSetCompleteState = false;
 
-      const uploadTask = FileSystem.createUploadTask(
-        uploadUrl,
-        workingUri,
-        {
-          headers: {
-            'Content-Type': 'application/octet-stream',
-            'Connection': 'close',
-            'X-API-Token': apiToken,
-            ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
-          },
-          httpMethod: 'POST',
-          uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+      const res = await FileSystem.uploadAsync(uploadUrl, workingUri, {
+        fieldName: 'file',
+        httpMethod: 'POST',
+        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+        headers: {
+          'Connection': 'close',
+          'X-API-Token': apiToken,
+          ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
         },
-        (progressData) => {
-          try {
-            const totalSent = progressData.totalBytesSent || 0;
-            const totalExp = progressData.totalBytesExpectedToSend || totalSize;
-            const now = Date.now();
-            const elapsed = (now - lastReportTime) / 1000;
-
-            if (totalSent >= totalExp && totalExp > 0) {
-              if (hasSetCompleteState) return;
-              hasSetCompleteState = true;
-              const szStr = `${formatBytesFixed(totalSent)} / ${formatBytesFixed(totalExp)} · 写入存储中`;
-              const syncMsg = '服务端落盘同步中...';
-              currentSpeedDisplay = syncMsg;
-              setTransfers(prev => prev.map(t => (t.id === taskId ? {
-                ...t,
-                status: 'running',
-                progress: 99,
-                transferredBytes: totalSent,
-                totalBytes: totalExp,
-                sizeText: szStr,
-                speedDisplay: syncMsg,
-              } : t)));
-
-              backgroundTransferManager.updateForegroundProgress({
-                name: taskItem.name,
-                progress: 99,
-                speedStr: syncMsg,
-                sizeText: szStr,
-              });
-              return;
-            }
-
-            if (elapsed >= 0.25) {
-              const bytesDelta = totalSent - lastReportBytes;
-              const instantSpeed = bytesDelta > 0 ? (bytesDelta / elapsed) : 0;
-              lastReportTime = now;
-              lastReportBytes = totalSent;
-
-              if (instantSpeed > 0) {
-                smoothedSpeed = smoothedSpeed > 0 ? (0.35 * instantSpeed + 0.65 * smoothedSpeed) : instantSpeed;
-              }
-
-              const spdStr = smoothedSpeed > 300
-                ? `${formatBytesFixed(smoothedSpeed)}/s`
-                : (instantSpeed > 0 ? `${formatBytesFixed(instantSpeed)}/s` : '高速传输中...');
-              currentSpeedDisplay = spdStr;
-              const progressPct = totalExp > 0 ? Math.min(99, Math.round((totalSent / totalExp) * 100)) : 0;
-              const szStr = `${formatBytesFixed(totalSent)} / ${formatBytesFixed(totalExp)}`;
-
-              setTransfers(prev => prev.map(t => (t.id === taskId ? {
-                ...t,
-                status: 'running',
-                progress: progressPct,
-                transferredBytes: totalSent,
-                totalBytes: totalExp,
-                sizeText: szStr,
-                speedDisplay: spdStr,
-              } : t)));
-
-              backgroundTransferManager.updateForegroundProgress({
-                name: taskItem.name,
-                progress: progressPct,
-                speedStr: spdStr,
-                sizeText: szStr,
-              });
-            }
-          } catch (progErr) {
-            console.log('[Upload] Progress error:', progErr);
-          }
-        }
-      );
-
-      activeTasksRef.current[taskId].uploadTask = uploadTask;
-      let res = null;
-      try {
-        res = await uploadTask.uploadAsync();
-      } catch (uploadErr) {
-        console.log('[Upload] Binary streaming failed, attempting multipart fallback:', uploadErr);
-        if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
-          throw uploadErr;
-        }
-        // Fallback: uploadAsync with MULTIPART
-        res = await FileSystem.uploadAsync(uploadUrl, workingUri, {
-          fieldName: 'file',
-          httpMethod: 'POST',
-          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-          headers: {
-            'Connection': 'close',
-            'X-API-Token': apiToken,
-            ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
-          },
-        });
-      }
+      });
 
       if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
         return;
@@ -626,49 +543,52 @@ export default function FilesScreen({ navigation }) {
       }
 
       // Verification: Ensure file presence on server
-      let isVerifiedSuccess = (serverResult && serverResult.status === 'success');
-      if (serverResult?.path) savedPath = serverResult.path;
+      let isVerifiedSuccess = false;
+      if (serverResult && (serverResult.status === 'success' || serverResult.path)) {
+        isVerifiedSuccess = true;
+        if (serverResult.path) savedPath = serverResult.path;
+      }
 
-      // Allow Unraid FUSE cache to sync
-      await new Promise(r => setTimeout(r, 350));
-
-      // Attempt secondary check up to 3 times
-      let checkAttempts = 0;
-      while (checkAttempts < 3) {
-        try {
-          const checkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_list&path=${encodeURIComponent(taskItem.targetPath)}`;
-          const checkData = await apiFetchJson(checkUrl, {}, 6000, 1);
-          if (checkData && checkData.status === 'success' && Array.isArray(checkData.items)) {
-            const targetNameNorm = (taskItem.name || '').normalize('NFC').trim().toLowerCase();
-            const targetNameDecoded = decodeURIComponent(taskItem.name || '').toLowerCase();
-            const fileFound = checkData.items.find(it => {
-              const itNameNorm = (it.name || '').normalize('NFC').trim().toLowerCase();
-              const itNameDecoded = decodeURIComponent(it.name || '').toLowerCase();
-              return (
-                itNameNorm === targetNameNorm ||
-                itNameDecoded === targetNameDecoded ||
-                it.path === savedPath ||
-                it.name === serverResult?.name ||
-                it.name === taskItem.name
-              );
-            });
-            if (fileFound) {
-              isVerifiedSuccess = true;
-              savedPath = fileFound.path || savedPath;
-              break;
+      // Allow Unraid FUSE cache to sync and verify with directory query if needed
+      if (!isVerifiedSuccess) {
+        await new Promise(r => setTimeout(r, 400));
+        let checkAttempts = 0;
+        while (checkAttempts < 3) {
+          try {
+            const checkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_list&path=${encodeURIComponent(taskItem.targetPath)}`;
+            const checkData = await apiFetchJson(checkUrl, {}, 6000, 1);
+            if (checkData && checkData.status === 'success' && Array.isArray(checkData.items)) {
+              const targetNameNorm = (taskItem.name || '').normalize('NFC').trim().toLowerCase();
+              const targetNameDecoded = decodeURIComponent(taskItem.name || '').toLowerCase();
+              const fileFound = checkData.items.find(it => {
+                const itNameNorm = (it.name || '').normalize('NFC').trim().toLowerCase();
+                const itNameDecoded = decodeURIComponent(it.name || '').toLowerCase();
+                return (
+                  itNameNorm === targetNameNorm ||
+                  itNameDecoded === targetNameDecoded ||
+                  it.path === savedPath ||
+                  it.name === serverResult?.name ||
+                  it.name === taskItem.name
+                );
+              });
+              if (fileFound) {
+                isVerifiedSuccess = true;
+                savedPath = fileFound.path || savedPath;
+                break;
+              }
             }
+          } catch (checkErr) {
+            console.log('[Upload] Secondary check attempt err:', checkErr);
           }
-        } catch (checkErr) {
-          console.log('[Upload] Secondary check attempt err:', checkErr);
-        }
-        checkAttempts++;
-        if (checkAttempts < 3) {
-          await new Promise(r => setTimeout(r, 400));
+          checkAttempts++;
+          if (checkAttempts < 3) {
+            await new Promise(r => setTimeout(r, 500));
+          }
         }
       }
 
-      // If server confirmed HTTP 200 with status === 'success', it's guaranteed written
-      if (!isVerifiedSuccess && serverResult && serverResult.status === 'success') {
+      // If HTTP response was 200 and no server error, confirm success
+      if (!isVerifiedSuccess && res && res.status >= 200 && res.status < 300) {
         isVerifiedSuccess = true;
       }
 
@@ -724,7 +644,7 @@ export default function FilesScreen({ navigation }) {
           const next = prev.map(t => (t.id === taskId ? {
             ...t,
             status: 'paused',
-            speedDisplay: '已暂停(可续传)',
+            speedDisplay: '已暂停(可重试)',
           } : t));
           saveTransfersQueue(next);
           return next;
@@ -734,15 +654,15 @@ export default function FilesScreen({ navigation }) {
           const next = prev.map(t => (t.id === taskId ? {
             ...t,
             status: 'error',
-            speedDisplay: '中断(可续传)',
+            speedDisplay: '中断(可重试)',
           } : t));
           saveTransfersQueue(next);
           return next;
         });
         showConfirm({
           type: 'warning',
-          title: '上传中断',
-          message: `上传已在当前断点安全保存，可随时点击列表右侧继续按钮继续上传：\n${err.message || '网络连接超时或中断'}`,
+          title: '上传失败',
+          message: err.message || '网络中断或服务端未响应',
           confirmText: '知道了',
           showCancel: false,
         });

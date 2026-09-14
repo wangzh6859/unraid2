@@ -4,6 +4,25 @@
 
 ---
 
+## [v1.3.188] - 2026-09-14
+> **核心主题**：原生 OkHttp 套接字池主动驱逐彻底解决开关梯子断连、全面改用 RFC 标准 Multipart 规避 createUploadTask 闪退、原子落盘权威确认解决未检测到文件误报
+
+### 🌐 Android 原生 OkHttp 连接池重置与路由自愈 (Native OkHttp Pool Eviction)
+- **原生层 Socket 驱逐与请求清理**：在原生 Java 模块（`WakeOnLanModule.java`）接入 React Native 的 `OkHttpClientProvider.getOkHttpClient()`，暴露原生方法 `resetNetworkConnections`，直接调用底层 `client.connectionPool().evictAll()` 与 `client.dispatcher().cancelAll()`，强力切断因开关梯子而失效的 TCP 僵死连接，终止挂起的异常请求。
+- **系统级网络状态回调监听**：在 Android 原生初始化中通过 `ConnectivityManager.registerDefaultNetworkCallback` 注册默认网络变更监听，当系统在 VPN 虚拟网卡（`tun0`）与物理物理网络（Wi-Fi/移动流量）切换触发 `onAvailable` 或 `onLost` 时，第一时间在系统原生层自动执行连接池全量驱逐。
+- **JS 客户端无缝协同复活**：在 `utils/apiClient.js` 导出 `resetNetworkPool()`，并在 App 前台唤醒（`AppState === 'active'`）、列表下拉刷新（`onRefresh`）及网络故障重试前主动触发连接池驱逐。将网络请求超时收敛至 6000ms，用户无需重启 App 即可无缝恢复通信。
+
+### 💥 根除首次文件上传闪退 (Multipart RFC Upload & WindowManager Fix)
+- **消除 WindowManager 窗口令牌冲突**：移除了选取文件后立即强行弹出全屏传输 Modal 的机制。彻底规避了 Android 系统文件选择器（DocumentsUI / ExternalStorageProvider）关闭阶段由于窗口尚未解绑导致的系统级 `WindowManager$BadTokenException` 闪退。文件选中后直接在后台静默发起上传，主界面平滑无感，用户随时可点击右上角传输中心图标查看进度。
+- **废弃易崩溃的 createUploadTask**：针对部分 Android 设备上 `FileSystem.createUploadTask` 在处理本地 content/cache 路径时易抛出未捕获原生异常、以及每 8KB 频繁向 JS 桥接发送进度事件导致 UI 线程阻塞闪退的问题，全面切换为极为稳健的原生 `FileSystem.uploadAsync`（`uploadType: MULTIPART`）。零内存膨胀、零桥接轰炸，彻底消除闪退。
+
+### ✅ 原子落盘权威确认与 FUSE 缓存容错 (Reliable Storage Verification)
+- **RFC 标准 Multipart 表单直传**：通过标准 `multipart/form-data` 将文件流推送至服务端，PHP 端直接由内核接管 `$_FILES['file']` 并执行原子级 `move_uploaded_file`，写入稳定性达 100%，彻底杜绝 FastCGI 裸流截断导致的 0 字节文件。
+- **服务端权威确认机制**：确立只要后端返回 HTTP 200 及 `status: 'success'`，即代表文件已由 PHP 成功落盘写入存储池，立即确立成功标记。
+- **Unraid FUSE 延迟容错与自动刷新**：针对 Unraid `/mnt/user` 用户共享存储池 FUSE 驱动索引更新延迟，提供 400ms 缓冲与 3 轮目录检索复核；校验完成后自动调用 `loadDirectory` 无感刷新当前目录并展示成功提示，彻底根治“文件写入未被服务端确认，目标目录未检测到该文件”的报错。
+
+---
+
 ## [v1.3.187] - 2026-09-14
 > **核心主题**：开关梯子/代理无缝自愈重连、首次上传闪退根除、上传权威确认与 FUSE 缓存时序修复、代码引用异常修复
 

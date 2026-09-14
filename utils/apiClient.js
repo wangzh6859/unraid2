@@ -1,36 +1,28 @@
-import { AppState } from 'react-native';
+import { NativeModules, AppState } from 'react-native';
 
 let lastAppState = 'active';
 let appResumedTimestamp = Date.now();
 
+/**
+ * Evicts and resets OkHttp's connection pool and cancel any hung requests in native layer
+ */
+export function resetNetworkPool() {
+  try {
+    if (NativeModules.WakeOnLan && typeof NativeModules.WakeOnLan.resetNetworkConnections === 'function') {
+      NativeModules.WakeOnLan.resetNetworkConnections().catch(() => {});
+    }
+  } catch (_) {}
+}
+
 // Track when app resumes from background (commonly happens when user switches VPN in quick settings/VPN app)
 if (AppState) {
   AppState.addEventListener('change', (nextState) => {
-    if (nextState === 'active' && lastAppState !== 'active') {
+    if (nextState === 'active') {
       appResumedTimestamp = Date.now();
+      resetNetworkPool();
     }
     lastAppState = nextState;
   });
-}
-
-/**
- * Checks if an error is likely caused by an Android network routing switch
- * (e.g. toggling VPN on/off, switching WiFi/Cellular, stale OkHttp connection pool)
- */
-function isNetworkRouteError(err) {
-  if (!err) return false;
-  const msg = (err.message || String(err)).toLowerCase();
-  return (
-    msg.includes('network request failed') ||
-    msg.includes('failed to connect') ||
-    msg.includes('sockettimeoutexception') ||
-    msg.includes('connectexception') ||
-    msg.includes('econnreset') ||
-    msg.includes('econnrefused') ||
-    msg.includes('broken pipe') ||
-    msg.includes('connection closed') ||
-    msg.includes('stream was reset')
-  );
 }
 
 /**
@@ -42,7 +34,7 @@ function isNetworkRouteError(err) {
  * 3. Cache-busting to prevent stale proxy responses
  * 4. Automatic retry on network route change
  */
-export async function apiFetch(url, options = {}, timeoutMs = 9000, maxRetries = 1) {
+export async function apiFetch(url, options = {}, timeoutMs = 6000, maxRetries = 1) {
   let attempt = 0;
   let lastError = null;
 
@@ -77,14 +69,16 @@ export async function apiFetch(url, options = {}, timeoutMs = 9000, maxRetries =
       lastError = err;
       attempt++;
 
-      // If caller intentionally aborted via signal, don't retry
+      // If caller intentionally aborted via external signal, don't retry
       if (options.signal?.aborted) {
         throw err;
       }
 
-      if (attempt <= maxRetries && isNetworkRouteError(err)) {
-        // Wait 400ms for network routing table (tun0 / wlan0) to settle
-        await new Promise((r) => setTimeout(r, 400));
+      if (attempt <= maxRetries) {
+        // Evict OkHttp socket pool so the retry binds to the new routing interface
+        resetNetworkPool();
+        // Wait 350ms for network routing table (tun0 / wlan0) to settle
+        await new Promise((r) => setTimeout(r, 350));
         continue;
       }
       break;
@@ -97,7 +91,7 @@ export async function apiFetch(url, options = {}, timeoutMs = 9000, maxRetries =
 /**
  * Helper to fetch and parse JSON with automatic network resilience
  */
-export async function apiFetchJson(url, options = {}, timeoutMs = 9000, maxRetries = 1) {
+export async function apiFetchJson(url, options = {}, timeoutMs = 6000, maxRetries = 1) {
   const res = await apiFetch(url, options, timeoutMs, maxRetries);
   if (!res.ok) {
     let errBody = null;
@@ -136,7 +130,7 @@ export function installApiNetworkInterceptor() {
     const urlStr = typeof input === 'string' ? input : (input?.url || '');
     if (urlStr && urlStr.includes('api.php')) {
       // It's a backend Unraid API call: route through resilient apiFetch
-      return apiFetch(urlStr, init, 9000, 1);
+      return apiFetch(urlStr, init, 6000, 1);
     }
     return global._originalFetch(input, init);
   };

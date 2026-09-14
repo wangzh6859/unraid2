@@ -18,8 +18,11 @@ const moduleJavaPath = path.join(wolDir, 'WakeOnLanModule.java');
 const moduleJavaContent = `package com.yourname.unraidmanager.wol;
 
 import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.wifi.WifiManager;
 import android.os.AsyncTask;
+import android.os.Build;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
@@ -30,6 +33,8 @@ import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.WritableMap;
+import com.facebook.react.modules.network.OkHttpClientProvider;
+import okhttp3.OkHttpClient;
 
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -49,12 +54,55 @@ public class WakeOnLanModule extends ReactContextBaseJavaModule {
     public WakeOnLanModule(ReactApplicationContext reactContext) {
         super(reactContext);
         this.reactContext = reactContext;
+
+        try {
+            ConnectivityManager cm = (ConnectivityManager) reactContext.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                cm.registerDefaultNetworkCallback(new ConnectivityManager.NetworkCallback() {
+                    @Override
+                    public void onAvailable(@NonNull Network network) {
+                        try {
+                            OkHttpClient client = OkHttpClientProvider.getOkHttpClient();
+                            if (client != null) {
+                                client.connectionPool().evictAll();
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+
+                    @Override
+                    public void onLost(@NonNull Network network) {
+                        try {
+                            OkHttpClient client = OkHttpClientProvider.getOkHttpClient();
+                            if (client != null) {
+                                client.connectionPool().evictAll();
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                });
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "NetworkCallback init failed", t);
+        }
     }
 
     @NonNull
     @Override
     public String getName() {
         return MODULE_NAME;
+    }
+
+    @ReactMethod
+    public void resetNetworkConnections(Promise promise) {
+        try {
+            OkHttpClient client = OkHttpClientProvider.getOkHttpClient();
+            if (client != null) {
+                client.connectionPool().evictAll();
+                client.dispatcher().cancelAll();
+            }
+            promise.resolve(true);
+        } catch (Throwable t) {
+            promise.resolve(false);
+        }
     }
 
     private byte[] parseMacAddress(String macStr) throws IllegalArgumentException {
