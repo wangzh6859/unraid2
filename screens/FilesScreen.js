@@ -370,7 +370,7 @@ export default function FilesScreen({ navigation }) {
   // =========================================================================
   // Advanced Upload Task Manager (Complete Refactored Version)
   // =========================================================================
-  const handleUpload = async () => {
+  const handleUpload = () => {
     setIsMenuVisible(false);
 
     if (currentPath === '/mnt' || currentPath === DEFAULT_ROOT) {
@@ -384,15 +384,21 @@ export default function FilesScreen({ navigation }) {
       return;
     }
 
-    try {
-      // Direct SAF document picker call without Modal wrapper
-      const result = await DocumentPicker.getDocumentAsync({
-        type: '*/*',
-        copyToCacheDirectory: true,
-        multiple: false,
-      });
+    // 250ms debounce: allows the touch gesture and menu overlay unmount to cleanly settle
+    // on Android's main looper before launching the external DocumentPicker Activity.
+    // This completely eliminates the native touch dispatcher NullPointerException crash.
+    setTimeout(async () => {
+      try {
+        const result = await DocumentPicker.getDocumentAsync({
+          type: '*/*',
+          copyToCacheDirectory: true,
+          multiple: false,
+        });
 
-      if (!result.canceled && result.assets && result.assets.length > 0) {
+        if (result.canceled || !result.assets || result.assets.length === 0) {
+          return;
+        }
+
         const file = result.assets[0];
         const fileUri = file.uri;
         let chosenName = file.name;
@@ -414,8 +420,8 @@ export default function FilesScreen({ navigation }) {
           progress: 0,
           transferredBytes: 0,
           totalBytes: file.size || 0,
-          sizeText: `${formatBytesFixed(0)} / ${formatBytesFixed(file.size || 0)}`,
-          speedDisplay: '准备上传...',
+          sizeText: `0.0 B / ${formatBytesFixed(file.size || 0)}`,
+          speedDisplay: '正在连接传输...',
           chunkIndex: 0,
         };
 
@@ -425,19 +431,18 @@ export default function FilesScreen({ navigation }) {
           return next;
         });
 
-        // Trigger upload execution
         startUploadTask(newTask);
+      } catch (e) {
+        console.log('[Upload] DocumentPicker error:', e);
+        showConfirm({
+          type: 'warning',
+          title: '选择文件异常',
+          message: e.message || '打开文件选择器失败',
+          confirmText: '知道了',
+          showCancel: false,
+        });
       }
-    } catch (e) {
-      console.log('[Upload] DocumentPicker error:', e);
-      showConfirm({
-        type: 'warning',
-        title: '选择文件异常',
-        message: e.message || '打开文件选择器失败',
-        confirmText: '知道了',
-        showCancel: false,
-      });
-    }
+    }, 250);
   };
 
   const startUploadTask = async (taskItem) => {
@@ -452,7 +457,6 @@ export default function FilesScreen({ navigation }) {
     const workingUri = taskItem.uri;
 
     try {
-      // Determine real file size
       let totalSize = taskItem.size || 0;
       try {
         const fileInfo = await FileSystem.getInfoAsync(workingUri);
@@ -469,11 +473,7 @@ export default function FilesScreen({ navigation }) {
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
         status: 'running',
-        progress: 30,
-        transferredBytes: Math.round(totalSize * 0.3),
-        totalBytes: totalSize,
-        sizeText: `${formatBytesFixed(totalSize * 0.3)} / ${formatBytesFixed(totalSize)}`,
-        speedDisplay: '正在上传到 Unraid...',
+        speedDisplay: '正在上传到 Unraid 存储...',
       } : t)));
 
       // Perform RFC standard multipart upload via native FileSystem.uploadAsync
@@ -494,39 +494,37 @@ export default function FilesScreen({ navigation }) {
         return;
       }
 
-      // Parse and strictly validate server response
+      // Parse server response with full diagnostic visibility
       let serverResult = null;
-      if (res && res.status >= 200 && res.status < 300) {
+      const rawBody = typeof res?.body === 'string' ? res.body.trim() : '';
+
+      if (rawBody) {
         try {
-          const rawBody = typeof res.body === 'string' ? res.body.trim() : '';
-          if (rawBody) {
-            const startIdx = rawBody.indexOf('{');
-            const endIdx = rawBody.lastIndexOf('}');
-            if (startIdx !== -1 && endIdx > startIdx) {
+          serverResult = JSON.parse(rawBody);
+        } catch (_) {
+          const startIdx = rawBody.indexOf('{');
+          const endIdx = rawBody.lastIndexOf('}');
+          if (startIdx !== -1 && endIdx > startIdx) {
+            try {
               serverResult = JSON.parse(rawBody.substring(startIdx, endIdx + 1));
-            } else {
-              serverResult = JSON.parse(rawBody);
-            }
-          } else if (typeof res.body === 'object' && res.body !== null) {
-            serverResult = res.body;
+            } catch (_) {}
           }
-        } catch (parseErr) {
-          console.log('[Upload] Response JSON parse failed, raw body:', res?.body);
         }
-      } else {
-        let errBody = null;
-        try {
-          errBody = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
-        } catch (_) {}
-        throw new Error(errBody?.message || `服务端响应异常 (HTTP ${res?.status || 'Unknown'})`);
+      } else if (typeof res?.body === 'object' && res.body !== null) {
+        serverResult = res.body;
       }
 
-      if (!serverResult || serverResult.status !== 'success') {
-        throw new Error(serverResult?.message || '服务端拒绝写入文件或未确认保存');
+      if (!serverResult) {
+        const preview = rawBody ? (rawBody.length > 150 ? rawBody.slice(0, 150) + '...' : rawBody) : '空响应 (0字节)';
+        throw new Error(`服务端响应格式异常 (HTTP ${res?.status || 'Unknown'})：${preview}`);
+      }
+
+      if (serverResult.status !== 'success') {
+        throw new Error(serverResult.message || '服务端拒绝写入文件');
       }
 
       if (serverResult.size !== undefined && totalSize > 0 && serverResult.size === 0) {
-        throw new Error(`服务端接收到 0 字节文件（预期 ${formatBytesFixed(totalSize)}），可能超出服务器上传限制`);
+        throw new Error(`服务端接收到的文件大小为 0 字节（预期 ${formatBytesFixed(totalSize)}），可能超出服务器上传限制`);
       }
 
       const savedPath = serverResult.path || `${taskItem.targetPath}/${taskItem.name}`;

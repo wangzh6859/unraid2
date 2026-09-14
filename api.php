@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.14.08
+ * Version: 2026.09.14.09
  * Release: 2026-09-14
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.14.08');
+define('UNRAID_API_VERSION', '2026.09.14.09');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -146,7 +146,6 @@ register_shutdown_function(function() {
         if (!headers_sent()) {
             http_response_code(500);
             header('Content-Type: application/json; charset=utf-8');
-            header('Content-Length: ' . strlen($msg));
             header('Connection: close');
         }
         log_upload_debug("FATAL ERROR: " . $err['message'] . " in " . basename($err['file']) . ":" . $err['line']);
@@ -164,7 +163,6 @@ register_shutdown_function(function() {
         if (!headers_sent()) {
             http_response_code(500);
             header('Content-Type: application/json; charset=utf-8');
-            header('Content-Length: ' . strlen($msg));
             header('Connection: close');
         }
         echo $msg;
@@ -574,7 +572,6 @@ function json_output($data, $code = 200) {
     if (!headers_sent()) {
         http_response_code($code);
         header('Content-Type: application/json; charset=utf-8');
-        header('Content-Length: ' . strlen($json));
         header('Connection: close');
     }
 
