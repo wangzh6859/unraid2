@@ -3272,6 +3272,14 @@ function handle_file_upload() {
         }
         clearstatcache(true, $destPath);
         $finalSize = @filesize($destPath);
+        $expectedSize = isset($_GET['size']) ? floatval($_GET['size']) : -1;
+        
+        // Verify file size: if expected > 0 but actual is 0, it means nothing was uploaded
+        if ($finalSize === 0 && $expectedSize > 0) {
+            @unlink($destPath);
+            log_upload_debug("file_upload zero-size after move: dest={$destPath}, expected={$expectedSize}");
+            json_output(['status' => 'error', 'message' => '上传文件为空（0字节），可能超出了服务器的 post_max_size 或 upload_max_filesize 限制，请检查 Nginx/PHP 配置'], 400);
+        }
         log_upload_debug("file_upload ok: dest={$destPath}, size={$finalSize}");
 
         json_output([

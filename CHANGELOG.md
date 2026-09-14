@@ -4,6 +4,21 @@
 
 ---
 
+## [v1.3.189] - 2026-09-14
+> **核心主题**：彻底根除首次上传闪退（Android WindowManager 窗口令牌解绑时序修复）、根除假成功（移除 HTTP-200 强制通过、新增服务端 0 字节验证）
+
+### 💥 彻底根除首次上传 BadTokenException 闪退
+- **根本原因**：旧代码在菜单 Modal 的 `onPress` 回调中直接调用 `handleUpload`，而 `handleUpload` 仅做了 `setIsMenuVisible(false)`（React state 变更），Android 的 `WindowManager` 并不会在同一帧立即卸载窗口。随后在菜单 Modal Window Token 尚未从系统解绑时，立即启动 `DocumentPicker.getDocumentAsync`（需要打开新的 Android Activity），引发 `WindowManager$BadTokenException` 系统级闪退。
+- **修复方案**：彻底分离"关闭菜单"与"打开文件选择器"两个动作。点击"上传文件"仅设置一个 ref 标志位（`pendingUploadRef.current = true`）并关闭菜单 Modal；在 Modal 的原生 `onDismiss` 回调（**此时 Android WindowManager 已完全卸载窗口**）中才真正触发 `launchDocumentPicker()`，再额外等待 300ms 确保窗口层完全稳定后才启动 `DocumentPicker`，彻底消除窗口令牌冲突。
+
+### ✅ 根除虚假上传成功（显示成功但文件实际不存在）
+- **根本原因 1 - JS 端的兜底逻辑**：旧代码存在"若服务端返回 HTTP 200 则强制标记为成功"的兜底逻辑，即便服务端实际上未写入任何文件（例如 PHP 接收到 0 字节的上传流），只要 HTTP 状态码为 200 就通过，导致用户看到"上传成功"提示但目录中根本找不到文件。已**彻底移除**这条兜底规则，改为必须通过服务端确认（`serverResult.status === 'success'`）或二次目录验证才视为成功。
+- **根本原因 2 - JS 端重复 content:// 拷贝导致传空**：由于 `DocumentPicker.getDocumentAsync` 使用 `copyToCacheDirectory: true`，返回的 URI 已经是可直接读取的 `file://` cache 路径。旧代码对这个已缓存的文件**再次做一次 `FileSystem.copyAsync`**，当这次复制失败时回退到原始 URI，造成 `FileSystem.uploadAsync` 在某些机型上传了空数据流。已移除多余的重复 copy 步骤。
+- **根本原因 3 - PHP 端未检测 0 字节文件**：PHP 的 `handle_file_upload` 在 `move_uploaded_file` 后未检测目标文件是否为 0 字节即直接返回 `success`，导致上传数据流空洞时服务端仍报成功。现已在 PHP 端增加严格校验：若目标文件实际大小为 0 但预期大小 > 0，立即删除空文件并返回明确的错误提示（提示 Nginx `post_max_size` 或 `upload_max_filesize` 限制）。
+- **JS 服务端文件大小二次验证**：客户端在收到 `serverResult` 后额外验证 `serverResult.size`：若服务端报告写入文件为 0 字节但本地文件大小 > 0，立即抛出含诊断信息的错误，防止 0 字节空壳文件被错误地当成成功。
+
+---
+
 ## [v1.3.188] - 2026-09-14
 > **核心主题**：原生 OkHttp 套接字池主动驱逐彻底解决开关梯子断连、全面改用 RFC 标准 Multipart 规避 createUploadTask 闪退、原子落盘权威确认解决未检测到文件误报
 

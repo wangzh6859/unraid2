@@ -370,9 +370,13 @@ export default function FilesScreen({ navigation }) {
   // =========================================================================
   // Advanced Upload Task Manager (Create, Pause/Cancel, Resume, Delete record)
   // =========================================================================
-  const handleUpload = async () => {
-    setIsMenuVisible(false);
+  // Separate state to decouple file picker launch from modal dismiss
+  const pendingUploadRef = useRef(false);
+
+  // Called when user taps "Upload" in menu; just closes menu and sets flag
+  const handleUpload = () => {
     if (currentPath === '/mnt' || currentPath === DEFAULT_ROOT) {
+      setIsMenuVisible(false);
       showConfirm({
         type: 'warning',
         title: '无法直接上传到共享根目录',
@@ -382,8 +386,18 @@ export default function FilesScreen({ navigation }) {
       });
       return;
     }
-    // Allow the popup menu Modal to fully dismiss from window manager before opening file picker
-    await new Promise((r) => setTimeout(r, 450));
+    pendingUploadRef.current = true;
+    setIsMenuVisible(false);
+    // The actual DocumentPicker launch is triggered by the modal onDismiss/onRequestClose
+    // giving Android WindowManager time to fully detach the menu window before opening file picker
+  };
+
+  // Actually launches DocumentPicker - called after menu modal has fully unmounted
+  const launchDocumentPicker = async () => {
+    if (!pendingUploadRef.current) return;
+    pendingUploadRef.current = false;
+    // Extra safety: let Android WM finalize window detach after modal close animation
+    await new Promise((r) => setTimeout(r, 300));
     try {
       const result = await DocumentPicker.getDocumentAsync({
         copyToCacheDirectory: true,
@@ -450,29 +464,20 @@ export default function FilesScreen({ navigation }) {
       await backgroundTransferManager.notifyTransferStarted(taskItem);
     } catch (_) {}
 
+    // DocumentPicker with copyToCacheDirectory:true already copies to file:// cache
+    // Using the URI directly avoids double-copy failure and content:// issues
     let workingUri = taskItem.uri;
     let tempCached = false;
     try {
-      const fileUri = taskItem.uri;
-      if (fileUri && fileUri.startsWith('content://')) {
-        try {
-          const safeName = (taskItem.name || 'upload').replace(/[^a-zA-Z0-9._-]/g, '_');
-          const cachePath = `${FileSystem.cacheDirectory}up_${Date.now()}_${safeName}`;
-          await FileSystem.copyAsync({ from: fileUri, to: cachePath });
-          workingUri = cachePath;
-          tempCached = true;
-        } catch (copyErr) {
-          console.log('[Upload] Copy content URI to cache failed:', copyErr);
-          workingUri = fileUri;
-        }
-      }
-
       // Check if file exists and get real size
       let totalSize = taskItem.size || 0;
       try {
         const fileInfo = await FileSystem.getInfoAsync(workingUri);
         if (fileInfo && fileInfo.exists && fileInfo.size !== undefined && fileInfo.size !== null) {
           totalSize = fileInfo.size;
+        } else if (workingUri && workingUri.startsWith('content://')) {
+          // For content:// URIs, FileSystem.getInfoAsync may not return size, use taskItem.size
+          totalSize = taskItem.size || 0;
         }
       } catch (_) {}
 
@@ -541,6 +546,11 @@ export default function FilesScreen({ navigation }) {
       if (serverResult && serverResult.status === 'error') {
         throw new Error(serverResult.message || '服务端拒绝写入文件');
       }
+      
+      // Validate file size reported by server (if available)
+      if (serverResult && serverResult.size !== undefined && totalSize > 0 && serverResult.size === 0) {
+        throw new Error(`服务端写入的文件大小为 0 字节（期望 ${formatBytesFixed(totalSize)}），可能超出了 Nginx 的 post_max_size 限制或上传流中断`);
+      }
 
       // Verification: Ensure file presence on server
       let isVerifiedSuccess = false;
@@ -587,23 +597,13 @@ export default function FilesScreen({ navigation }) {
         }
       }
 
-      // If HTTP response was 200 and no server error, confirm success
-      if (!isVerifiedSuccess && res && res.status >= 200 && res.status < 300) {
-        isVerifiedSuccess = true;
-      }
-
+      // If not yet verified, throw error to tell user the file was not confirmed
       if (!isVerifiedSuccess) {
-        throw new Error('文件写入未被服务端确认，目标目录未检测到该文件，请检查目录权限');
+        throw new Error('文件写入未被服务端确认，目标目录未检测到该文件，请检查目录权限或文件大小是否超出 Nginx 限制');
       }
 
       delete activeTasksRef.current[taskId];
-
-      if (tempCached && workingUri && workingUri.startsWith(FileSystem.cacheDirectory)) {
-        FileSystem.deleteAsync(workingUri, { idempotent: true }).catch(() => {});
-      }
-      if (taskItem.uri && taskItem.uri.startsWith(FileSystem.cacheDirectory + 'up_')) {
-        FileSystem.deleteAsync(taskItem.uri, { idempotent: true }).catch(() => {});
-      }
+      // Clean up any temp cache files (DocumentPicker caches are managed by the OS)
 
       setTransfers(prev => {
         const next = prev.map(t => (t.id === taskId ? {
@@ -1473,7 +1473,7 @@ export default function FilesScreen({ navigation }) {
       />
 
       {/* Dropdown Menu (Top-Right Plus) */}
-      <Modal visible={isMenuVisible} transparent animationType="fade" onRequestClose={() => setIsMenuVisible(false)}>
+      <Modal visible={isMenuVisible} transparent animationType="fade" onRequestClose={() => setIsMenuVisible(false)} onDismiss={launchDocumentPicker}>
         <Pressable style={styles.modalOverlay} onPress={() => setIsMenuVisible(false)}>
           <View style={styles.dropdownMenu}>
             <TouchableOpacity style={styles.menuItem} onPress={handleUpload}>
