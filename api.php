@@ -6,7 +6,7 @@
  * Release: 2026-09-13
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.14.03');
+define('UNRAID_API_VERSION', '2026.09.14.04');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -2119,14 +2119,16 @@ function find_compose_file($target, $path = '') {
     // 1. Authoritative: Inspect Docker container labels for this compose project
     if (!empty($target)) {
         $escapedTarget = escapeshellarg("label=com.docker.compose.project={$target}");
-        $cFilesRaw = @shell_exec("docker ps -a --filter {$escapedTarget} --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' 2>/dev/null");
+        $fmtFiles = '{{index .Config.Labels "com.docker.compose.project.config_files"}}';
+        $cFilesRaw = @shell_exec("docker ps -a --filter {$escapedTarget} --format " . escapeshellarg($fmtFiles) . " 2>/dev/null");
         if (!empty($cFilesRaw)) {
             $cFiles = array_filter(array_map('trim', explode("\n", $cFilesRaw)));
             foreach ($cFiles as $cf) {
                 if (file_exists($cf) && is_file($cf)) return $cf;
             }
         }
-        $cWorkingDirRaw = @shell_exec("docker ps -a --filter {$escapedTarget} --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null");
+        $fmtDir = '{{index .Config.Labels "com.docker.compose.project.working_dir"}}';
+        $cWorkingDirRaw = @shell_exec("docker ps -a --filter {$escapedTarget} --format " . escapeshellarg($fmtDir) . " 2>/dev/null");
         if (!empty($cWorkingDirRaw)) {
             $dirs = array_filter(array_map('trim', explode("\n", $cWorkingDirRaw)));
             foreach ($dirs as $d) {
@@ -2184,7 +2186,8 @@ function handle_compose_list() {
     }
 
     // Discover working directories from compose containers directly
-    $psDirsRaw = @shell_exec('docker ps -a --filter "label=com.docker.compose.project" --format "{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}" 2>/dev/null');
+    $fmtWorkDir = '{{index .Config.Labels "com.docker.compose.project.working_dir"}}';
+    $psDirsRaw = @shell_exec('docker ps -a --filter ' . escapeshellarg('label=com.docker.compose.project') . ' --format ' . escapeshellarg($fmtWorkDir) . ' 2>/dev/null');
     if ($psDirsRaw) {
         foreach (explode("\n", trim($psDirsRaw)) as $pDir) {
             $pDir = trim($pDir);
@@ -2202,7 +2205,8 @@ function handle_compose_list() {
 
     // Pre-query all compose-labeled containers
     $composeContainers = [];
-    $psOut = @shell_exec('docker ps -a --filter "label=com.docker.compose.project" --format "{{.Label \"com.docker.compose.project\"}}\t{{.Label \"com.docker.compose.service\"}}\t{{.Names}}\t{{.Status}}\t{{.State}}" 2>/dev/null');
+    $fmtPs = '{{.Label "com.docker.compose.project"}}' . "\t" . '{{.Label "com.docker.compose.service"}}' . "\t" . '{{.Names}}' . "\t" . '{{.Status}}' . "\t" . '{{.State}}';
+    $psOut = @shell_exec('docker ps -a --filter ' . escapeshellarg('label=com.docker.compose.project') . ' --format ' . escapeshellarg($fmtPs) . ' 2>/dev/null');
     if ($psOut) {
         foreach (explode("\n", trim($psOut)) as $line) {
             $cols = explode("\t", $line);
