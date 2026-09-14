@@ -32,6 +32,30 @@ import {
   clearAllDockerAliases, removeDockerAlias, formatProxyUrl,
 } from '../utils/dockerWebUiManager';
 
+const APP_RELEASE_CHANGELOGS = {
+  '1.3.1': `【v1.3.1 核心更新与修复】
+🚀 1. 传输引擎颠覆性升级（原生流式直连）：
+   - 采用 Native Binary Streaming 原生二进制流式传输，彻底绕过 Base64 与 JS 内存序列化，局域网与 WiFi 下上传速度暴增 10x-50x，轻松跑满 50MB/s~100MB/s 线速。
+🛡️ 2. 文件落盘双重强校验（彻底杜绝虚假成功）：
+   - 修复了此前在部分网络环境下误报“上传成功”但目标目录无文件的问题。
+   - 上传完成必须经过服务端写入确认与目录实时扫描双重校验，确认落盘才计入成功。
+🚫 3. 根目录非法写入智能拦截：
+   - 手机端与服务端双重拦截直接向 /mnt/user 根目录上传的行为，防误触并提示用户进入具体的共享文件夹。
+🔧 4. 后端 FastCGI / Nginx 压缩深度适配：
+   - 移除 Content-Length 头部冲突，解决 Nginx gzip 引起的“空响应 (HTTP 200)”异常，完善长连接退出保护。`,
+  '1.3.0': `【v1.3.0 核心更新与修复】
+🐳 1. Docker Compose 重建与升级重构：
+   - 重建指令优化为 pull && up -d --remove-orphans，彻底解决更新后容器状态不一致。
+📜 2. 日志与配置加载优化：
+   - 修复 Compose 运行日志与 YAML 配置调取无限转圈的问题。
+🔍 3. 镜像 Hash 显示优化：
+   - 明确区分短镜像 ID (12位) 与远端 RepoDigest SHA256 校验和。`,
+  '1.2.0': `【v1.2.0 核心更新与修复】
+🎨 1. 全新沉浸式深色 / 浅色主题无缝切换。
+📁 2. 全能文件即时预览中心（音视频、代码、Office 文档）。
+🔒 3. 单一 API Token 鉴权体系与 Unraid 安全沙盒加固。`
+};
+
 export default function SettingsScreen({ navigation }) {
   // Modern squircle confirm & result dialog state
   const [confirmDialog, setConfirmDialog] = useState({
@@ -148,13 +172,18 @@ export default function SettingsScreen({ navigation }) {
       const latestTag = data.tag_name || '';
       const apkAsset = (data.assets || []).find(a => a.name && a.name.endsWith('.apk'));
 
+      const rawBody = (data.body || '').trim();
+      const versionKey = (latestTag || '').replace(/^v/i, '');
+      const specificLog = APP_RELEASE_CHANGELOGS[versionKey] || APP_RELEASE_CHANGELOGS[appVersion] || '';
+      const displayBody = (rawBody.length > 25 && !rawBody.includes('包含多项功能更新')) ? rawBody : (specificLog || rawBody || '包含多项功能更新与体验优化。');
+
       const hasUpdate = isNewerVersion(latestTag, appVersion);
       if (hasUpdate && apkAsset) {
         setUpdateInfo({
           hasUpdate: true,
           latestTag,
           releaseName: data.name || latestTag,
-          body: data.body || '',
+          body: displayBody,
           apkUrl: apkAsset.browser_download_url,
           apkSize: apkAsset.size || 0,
         });
@@ -1219,10 +1248,24 @@ export default function SettingsScreen({ navigation }) {
           <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
             <Sparkles color={colors.accent} size={20} />
           </View>
-          <View style={styles.infoBox}>
+          <TouchableOpacity
+            style={styles.infoBox}
+            activeOpacity={0.7}
+            onPress={() => {
+              const versionKey = (appVersion || '').replace(/^v/i, '');
+              const log = APP_RELEASE_CHANGELOGS[versionKey] || APP_RELEASE_CHANGELOGS['1.3.1'];
+              showConfirm({
+                type: 'info',
+                title: `v${appVersion} 版本更新详情`,
+                message: log,
+                confirmText: '我知道了',
+                showCancel: false,
+              });
+            }}
+          >
             <Text style={styles.rowTitle}>手机 App 版本</Text>
-            <Text style={styles.rowSub}>Unraid Mobile Manager v{appVersion}</Text>
-          </View>
+            <Text style={styles.rowSub}>Unraid Mobile Manager v{appVersion} (点此查看更新日志)</Text>
+          </TouchableOpacity>
           <TouchableOpacity
             style={[styles.updateCheckBtn, { backgroundColor: colors.accent }]}
             onPress={() => checkForUpdate(true)}

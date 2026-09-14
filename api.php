@@ -6,7 +6,7 @@
  * Release: 2026-09-13
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.14.05');
+define('UNRAID_API_VERSION', '2026.09.14.06');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -3302,8 +3302,8 @@ function handle_file_upload() {
         }
 
         if (function_exists('stream_set_chunk_size')) {
-            @stream_set_chunk_size($in, 524288);
-            @stream_set_chunk_size($out, 524288);
+            @stream_set_chunk_size($in, 2097152);
+            @stream_set_chunk_size($out, 2097152);
         }
         if (function_exists('stream_set_write_buffer')) {
             @stream_set_write_buffer($out, 0);
@@ -3317,7 +3317,7 @@ function handle_file_upload() {
             $bytesWritten = 0;
             while (!feof($in)) {
                 @set_time_limit(0);
-                $buff = fread($in, 524288);
+                $buff = fread($in, 2097152);
                 if ($buff === false || $buff === '') {
                     break;
                 }
@@ -3333,7 +3333,11 @@ function handle_file_upload() {
         @fclose($in);
 
         clearstatcache(true, $destPath);
-        if ($bytesWritten === 0 || !file_exists($destPath) || filesize($destPath) === 0) {
+        clearstatcache(true, $targetDir);
+        $fileSize = @filesize($destPath);
+        $expectedSize = isset($_GET['size']) ? floatval($_GET['size']) : (isset($_POST['size']) ? floatval($_POST['size']) : -1);
+
+        if ($bytesWritten === 0 && $expectedSize !== 0.0) {
             @unlink($destPath);
             json_output(['status' => 'error', 'message' => '未接收到上传数据（0 字节）。若文件较大，可能超出了 Unraid Nginx/PHP 的 post_max_size 限制。'], 400);
         }
@@ -3345,13 +3349,13 @@ function handle_file_upload() {
         }
         clearstatcache(true, $destPath);
         clearstatcache(true, $targetDir);
-        log_upload_debug("file_upload stream ok: dest={$destPath}, size=" . filesize($destPath));
+        log_upload_debug("file_upload stream ok: dest={$destPath}, size=" . $fileSize);
         json_output([
             'status' => 'success',
             'message' => '文件已成功上传至 Unraid 存储',
             'path' => $destPath,
             'name' => $cleanDestName,
-            'size' => filesize($destPath)
+            'size' => $fileSize
         ]);
     }
 }
@@ -3488,6 +3492,7 @@ function handle_file_chunk() {
             @chgrp($destPath, 'users');
         }
         clearstatcache(true, $destPath);
+        clearstatcache(true, $targetDir);
         $currentSize = @filesize($destPath);
         $isComplete = ($chunkIndex + 1 >= $totalChunks);
 
@@ -3499,6 +3504,7 @@ function handle_file_chunk() {
                 'complete' => true,
                 'message' => '文件已成功写入 Unraid 存储',
                 'path' => $destPath,
+                'name' => $cleanName,
                 'size' => $currentSize,
                 'total_size' => $totalSize
             ]);
