@@ -370,13 +370,9 @@ export default function FilesScreen({ navigation }) {
   // =========================================================================
   // Advanced Upload Task Manager (Create, Pause/Cancel, Resume, Delete record)
   // =========================================================================
-  // Separate state to decouple file picker launch from modal dismiss
-  const pendingUploadRef = useRef(false);
-
-  // Called when user taps "Upload" in menu; just closes menu and sets flag
-  const handleUpload = () => {
+  const handleUpload = async () => {
+    setIsMenuVisible(false);
     if (currentPath === '/mnt' || currentPath === DEFAULT_ROOT) {
-      setIsMenuVisible(false);
       showConfirm({
         type: 'warning',
         title: '无法直接上传到共享根目录',
@@ -386,27 +382,15 @@ export default function FilesScreen({ navigation }) {
       });
       return;
     }
-    pendingUploadRef.current = true;
-    setIsMenuVisible(false);
-    // The actual DocumentPicker launch is triggered by the modal onDismiss/onRequestClose
-    // giving Android WindowManager time to fully detach the menu window before opening file picker
-  };
 
-  // Actually launches DocumentPicker - called after menu modal has fully unmounted
-  const launchDocumentPicker = async () => {
-    if (!pendingUploadRef.current) return;
-    pendingUploadRef.current = false;
-    // Extra safety: let Android WM finalize window detach after modal close animation
-    await new Promise((r) => setTimeout(r, 300));
     try {
       const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
         copyToCacheDirectory: true,
         multiple: false,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        // Allow Android system file picker activity transition to finish cleanly
-        await new Promise((r) => setTimeout(r, 350));
         const file = result.assets[0];
         const fileUri = file.uri;
         let chosenName = file.name;
@@ -438,16 +422,16 @@ export default function FilesScreen({ navigation }) {
           saveTransfersQueue(next);
           return next;
         });
-        // Start upload smoothly in background without opening modal that could collide with file picker activity
-        setTimeout(() => {
-          startUploadTask(newTask);
-        }, 300);
+
+        // Start upload immediately in background
+        startUploadTask(newTask);
       }
     } catch (e) {
+      console.log('[Upload] DocumentPicker error:', e);
       showConfirm({
         type: 'warning',
         title: '选择文件异常',
-        message: e.message,
+        message: e.message || '打开文件选择器失败',
         confirmText: '知道了',
         showCancel: false,
       });
@@ -1472,9 +1456,10 @@ export default function FilesScreen({ navigation }) {
         onDownload={handleDownload}
       />
 
-      {/* Dropdown Menu (Top-Right Plus) */}
-      <Modal visible={isMenuVisible} transparent animationType="fade" onRequestClose={() => setIsMenuVisible(false)} onDismiss={launchDocumentPicker}>
-        <Pressable style={styles.modalOverlay} onPress={() => setIsMenuVisible(false)}>
+      {/* Dropdown Menu (Top-Right Plus) - rendered as in-screen overlay to avoid Dialog WindowManager crash */}
+      {isMenuVisible && (
+        <View style={styles.menuOverlayContainer} pointerEvents="box-none">
+          <Pressable style={styles.menuBackdrop} onPress={() => setIsMenuVisible(false)} />
           <View style={styles.dropdownMenu}>
             <TouchableOpacity style={styles.menuItem} onPress={handleUpload}>
               <UploadCloud color={colors.text} size={20} />
@@ -1504,8 +1489,8 @@ export default function FilesScreen({ navigation }) {
               <Text style={styles.menuText}>刷新目录</Text>
             </TouchableOpacity>
           </View>
-        </Pressable>
-      </Modal>
+        </View>
+      )}
 
       {/* Create Folder Modal */}
       <Modal visible={mkdirVisible} transparent animationType="fade" onRequestClose={() => setMkdirVisible(false)}>
@@ -2180,9 +2165,18 @@ const createStyles = (colors) => StyleSheet.create({
   },
 
   // Dropdown Menu
+  menuOverlayContainer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 99999,
+    elevation: 99999,
+  },
+  menuBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+  },
   dropdownMenu: {
     position: 'absolute',
-    top: Platform.OS === 'ios' ? 100 : 60,
+    top: Platform.OS === 'ios' ? 100 : 8,
     right: 16,
     backgroundColor: colors.card,
     borderRadius: 20,
@@ -2195,6 +2189,7 @@ const createStyles = (colors) => StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.3,
     shadowRadius: 16,
+    zIndex: 100000,
   },
   menuItem: {
     flexDirection: 'row',

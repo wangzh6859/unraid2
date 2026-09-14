@@ -4,6 +4,16 @@
 
 ---
 
+## [v1.3.190] - 2026-09-14
+> **核心主题**：修复 Android 平台点击上传无响应问题（弃用系统 Modal 弹窗改为纯 React Native 视图遮罩）、实现文件选择器即点即弹
+
+### 📂 彻底解决点击“上传文件”无法弹出系统选择器的问题
+- **根因分析**：在 v1.3.189 中尝试通过 React Native `<Modal onDismiss={launchDocumentPicker}>` 延迟唤起选择器，但 React Native 官方架构中 `Modal.onDismiss` 是 **仅支持 iOS** 的属性，在 Android 原生层中关闭 Modal 时 `onDismiss` 从不会被触发，导致用户在 Android 点击“上传文件”后选择器被彻底阻断、毫无反应。
+- **架构革新**：彻底弃用右上角功能菜单原有的原生系统 `<Modal>` 架构，将其重构为纯前端组件层面的绝对定位视图遮罩（`menuOverlayContainer` + `menuBackdrop`）。
+- **零延迟即点即弹**：因为功能菜单不再创建 Android 原生 `Dialog` 窗口，消除了所有 `WindowManager` 窗口令牌冲突风险。点击“上传文件”后立即通过标准 `DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true })` 瞬时唤起 Android 系统文件选择器，恢复毫秒级流畅响应，杜绝任何闪退与卡死。
+
+---
+
 ## [v1.3.189] - 2026-09-14
 > **核心主题**：彻底根除首次上传闪退（Android WindowManager 窗口令牌解绑时序修复）、根除假成功（移除 HTTP-200 强制通过、新增服务端 0 字节验证）
 
