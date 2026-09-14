@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import './utils/apiClient';
 import { StatusBar, AppState, View, Text, TouchableOpacity, ScrollView, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';

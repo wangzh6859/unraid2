@@ -4,6 +4,27 @@
 
 ---
 
+## [v1.3.187] - 2026-09-14
+> **核心主题**：开关梯子/代理无缝自愈重连、首次上传闪退根除、上传权威确认与 FUSE 缓存时序修复、代码引用异常修复
+
+### 🌐 开关梯子/代理无缝重连 (VPN & Proxy Route Resilience)
+- **底层 Socket 僵死根治**：彻底解决用户开关梯子或切换网络（Wi-Fi/移动网络）后，Android 底层 OkHttp 连接池沿用旧网络接口（`tun0` / `wlan0`）失效 TCP 套接字导致 App 报错“网络请求失败”且必须彻底重启软件的问题。
+- **动态短连接与路由自愈**：在统一 API 客户端全面配置 `Connection: close` 与全局动态时间戳 `_t=${Date.now()}`，杜绝长连接池在路由表切换后缓存僵死套接字；当捕获到网络路由切换错误时，自动延迟 400ms 并执行自愈重试。
+- **前台唤醒自动刷新 (AppState Listener)**：新增前后台唤醒监听，用户切出 App 开关梯子返回后，App 自动触发静默通信复活与仪表盘数据同步，无需手动刷新或重启应用。
+
+### 💥 首次上传闪退彻底根除 (First-Time Upload Crash Fix)
+- **WindowManager 窗口层级防冲突**：修复 Android 系统中菜单 Modal 尚未彻底退出即唤起 `DocumentPicker` 导致的系统级 `BadTokenException`；弹窗解绑与文件选择器返回分别设立 450ms 与 350ms 的安全过渡窗口。
+- **JS 桥接流量削峰与错峰渲染**：修复原生 OkHttp 传输事件每秒数百次并发冲击 React Native 状态更新导致的内存溢出与线程阻塞；将进度更新平滑限流至 250ms/次并加入全局 `try/catch` 保护。
+- **异步错峰启动**：传输面板与底层 Native 上传线程错开 150ms 启动，杜绝首次上传时的视图竞态崩溃。
+
+### ✅ 上传落盘权威确认与 FUSE 时序修复 (Upload Verification & Reference Fix)
+- **剔除未定义变量**：修复任务完成时因引用未定义变量 `totalChunks` 触发的 JavaScript `ReferenceError` 导致误报上传中断的致命缺陷。
+- **服务端权威确认机制**：确立“服务端写入成功即权威确认”机制，只要后端返回 HTTP 200 及 `status: 'success'`，即视为文件可靠落盘，杜绝因二次校验误判造成失败假象。
+- **Unraid FUSE 延迟多轮比对**：为 Unraid `/mnt/user` 存储池 FUSE 缓存设立 350ms 缓冲同步窗口，目录复核支持最多 3 次多轮检索，并支持 Unicode NFC 规范化与 URL 解码双重文件名比对。
+- **双引擎传输容灾**：当底层二进制裸流（Binary Streaming）在特定机型受到限制时，自动平滑无缝降级至 Multipart 表单上传引擎。
+
+---
+
 ## [v1.3.186 / api.php v2026.09.14.07] - 2026-09-14
 > **核心主题**：服务端 FastCGI 传输协议彻底修复、流式上传 1MB 循环直写、准确 Content-Length 响应头、杜绝二次校验空响应
 

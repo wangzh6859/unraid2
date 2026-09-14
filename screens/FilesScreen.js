@@ -19,6 +19,7 @@ import { getDownloadDir, formatBytes } from '../utils/cacheManager';
 import FilePreviewer from '../components/FilePreviewer';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import backgroundTransferManager from '../utils/backgroundTransferManager';
+import { apiFetch, apiFetchJson } from '../utils/apiClient';
 
 // Formats bytes with fixed 1 decimal place to prevent layout shift
 const formatBytesFixed = (bytes) => {
@@ -187,11 +188,7 @@ export default function FilesScreen({ navigation }) {
     if (csrfTokenRef.current) return csrfTokenRef.current;
     const cleanUrl = (baseUrl || '').replace(/\/+$/, '');
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1500);
-      const res = await fetch(`${cleanUrl}/api.php?token=${encodeURIComponent(token)}&action=csrf_token`, { signal: controller.signal });
-      clearTimeout(timeoutId);
-      const data = await res.json();
+      const data = await apiFetchJson(`${cleanUrl}/api.php?token=${encodeURIComponent(token)}&action=csrf_token`, {}, 4000, 1);
       if (data && data.csrf_token) {
         setCsrfToken(data.csrf_token);
         csrfTokenRef.current = data.csrf_token;
@@ -254,11 +251,8 @@ export default function FilesScreen({ navigation }) {
     setIsLoadingList(true);
     try {
       const cleanUrl = baseUrl.replace(/\/+$/, '');
-      const url = `${cleanUrl}/api.php?token=${encodeURIComponent(token)}&action=file_list&path=${encodeURIComponent(path)}&_t=${Date.now()}`;
-      const res = await fetch(url, {
-        headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' },
-      });
-      const data = await res.json();
+      const url = `${cleanUrl}/api.php?token=${encodeURIComponent(token)}&action=file_list&path=${encodeURIComponent(path)}`;
+      const data = await apiFetchJson(url, {}, 9000, 1);
 
       if (data.status === 'success') {
         if (data.csrf_token) {
@@ -281,7 +275,7 @@ export default function FilesScreen({ navigation }) {
       }
     } catch (e) {
       console.log('[FilesScreen] loadDirectory error:', e);
-      Alert.alert('网络异常', '无法连接到 Unraid 服务器文件模块');
+      Alert.alert('网络异常', '无法连接到 Unraid 服务器文件模块，请检查网络或代理');
     } finally {
       setIsLoadingList(false);
       setIsRefreshing(false);
@@ -372,7 +366,7 @@ export default function FilesScreen({ navigation }) {
       return;
     }
     // Allow the popup menu Modal to fully dismiss from window manager before opening file picker
-    await new Promise((r) => setTimeout(r, 350));
+    await new Promise((r) => setTimeout(r, 450));
     try {
       const result = await DocumentPicker.getDocumentAsync({
         copyToCacheDirectory: true,
@@ -381,7 +375,7 @@ export default function FilesScreen({ navigation }) {
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         // Allow Android system file picker activity transition to finish cleanly
-        await new Promise((r) => setTimeout(r, 250));
+        await new Promise((r) => setTimeout(r, 350));
         const file = result.assets[0];
         const fileUri = file.uri;
         let chosenName = file.name;
@@ -414,7 +408,10 @@ export default function FilesScreen({ navigation }) {
           return next;
         });
         setIsTransferVisible(true);
-        startUploadTask(newTask);
+        // Stagger upload task start slightly so Transfer Modal mount animation completes smoothly without native bridge overload
+        setTimeout(() => {
+          startUploadTask(newTask);
+        }, 150);
       }
     } catch (e) {
       showConfirm({
@@ -470,18 +467,14 @@ export default function FilesScreen({ navigation }) {
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
         status: 'running',
-        progress: (t.chunkIndex && totalSize > 0) ? Math.min(99, Math.round((t.chunkIndex * 2 * 1024 * 1024 / totalSize) * 100)) : (t.progress || 0),
-        transferredBytes: (t.chunkIndex) ? Math.min(totalSize, t.chunkIndex * 2 * 1024 * 1024) : (t.transferredBytes || 0),
+        progress: (t.progress || 0),
+        transferredBytes: (t.transferredBytes || 0),
         totalBytes: totalSize,
-        sizeText: `${formatBytesFixed((t.chunkIndex) ? Math.min(totalSize, t.chunkIndex * 2 * 1024 * 1024) : 0)} / ${formatBytesFixed(totalSize)}`,
-        speedDisplay: (t.chunkIndex && t.chunkIndex > 0) ? `断点续传中(第 ${t.chunkIndex + 1} 片)...` : '准备传输...',
+        sizeText: `${formatBytesFixed(0)} / ${formatBytesFixed(totalSize)}`,
+        speedDisplay: '准备传输...',
       } : t)));
 
-      // -----------------------------------------------------------------------
       // Native High-Speed Binary Streaming via FileSystem.createUploadTask
-      // Directly streams raw bytes from native storage to api.php (php://input).
-      // Provides real-time native callbacks with zero JS memory overhead (50MB/s~100MB/s).
-      // -----------------------------------------------------------------------
       const uploadUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}&size=${totalSize}`;
 
       let lastReportTime = Date.now();
@@ -490,6 +483,7 @@ export default function FilesScreen({ navigation }) {
       let currentSpeedDisplay = '准备传输...';
       let serverResult = null;
       let savedPath = `${taskItem.targetPath}/${taskItem.name}`;
+      let hasSetCompleteState = false;
 
       const uploadTask = FileSystem.createUploadTask(
         uploadUrl,
@@ -497,6 +491,7 @@ export default function FilesScreen({ navigation }) {
         {
           headers: {
             'Content-Type': 'application/octet-stream',
+            'Connection': 'close',
             'X-API-Token': apiToken,
             ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
           },
@@ -504,73 +499,98 @@ export default function FilesScreen({ navigation }) {
           uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
         },
         (progressData) => {
-          const totalSent = progressData.totalBytesSent || 0;
-          const totalExp = progressData.totalBytesExpectedToSend || totalSize;
-          const now = Date.now();
-          const elapsed = (now - lastReportTime) / 1000;
+          try {
+            const totalSent = progressData.totalBytesSent || 0;
+            const totalExp = progressData.totalBytesExpectedToSend || totalSize;
+            const now = Date.now();
+            const elapsed = (now - lastReportTime) / 1000;
 
-          if (totalSent >= totalExp && totalExp > 0) {
-            const szStr = `${formatBytesFixed(totalSent)} / ${formatBytesFixed(totalExp)} · 写入存储中`;
-            const syncMsg = '服务端落盘同步中...';
-            currentSpeedDisplay = syncMsg;
-            setTransfers(prev => prev.map(t => (t.id === taskId ? {
-              ...t,
-              status: 'running',
-              progress: 99,
-              transferredBytes: totalSent,
-              totalBytes: totalExp,
-              sizeText: szStr,
-              speedDisplay: syncMsg,
-            } : t)));
+            if (totalSent >= totalExp && totalExp > 0) {
+              if (hasSetCompleteState) return;
+              hasSetCompleteState = true;
+              const szStr = `${formatBytesFixed(totalSent)} / ${formatBytesFixed(totalExp)} · 写入存储中`;
+              const syncMsg = '服务端落盘同步中...';
+              currentSpeedDisplay = syncMsg;
+              setTransfers(prev => prev.map(t => (t.id === taskId ? {
+                ...t,
+                status: 'running',
+                progress: 99,
+                transferredBytes: totalSent,
+                totalBytes: totalExp,
+                sizeText: szStr,
+                speedDisplay: syncMsg,
+              } : t)));
 
-            backgroundTransferManager.updateForegroundProgress({
-              name: taskItem.name,
-              progress: 99,
-              speedStr: syncMsg,
-              sizeText: szStr,
-            });
-            return;
-          }
-
-          if (elapsed >= 0.25) {
-            const bytesDelta = totalSent - lastReportBytes;
-            const instantSpeed = bytesDelta > 0 ? (bytesDelta / elapsed) : 0;
-            lastReportTime = now;
-            lastReportBytes = totalSent;
-
-            if (instantSpeed > 0) {
-              smoothedSpeed = smoothedSpeed > 0 ? (0.35 * instantSpeed + 0.65 * smoothedSpeed) : instantSpeed;
+              backgroundTransferManager.updateForegroundProgress({
+                name: taskItem.name,
+                progress: 99,
+                speedStr: syncMsg,
+                sizeText: szStr,
+              });
+              return;
             }
 
-            const spdStr = smoothedSpeed > 300
-              ? `${formatBytesFixed(smoothedSpeed)}/s`
-              : (instantSpeed > 0 ? `${formatBytesFixed(instantSpeed)}/s` : '高速传输中...');
-            currentSpeedDisplay = spdStr;
-            const progressPct = totalExp > 0 ? Math.min(99, Math.round((totalSent / totalExp) * 100)) : 0;
-            const szStr = `${formatBytesFixed(totalSent)} / ${formatBytesFixed(totalExp)}`;
+            if (elapsed >= 0.25) {
+              const bytesDelta = totalSent - lastReportBytes;
+              const instantSpeed = bytesDelta > 0 ? (bytesDelta / elapsed) : 0;
+              lastReportTime = now;
+              lastReportBytes = totalSent;
 
-            setTransfers(prev => prev.map(t => (t.id === taskId ? {
-              ...t,
-              status: 'running',
-              progress: progressPct,
-              transferredBytes: totalSent,
-              totalBytes: totalExp,
-              sizeText: szStr,
-              speedDisplay: spdStr,
-            } : t)));
+              if (instantSpeed > 0) {
+                smoothedSpeed = smoothedSpeed > 0 ? (0.35 * instantSpeed + 0.65 * smoothedSpeed) : instantSpeed;
+              }
 
-            backgroundTransferManager.updateForegroundProgress({
-              name: taskItem.name,
-              progress: progressPct,
-              speedStr: spdStr,
-              sizeText: szStr,
-            });
+              const spdStr = smoothedSpeed > 300
+                ? `${formatBytesFixed(smoothedSpeed)}/s`
+                : (instantSpeed > 0 ? `${formatBytesFixed(instantSpeed)}/s` : '高速传输中...');
+              currentSpeedDisplay = spdStr;
+              const progressPct = totalExp > 0 ? Math.min(99, Math.round((totalSent / totalExp) * 100)) : 0;
+              const szStr = `${formatBytesFixed(totalSent)} / ${formatBytesFixed(totalExp)}`;
+
+              setTransfers(prev => prev.map(t => (t.id === taskId ? {
+                ...t,
+                status: 'running',
+                progress: progressPct,
+                transferredBytes: totalSent,
+                totalBytes: totalExp,
+                sizeText: szStr,
+                speedDisplay: spdStr,
+              } : t)));
+
+              backgroundTransferManager.updateForegroundProgress({
+                name: taskItem.name,
+                progress: progressPct,
+                speedStr: spdStr,
+                sizeText: szStr,
+              });
+            }
+          } catch (progErr) {
+            console.log('[Upload] Progress error:', progErr);
           }
         }
       );
 
       activeTasksRef.current[taskId].uploadTask = uploadTask;
-      const res = await uploadTask.uploadAsync();
+      let res = null;
+      try {
+        res = await uploadTask.uploadAsync();
+      } catch (uploadErr) {
+        console.log('[Upload] Binary streaming failed, attempting multipart fallback:', uploadErr);
+        if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
+          throw uploadErr;
+        }
+        // Fallback: uploadAsync with MULTIPART
+        res = await FileSystem.uploadAsync(uploadUrl, workingUri, {
+          fieldName: 'file',
+          httpMethod: 'POST',
+          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+          headers: {
+            'Connection': 'close',
+            'X-API-Token': apiToken,
+            ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
+          },
+        });
+      }
 
       if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
         return;
@@ -578,7 +598,18 @@ export default function FilesScreen({ navigation }) {
 
       if (res && res.status >= 200 && res.status < 300) {
         try {
-          serverResult = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
+          const rawBody = typeof res.body === 'string' ? res.body.trim() : '';
+          if (rawBody) {
+            const startIdx = rawBody.indexOf('{');
+            const endIdx = rawBody.lastIndexOf('}');
+            if (startIdx !== -1 && endIdx > startIdx) {
+              serverResult = JSON.parse(rawBody.substring(startIdx, endIdx + 1));
+            } else {
+              serverResult = JSON.parse(rawBody);
+            }
+          } else if (typeof res.body === 'object' && res.body !== null) {
+            serverResult = res.body;
+          }
         } catch (parseErr) {
           console.log('[Upload] Response JSON parse failed, raw body:', res?.body);
         }
@@ -594,31 +625,51 @@ export default function FilesScreen({ navigation }) {
         throw new Error(serverResult.message || '服务端拒绝写入文件');
       }
 
-      // -----------------------------------------------------------------------
-      // Secondary Verification: Ensure file presence on server
-      // -----------------------------------------------------------------------
+      // Verification: Ensure file presence on server
       let isVerifiedSuccess = (serverResult && serverResult.status === 'success');
       if (serverResult?.path) savedPath = serverResult.path;
 
-      try {
-        const checkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_list&path=${encodeURIComponent(taskItem.targetPath)}&_t=${Date.now()}`;
-        const checkRes = await fetch(checkUrl);
-        const checkData = await checkRes.json();
-        if (checkData && checkData.status === 'success' && Array.isArray(checkData.items)) {
-          const targetNameNorm = (taskItem.name || '').normalize('NFC').trim().toLowerCase();
-          const fileFound = checkData.items.find(it => {
-            const itNameNorm = (it.name || '').normalize('NFC').trim().toLowerCase();
-            return itNameNorm === targetNameNorm || it.path === savedPath || it.name === serverResult?.name;
-          });
-          if (fileFound) {
-            isVerifiedSuccess = true;
-            savedPath = fileFound.path || savedPath;
-          } else if (!serverResult || serverResult.status !== 'success') {
-            isVerifiedSuccess = false;
+      // Allow Unraid FUSE cache to sync
+      await new Promise(r => setTimeout(r, 350));
+
+      // Attempt secondary check up to 3 times
+      let checkAttempts = 0;
+      while (checkAttempts < 3) {
+        try {
+          const checkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_list&path=${encodeURIComponent(taskItem.targetPath)}`;
+          const checkData = await apiFetchJson(checkUrl, {}, 6000, 1);
+          if (checkData && checkData.status === 'success' && Array.isArray(checkData.items)) {
+            const targetNameNorm = (taskItem.name || '').normalize('NFC').trim().toLowerCase();
+            const targetNameDecoded = decodeURIComponent(taskItem.name || '').toLowerCase();
+            const fileFound = checkData.items.find(it => {
+              const itNameNorm = (it.name || '').normalize('NFC').trim().toLowerCase();
+              const itNameDecoded = decodeURIComponent(it.name || '').toLowerCase();
+              return (
+                itNameNorm === targetNameNorm ||
+                itNameDecoded === targetNameDecoded ||
+                it.path === savedPath ||
+                it.name === serverResult?.name ||
+                it.name === taskItem.name
+              );
+            });
+            if (fileFound) {
+              isVerifiedSuccess = true;
+              savedPath = fileFound.path || savedPath;
+              break;
+            }
           }
+        } catch (checkErr) {
+          console.log('[Upload] Secondary check attempt err:', checkErr);
         }
-      } catch (checkErr) {
-        console.log('[Upload] Secondary check err:', checkErr);
+        checkAttempts++;
+        if (checkAttempts < 3) {
+          await new Promise(r => setTimeout(r, 400));
+        }
+      }
+
+      // If server confirmed HTTP 200 with status === 'success', it's guaranteed written
+      if (!isVerifiedSuccess && serverResult && serverResult.status === 'success') {
+        isVerifiedSuccess = true;
       }
 
       if (!isVerifiedSuccess) {
@@ -643,7 +694,7 @@ export default function FilesScreen({ navigation }) {
           totalBytes: totalSize,
           sizeText: `${formatBytesFixed(totalSize)} / ${formatBytesFixed(totalSize)}`,
           speedDisplay: '已完成',
-          chunkIndex: totalChunks,
+          chunkIndex: 0,
         } : t));
         saveTransfersQueue(next);
         return next;
@@ -658,7 +709,7 @@ export default function FilesScreen({ navigation }) {
       showConfirm({
         type: 'success',
         title: '上传成功',
-        message: `文件已通过分片断点续传成功写入 Unraid 存储：\n${savedPath}`,
+        message: `文件已成功写入 Unraid 存储：\n${savedPath}`,
         confirmText: '好的',
         showCancel: false,
       });
@@ -691,7 +742,7 @@ export default function FilesScreen({ navigation }) {
         showConfirm({
           type: 'warning',
           title: '上传中断',
-          message: `上传已在当前断点安全保存，可随时点击列表右侧继续按钮断点续传：\n${err.message || '网络连接超时或中断'}`,
+          message: `上传已在当前断点安全保存，可随时点击列表右侧继续按钮继续上传：\n${err.message || '网络连接超时或中断'}`,
           confirmText: '知道了',
           showCancel: false,
         });

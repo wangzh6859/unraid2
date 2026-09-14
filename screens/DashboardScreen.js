@@ -2,8 +2,9 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   StyleSheet, Text, View, ScrollView, RefreshControl, TouchableOpacity,
   TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Modal,
-  Linking, Dimensions
+  Linking, Dimensions, AppState
 } from 'react-native';
+import { apiFetch, apiFetchJson } from '../utils/apiClient';
 import Svg, { Path, Circle, Defs, LinearGradient, Stop, G, Rect } from 'react-native-svg';
 import {
   Cpu, Database, HardDrive, Box, Monitor, Wifi, Zap, Server, Key,
@@ -218,12 +219,7 @@ export default function DashboardScreen({ navigation }) {
       }
       setIsConfigured(true);
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      const response = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=status`, { signal: controller.signal });
-      clearTimeout(timeoutId);
-
-      const data = await response.json();
+      const data = await apiFetchJson(`${savedUrl}/api.php?token=${savedToken}&action=status`, {}, 8000, 1);
       setServerStatus('online');
 
       // 若此前正处于唤醒轮询等待中，服务器已恢复上线
@@ -361,8 +357,7 @@ export default function DashboardScreen({ navigation }) {
       const savedToken = await AsyncStorage.getItem('@api_token');
       if (!savedUrl || !savedToken) return;
       const clientTime = Math.floor(Date.now() / 1000);
-      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=notifications&client_time=${clientTime}`);
-      const data = await res.json();
+      const data = await apiFetchJson(`${savedUrl}/api.php?token=${savedToken}&action=notifications&client_time=${clientTime}`, {}, 8000, 1);
       if (data.status === 'success') {
         setNotifications(data.notifications || []);
         setUnreadCount(data.unread_count || 0);
@@ -380,7 +375,7 @@ export default function DashboardScreen({ navigation }) {
       const savedUrl = await AsyncStorage.getItem('@server_url');
       const savedToken = await AsyncStorage.getItem('@api_token');
       if (!savedUrl || !savedToken) return;
-      await fetch(`${savedUrl}/api.php?token=${savedToken}&action=dismiss_notification&id=${encodeURIComponent(item.id)}`);
+      await apiFetchJson(`${savedUrl}/api.php?token=${savedToken}&action=dismiss_notification&id=${encodeURIComponent(item.id)}`, {}, 6000, 1);
       setNotifications(prev => prev.filter(n => n.id !== item.id));
       setUnreadCount(prev => Math.max(0, prev - 1));
     } catch (e) {
@@ -396,8 +391,7 @@ export default function DashboardScreen({ navigation }) {
       const savedToken = await AsyncStorage.getItem('@api_token');
       if (!savedUrl || !savedToken) return;
 
-      const res = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=syslog&lines=250`);
-      const data = await res.json();
+      const data = await apiFetchJson(`${savedUrl}/api.php?token=${savedToken}&action=syslog&lines=250`, {}, 10000, 1);
       if (data.status === 'success') {
         setSyslogContent(data.logs || '暂无日志记录');
         setTimeout(() => {
@@ -506,8 +500,8 @@ export default function DashboardScreen({ navigation }) {
 
     setIsTesting(true);
     try {
-      const response = await fetch(`${cleanUrl}/api.php?token=${inputToken.trim()}&action=status`);
-      if (response.ok) {
+      const testData = await apiFetchJson(`${cleanUrl}/api.php?token=${inputToken.trim()}&action=status`, {}, 8000, 1);
+      if (testData && (testData.status === 'success' || testData.stats)) {
         await AsyncStorage.setItem('@server_url', cleanUrl);
         await AsyncStorage.setItem('@api_token', inputToken.trim());
         showConfirm({
@@ -545,6 +539,19 @@ export default function DashboardScreen({ navigation }) {
     setRefreshing(true);
     await Promise.all([fetchServerData(), fetchNotifications()]);
     setRefreshing(false);
+  }, []);
+
+  // Auto refresh immediately when app comes back to foreground (e.g. after toggling VPN in quick settings/VPN app)
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        fetchServerData();
+        fetchNotifications();
+      }
+    });
+    return () => {
+      subscription.remove();
+    };
   }, []);
 
   useFocusEffect(
