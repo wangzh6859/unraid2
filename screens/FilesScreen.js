@@ -545,21 +545,27 @@ export default function FilesScreen({ navigation }) {
               signal: abortController.signal,
             });
 
-            const rawChunkText = await chunkRes.text();
+            const rawChunkText = (await chunkRes.text()).trim();
             let resJson = null;
-            try {
-              resJson = JSON.parse(rawChunkText);
-            } catch (pErr) {
-              throw new Error(`服务端响应异常: ${rawChunkText ? (rawChunkText.length > 200 ? rawChunkText.substring(0, 200) + '...' : rawChunkText) : '空响应 (HTTP ' + chunkRes.status + ')'}`);
+            if (rawChunkText) {
+              try {
+                resJson = JSON.parse(rawChunkText);
+              } catch (pErr) {
+                console.warn(`[Upload] Chunk ${i + 1}/${totalChunks} parse warning:`, pErr.message, rawChunkText.substring(0, 100));
+              }
             }
 
-            if (chunkRes.ok && resJson && resJson.status === 'success') {
+            if (chunkRes.ok) {
+              if (resJson && resJson.status === 'error') {
+                throw new Error(resJson.message || `服务端分片写入失败 (HTTP ${chunkRes.status})`);
+              }
               chunkSuccess = true;
-              currentChunkRes = resJson;
-              if (resJson.path) savedPath = resJson.path;
+              currentChunkRes = resJson || { status: 'success', complete: (i + 1 >= totalChunks) };
+              if (resJson?.path) savedPath = resJson.path;
               break;
             } else {
-              throw new Error(resJson?.message || `服务端处理异常 (HTTP ${chunkRes.status})`);
+              const errMsg = resJson?.message || (rawChunkText ? (rawChunkText.length > 200 ? rawChunkText.substring(0, 200) + '...' : rawChunkText) : `服务端处理异常 (HTTP ${chunkRes.status})`);
+              throw new Error(errMsg);
             }
           } catch (chunkErr) {
             if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {

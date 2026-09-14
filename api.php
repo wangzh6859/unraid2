@@ -6,11 +6,12 @@
  * Release: 2026-09-13
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.14.04');
+define('UNRAID_API_VERSION', '2026.09.14.05');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
 @ini_set('memory_limit', '512M');
+@ini_set('zlib.output_compression', 'Off');
 @set_time_limit(0);
 @ignore_user_abort(true);
 
@@ -148,6 +149,9 @@ register_shutdown_function(function() {
             'message' => 'PHP Fatal Error: ' . $err['message'] . ' in ' . basename($err['file']) . ':' . $err['line']
         ], JSON_UNESCAPED_UNICODE);
         @flush();
+        if (function_exists('fastcgi_finish_request')) {
+            @fastcgi_finish_request();
+        }
         exit;
     }
 
@@ -161,6 +165,9 @@ register_shutdown_function(function() {
             'message' => 'PHP script terminated unexpectedly with empty output'
         ], JSON_UNESCAPED_UNICODE);
         @flush();
+        if (function_exists('fastcgi_finish_request')) {
+            @fastcgi_finish_request();
+        }
     }
 });
 
@@ -567,12 +574,11 @@ function json_output($data, $code = 200) {
 
     $GLOBALS['__api_response_sent'] = true;
 
-    if (!headers_sent()) {
-        header('Content-Length: ' . strlen($json));
-    }
-
     echo $json;
     @flush();
+    if (function_exists('fastcgi_finish_request')) {
+        @fastcgi_finish_request();
+    }
     exit;
 }
 
