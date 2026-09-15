@@ -456,9 +456,8 @@ export default function FilesScreen({ navigation }) {
 
   const startUploadTask = async (taskItem) => {
     const taskId = taskItem.id;
-    const xhr = new XMLHttpRequest();
     const abortController = new AbortController();
-    activeTasksRef.current[taskId] = { xhr, abortController, cancelled: false };
+    activeTasksRef.current[taskId] = { abortController, cancelled: false };
 
     try {
       await backgroundTransferManager.notifyTransferStarted(taskItem);
@@ -479,219 +478,159 @@ export default function FilesScreen({ navigation }) {
       const activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
       const csrfQuery = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
 
-      // Update transfer status
+      // Set initial upload state
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
         status: 'running',
         speedDisplay: '正在连接传输...',
       } : t)));
 
-      const uploadUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}&size=${totalSize}`;
+      // 1MB Chunk Engine: bypasses all PHP/Nginx POST size limits and guarantees physical disk write
+      const CHUNK_SIZE = 1024 * 1024; // 1MB
+      const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
+      let startChunk = Number(taskItem.chunkIndex) || 0;
+      if (startChunk >= totalChunks) startChunk = 0;
 
-      const formData = new FormData();
-      formData.append('file', {
-        uri: workingUri,
-        name: taskItem.name,
-        type: 'application/octet-stream',
-      });
-      formData.append('path', taskItem.targetPath);
-      formData.append('filename', taskItem.name);
-      formData.append('size', String(totalSize));
+      let lastTime = Date.now();
+      let lastLoaded = startChunk * CHUNK_SIZE;
+      let smoothedSpeed = 0;
+      let finalServerResult = null;
+      let savedPath = `${taskItem.targetPath}/${taskItem.name}`;
 
-      const res = await new Promise((resolve, reject) => {
-        let lastTime = Date.now();
-        let lastLoaded = 0;
-        let currentSpeed = 0;
+      for (let i = startChunk; i < totalChunks; i++) {
+        if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
+          return;
+        }
 
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable && event.total > 0) {
-            const loaded = event.loaded;
-            const total = event.total;
-            const now = Date.now();
-            const dt = (now - lastTime) / 1000;
-            if (dt >= 0.4) {
-              const bytesDiff = loaded - lastLoaded;
-              currentSpeed = Math.max(0, bytesDiff / dt);
-              lastTime = now;
-              lastLoaded = loaded;
-            }
-            const pct = Math.min(99, Math.round((loaded / total) * 100));
-            setTransfers(prev => prev.map(t => (t.id === taskId ? {
-              ...t,
-              status: 'running',
-              progress: pct,
-              transferredBytes: loaded,
-              totalBytes: total,
-              sizeText: `${formatBytesFixed(loaded)} / ${formatBytesFixed(total)}`,
-              speedDisplay: currentSpeed > 0 ? `${formatBytesFixed(currentSpeed)}/s` : '正在传输...',
-            } : t)));
-          }
-        };
+        const offset = i * CHUNK_SIZE;
+        const currentChunkLen = totalSize > 0 ? Math.min(CHUNK_SIZE, totalSize - offset) : 0;
 
-        try {
-          xhr.responseType = 'text';
-        } catch (_) {}
-
-        xhr.onload = () => {
-          let text = '';
-          try {
-            text = xhr.responseText || (typeof xhr.response === 'string' ? xhr.response : '');
-          } catch (_) {}
-          resolve({
-            status: xhr.status,
-            responseText: text,
-            response: xhr.response,
+        // Read chunk slice as Base64 string
+        let base64Data = '';
+        if (currentChunkLen > 0) {
+          base64Data = await FileSystem.readAsStringAsync(workingUri, {
+            encoding: FileSystem.EncodingType.Base64,
+            position: offset,
+            length: currentChunkLen,
           });
-        };
-
-        xhr.onerror = () => {
-          if (activeTasksRef.current[taskId]?.cancelled) {
-            reject(new Error('Upload aborted by user'));
-          } else {
-            reject(new Error(`网络传输异常 (XHR 状态: ${xhr.status || 0})`));
-          }
-        };
-
-        xhr.ontimeout = () => {
-          reject(new Error('上传请求超时，未收到服务端响应'));
-        };
-
-        xhr.onabort = () => {
-          reject(new Error('Upload aborted by user'));
-        };
-
-        xhr.open('POST', uploadUrl);
-        xhr.setRequestHeader('X-API-Token', apiToken);
-        if (activeCsrf) {
-          xhr.setRequestHeader('X-CSRF-Token', activeCsrf);
         }
-        xhr.send(formData);
-      });
 
-      if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
-        return;
-      }
+        const chunkPayload = JSON.stringify({
+          path: taskItem.targetPath,
+          filename: taskItem.name,
+          chunk_index: i,
+          total_chunks: totalChunks,
+          offset: offset,
+          total_size: totalSize,
+          data: base64Data,
+        });
 
-      // Parse server response with full diagnostic visibility
-      let serverResult = null;
-      if (typeof res?.response === 'object' && res.response !== null) {
-        serverResult = res.response;
-      }
+        const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_chunk&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}`;
 
-      const rawBody = (typeof res?.responseText === 'string' && res.responseText.trim())
-        ? res.responseText.trim()
-        : (typeof res?.response === 'string' ? res.response.trim() : '');
+        let chunkSuccess = false;
+        let serverChunkRes = null;
 
-      if (!serverResult && rawBody) {
-        try {
-          serverResult = JSON.parse(rawBody);
-        } catch (_) {
-          const startIdx = rawBody.indexOf('{');
-          const endIdx = rawBody.lastIndexOf('}');
-          if (startIdx !== -1 && endIdx > startIdx) {
-            try {
-              serverResult = JSON.parse(rawBody.substring(startIdx, endIdx + 1));
-            } catch (_) {}
-          }
-        }
-      }
-
-      // If serverResult is not yet parsed, but HTTP status is 2xx,
-      // perform resilient multi-attempt active directory verification
-      if (!serverResult && res && res.status >= 200 && res.status < 300) {
-        setTransfers(prev => prev.map(t => (t.id === taskId ? {
-          ...t,
-          status: 'running',
-          progress: 99,
-          speedDisplay: '正在向 Unraid 磁盘确认落盘...',
-        } : t)));
-
-        // Multi-attempt verification with progressive backoff (up to 4 attempts: 400ms, 800ms, 1200ms, 1600ms)
-        const checkDelays = [400, 800, 1200, 1600];
-        const targetNameNorm = (taskItem.name || '').normalize('NFC').trim().toLowerCase();
-        const targetNameDecoded = decodeURIComponent(taskItem.name || '').toLowerCase();
-        const checkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_list&path=${encodeURIComponent(taskItem.targetPath)}`;
-
-        for (let attempt = 0; attempt < checkDelays.length; attempt++) {
-          await new Promise(r => setTimeout(r, checkDelays[attempt]));
+        for (let attempt = 0; attempt < 3; attempt++) {
           if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
             return;
           }
-
           try {
-            const checkData = await apiFetchJson(checkUrl, {}, 6000, 1);
-            if (checkData && checkData.status === 'success' && Array.isArray(checkData.items)) {
-              // 1. Try matching by filename
-              let fileFound = checkData.items.find(it => {
-                const itNameNorm = (it.name || '').normalize('NFC').trim().toLowerCase();
-                const itNameDecoded = decodeURIComponent(it.name || '').toLowerCase();
-                return (
-                  itNameNorm === targetNameNorm ||
-                  itNameDecoded === targetNameDecoded ||
-                  it.name === taskItem.name
-                );
-              });
+            const res = await apiFetch(chunkUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json; charset=utf-8',
+                'X-API-Token': apiToken,
+                ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
+              },
+              body: chunkPayload,
+              signal: abortController.signal,
+            }, 35000, 0);
 
-              // 2. If not matched by exact name, try matching recently modified file with matching size
-              if (!fileFound && totalSize > 0) {
-                const nowSec = Math.floor(Date.now() / 1000);
-                fileFound = checkData.items.find(it => {
-                  if (it.isFolder) return false;
-                  const sizeDiff = Math.abs((it.size || 0) - totalSize);
-                  const isSizeMatch = sizeDiff === 0 || (sizeDiff / totalSize < 0.02);
-                  let isRecent = false;
-                  if (it.mtime) {
-                    const mtimeSec = Math.floor(new Date(it.mtime).getTime() / 1000);
-                    if (!isNaN(mtimeSec) && (nowSec - mtimeSec) < 180) {
-                      isRecent = true;
-                    }
-                  }
-                  return isSizeMatch && isRecent;
-                });
-              }
-
-              if (fileFound) {
-                serverResult = {
-                  status: 'success',
-                  message: '文件已成功上传至 Unraid 存储',
-                  path: fileFound.path,
-                  size: fileFound.size,
-                  name: fileFound.name,
-                };
-                break;
+            const rawText = (await res.text()).trim();
+            let resJson = null;
+            if (rawText) {
+              try {
+                resJson = JSON.parse(rawText);
+              } catch (_) {
+                const sIdx = rawText.indexOf('{');
+                const eIdx = rawText.lastIndexOf('}');
+                if (sIdx !== -1 && eIdx > sIdx) {
+                  try {
+                    resJson = JSON.parse(rawText.substring(sIdx, eIdx + 1));
+                  } catch (_) {}
+                }
               }
             }
-          } catch (checkErr) {
-            console.log(`[Upload] Fallback check attempt ${attempt + 1} error:`, checkErr);
+
+            if (res.ok && resJson && resJson.status === 'success') {
+              chunkSuccess = true;
+              serverChunkRes = resJson;
+              if (resJson.path) savedPath = resJson.path;
+              break;
+            } else {
+              if (resJson && resJson.status === 'error') {
+                throw new Error(resJson.message || `服务端分片写入失败 (HTTP ${res.status})`);
+              }
+              if (attempt === 2) {
+                throw new Error(`分片 ${i + 1}/${totalChunks} 写入异常 (HTTP ${res?.status || 'Unknown'})`);
+              }
+            }
+          } catch (chunkErr) {
+            if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
+              return;
+            }
+            if (attempt === 2) {
+              throw chunkErr;
+            }
+            await new Promise(r => setTimeout(r, 1000));
           }
         }
-      }
 
-      if (!serverResult) {
-        if (res && res.status >= 200 && res.status < 300) {
-          // HTTP 200 OK after full transmission means server accepted and stored the file
-          serverResult = {
-            status: 'success',
-            message: '文件已成功上传至 Unraid 存储',
-            path: `${taskItem.targetPath}/${taskItem.name}`,
-            size: totalSize,
-            name: taskItem.name,
-          };
-        } else {
-          const preview = rawBody ? (rawBody.length > 150 ? rawBody.slice(0, 150) + '...' : rawBody) : '空响应 (0字节)';
-          throw new Error(`服务端响应异常 (HTTP ${res?.status || 'Unknown'})：${preview}`);
+        if (!chunkSuccess) {
+          if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
+            return;
+          }
+          throw new Error(`分片 ${i + 1}/${totalChunks} 上传失败，请检查网络连接`);
         }
+
+        finalServerResult = serverChunkRes;
+
+        // Calculate dynamic speed and smooth progress
+        const now = Date.now();
+        const dt = (now - lastTime) / 1000;
+        const currentTransferred = Math.min(totalSize, offset + currentChunkLen);
+        if (dt >= 0.4) {
+          const bytesDiff = currentTransferred - lastLoaded;
+          const instSpeed = Math.max(0, bytesDiff / dt);
+          smoothedSpeed = smoothedSpeed > 0 ? (smoothedSpeed * 0.6 + instSpeed * 0.4) : instSpeed;
+          lastTime = now;
+          lastLoaded = currentTransferred;
+        }
+
+        const isLastChunk = (i + 1 >= totalChunks);
+        const pct = isLastChunk ? 100 : Math.min(99, Math.round((currentTransferred / Math.max(1, totalSize)) * 100));
+
+        setTransfers(prev => {
+          const next = prev.map(t => (t.id === taskId ? {
+            ...t,
+            status: isLastChunk ? 'success' : 'running',
+            progress: pct,
+            transferredBytes: isLastChunk ? totalSize : currentTransferred,
+            totalBytes: totalSize,
+            sizeText: `${formatBytesFixed(isLastChunk ? totalSize : currentTransferred)} / ${formatBytesFixed(totalSize)}`,
+            speedDisplay: isLastChunk ? '已完成' : (smoothedSpeed > 0 ? `${formatBytesFixed(smoothedSpeed)}/s` : '正在传输...'),
+            chunkIndex: isLastChunk ? 0 : (i + 1),
+          } : t));
+          if (isLastChunk || i % 5 === 0) {
+            saveTransfersQueue(next);
+          }
+          return next;
+        });
       }
 
-      if (serverResult.status !== 'success') {
-        throw new Error(serverResult.message || '服务端拒绝写入文件');
+      if (!finalServerResult || finalServerResult.status !== 'success') {
+        throw new Error(finalServerResult?.message || '文件落盘确认失败，请重试');
       }
-
-      if (serverResult.size !== undefined && totalSize > 0 && serverResult.size === 0) {
-        throw new Error(`服务端接收到的文件大小为 0 字节（预期 ${formatBytesFixed(totalSize)}），可能超出服务器上传限制`);
-      }
-
-      const savedPath = serverResult.path || `${taskItem.targetPath}/${taskItem.name}`;
 
       delete activeTasksRef.current[taskId];
 
@@ -778,17 +717,11 @@ export default function FilesScreen({ navigation }) {
       const task = activeTasksRef.current[taskId];
       if (task) {
         task.cancelled = true;
-        if (task.xhr && typeof task.xhr.abort === 'function') {
+        if (task.abortController) {
           try {
-            task.xhr.abort();
+            task.abortController.abort();
           } catch (_) {}
         }
-        if (task.uploadTask && typeof task.uploadTask.cancelAsync === 'function') {
-          task.uploadTask.cancelAsync().catch(() => {});
-        }
-        try {
-          task.abortController.abort();
-        } catch (_) {}
       }
     } catch (_) {}
     try {
