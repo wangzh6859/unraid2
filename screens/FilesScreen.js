@@ -131,6 +131,7 @@ export default function FilesScreen({ navigation }) {
   const csrfTokenRef = useRef('');
   const activeTasksRef = useRef({}); // taskId -> FileSystem.UploadTask or XHR
   const isPickingFileRef = useRef(false);
+  const serverApiVersionRef = useRef('');
 
   // Transfer Queue Persistence Key & Reference
   const QUEUE_STORAGE_KEY = '@transfers_queue_v1';
@@ -259,6 +260,9 @@ export default function FilesScreen({ navigation }) {
         if (data.csrf_token) {
           setCsrfToken(data.csrf_token);
           csrfTokenRef.current = data.csrf_token;
+        }
+        if (data.api_version) {
+          serverApiVersionRef.current = data.api_version;
         }
         const items = (data.items || []).map(it => ({
           ...it,
@@ -478,6 +482,21 @@ export default function FilesScreen({ navigation }) {
       const activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
       const csrfQuery = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
 
+      // Check server API version and auto-update if outdated (< 2026.09.15.06)
+      try {
+        let currentSrvVer = serverApiVersionRef.current;
+        if (!currentSrvVer) {
+          const vData = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=version`, {}, 3000, 0).catch(() => null);
+          if (vData && (vData.api_version || vData.version)) {
+            currentSrvVer = vData.api_version || vData.version;
+            serverApiVersionRef.current = currentSrvVer;
+          }
+        }
+        if (currentSrvVer && currentSrvVer < '2026.09.15.06') {
+          await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=self_update_api`, {}, 7000, 0).catch(() => null);
+        }
+      } catch (_) {}
+
       // Set initial upload state
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
@@ -569,6 +588,23 @@ export default function FilesScreen({ navigation }) {
               if (resJson.path) savedPath = resJson.path;
               break;
             } else {
+              // If response body was dropped (HTTP 200 with empty body), verify physical write status on server
+              if (res.status === 200 && (!resJson || resJson.status !== 'success')) {
+                try {
+                  const dbgRes = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=upload_debug&_t=${Date.now()}`, {}, 4000, 0).catch(() => null);
+                  if (dbgRes && dbgRes.log) {
+                    const cleanItemName = taskItem.name || '';
+                    const hasOk = dbgRes.log.includes(`chunk_ok: file=${cleanItemName} chunk=${i}/${totalChunks}`) ||
+                                  dbgRes.log.includes(`chunk=${i}/${totalChunks}`);
+                    if (hasOk) {
+                      chunkSuccess = true;
+                      serverChunkRes = { status: 'success', verified_via_debug_log: true };
+                      break;
+                    }
+                  }
+                } catch (_) {}
+              }
+
               const preview = rawText ? (rawText.length > 120 ? rawText.substring(0, 120) + '...' : rawText) : '空响应 (0字节)';
               let errorMsg = resJson?.message || preview;
 
@@ -581,7 +617,16 @@ export default function FilesScreen({ navigation }) {
               }
 
               if (attempt === 2) {
-                throw new Error(`分片 ${i + 1}/${totalChunks} 写入失败 (HTTP ${res?.status || 'Unknown'}): ${errorMsg}`);
+                let diagInfo = '';
+                try {
+                  const dbgRes = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=upload_debug&_t=${Date.now()}`, {}, 4000, 0).catch(() => null);
+                  if (dbgRes) {
+                    const lastLines = (dbgRes.log || '').split('\n').filter(Boolean).slice(-2).join(' | ');
+                    diagInfo = `\n[服务端API版本: ${dbgRes.api_version || '未知'}]\n[服务端状态: ${lastLines || '无日志'}]`;
+                  }
+                } catch (_) {}
+
+                throw new Error(`分片 ${i + 1}/${totalChunks} 写入失败 (HTTP ${res?.status || 'Unknown'}): ${errorMsg}${diagInfo}`);
               }
               await new Promise(r => setTimeout(r, 1200));
             }
