@@ -4,6 +4,23 @@
 
 ---
 
+## [v1.3.195] - 2026-09-15
+> **核心主题**：彻底根除上传完成后的 HTTP 200 空响应（清除破坏 Nginx 缓冲的 fastcgi_finish_request、显式注入 Content-Length 与 X-Accel-Buffering、多轮渐进式物理落盘核验与原生 OkHttp 锁保全）
+
+### 📡 根除 HTTP 200 空响应（0字节）底层诱因
+- **移除导致 Nginx 丢弃响应体的 `fastcgi_finish_request()`**：在 PHP-FPM 运行环境下，调用 `fastcgi_finish_request()` 会瞬间向 Nginx 发送 FastCGI 结束信号。由于 Nginx 默认启用了 FastCGI 缓冲机制，在小响应未达缓冲阈值前连接即被掐断，致使 Nginx 输出 0 字节的空 HTTP 200 响应。现彻底移除该调用，改用标准 PHP 输出流程。
+- **强制注入关键 HTTP 标头**：在 `json_output()` 中显式添加 `header('X-Accel-Buffering: no')` 命令 Nginx 立即透传数据流，并添加 `header('Content-Length: ' . strlen($json))` 明确帧长，彻底避免客户端网络库（OkHttp）因无长度且未分块而判定响应体为空。
+- **服务端版本号递增**：`2026.09.15.02`。
+
+### 🛡️ 客户端多轮智能落盘核验（容灾双保险）
+- **渐进式多轮核验（Backoff Retry）**：当遇到未升级服务端或特定网络代理导致响应体丢失时，前端自动启动 4 轮渐进式物理检测（400ms、800ms、1200ms、1600ms），给予 Unraid FUSE/shfs 阵列底层充足的文件落盘时间。
+- **双重特征匹配（文件名 + 变动时间/体积匹配）**：不仅比对 Unicode/URL 编码的文件名，更比对近 3 分钟内新修改、大小一致的物理文件，确保 100% 确认落盘后直接判定上传成功并刷新界面。
+
+### 🔒 原生网络池全生命周期锁（Network Pool Lock）
+- **封锁暴力重置**：在 `utils/apiClient.js` 中新增 `setNetworkPoolLock`，在用户选择文件、准备上传以及整个传输生命周期内对 `OkHttpClient` 连接池实施全局保护，严禁后台 `AppState` 唤醒或连接池驱逐切断活跃传输连接。
+
+---
+
 ## [v1.3.194] - 2026-09-15
 > **核心主题**：切换至标准 XMLHttpRequest 上传引擎（实时进度与传输速度、即时进入传输管理页面、防御系统 Activity 切回时的 AppState 抢占刷新）
 

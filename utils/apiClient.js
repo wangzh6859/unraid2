@@ -3,10 +3,22 @@ import { NativeModules, AppState } from 'react-native';
 let lastAppState = 'active';
 let appResumedTimestamp = Date.now();
 
+let isNetworkPoolLocked = false;
+
+/**
+ * Lock or unlock network pool reset (used during active uploads or file picking)
+ */
+export function setNetworkPoolLock(locked) {
+  isNetworkPoolLocked = !!locked;
+}
+
 /**
  * Evicts and resets OkHttp's connection pool and cancel any hung requests in native layer
  */
 export function resetNetworkPool() {
+  if (isNetworkPoolLocked) {
+    return;
+  }
   try {
     if (NativeModules.WakeOnLan && typeof NativeModules.WakeOnLan.resetNetworkConnections === 'function') {
       NativeModules.WakeOnLan.resetNetworkConnections().catch(() => {});
@@ -19,7 +31,9 @@ if (AppState) {
   AppState.addEventListener('change', (nextState) => {
     if (nextState === 'active') {
       appResumedTimestamp = Date.now();
-      resetNetworkPool();
+      if (!isNetworkPoolLocked) {
+        resetNetworkPool();
+      }
     }
     lastAppState = nextState;
   });

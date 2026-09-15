@@ -19,7 +19,7 @@ import { getDownloadDir, formatBytes } from '../utils/cacheManager';
 import FilePreviewer from '../components/FilePreviewer';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import backgroundTransferManager from '../utils/backgroundTransferManager';
-import { apiFetch, apiFetchJson, resetNetworkPool } from '../utils/apiClient';
+import { apiFetch, apiFetchJson, resetNetworkPool, setNetworkPoolLock } from '../utils/apiClient';
 
 // Formats bytes with fixed 1 decimal place to prevent layout shift
 const formatBytesFixed = (bytes) => {
@@ -372,6 +372,14 @@ export default function FilesScreen({ navigation }) {
     return `${serverUrl}/api.php?token=${apiToken}&action=file_stream&path=${encodeURIComponent(filePath)}`;
   };
 
+  // Helper to maintain network pool lock when uploads or file picker are active
+  const updateNetworkPoolLockState = () => {
+    setTimeout(() => {
+      const hasActive = (activeTasksRef.current && Object.keys(activeTasksRef.current).length > 0) || isPickingFileRef.current;
+      setNetworkPoolLock(hasActive);
+    }, 400);
+  };
+
   // =========================================================================
   // Advanced Upload Task Manager (Complete Refactored Version)
   // =========================================================================
@@ -393,6 +401,7 @@ export default function FilesScreen({ navigation }) {
     // on Android's main looper before launching the external DocumentPicker Activity.
     // This completely eliminates the native touch dispatcher NullPointerException crash.
     isPickingFileRef.current = true;
+    setNetworkPoolLock(true);
     setTimeout(async () => {
       try {
         const result = await DocumentPicker.getDocumentAsync({
@@ -453,6 +462,7 @@ export default function FilesScreen({ navigation }) {
       } finally {
         setTimeout(() => {
           isPickingFileRef.current = false;
+          updateNetworkPoolLockState();
         }, 1500);
       }
     }, 250);
@@ -460,6 +470,7 @@ export default function FilesScreen({ navigation }) {
 
   const startUploadTask = async (taskItem) => {
     const taskId = taskItem.id;
+    setNetworkPoolLock(true);
     const xhr = new XMLHttpRequest();
     const abortController = new AbortController();
     activeTasksRef.current[taskId] = { xhr, abortController, cancelled: false };
@@ -536,6 +547,7 @@ export default function FilesScreen({ navigation }) {
           resolve({
             status: xhr.status,
             responseText: xhr.responseText,
+            response: xhr.response,
           });
         };
 
@@ -569,9 +581,15 @@ export default function FilesScreen({ navigation }) {
 
       // Parse server response with full diagnostic visibility
       let serverResult = null;
-      const rawBody = typeof res?.responseText === 'string' ? res.responseText.trim() : '';
+      if (typeof res?.response === 'object' && res.response !== null) {
+        serverResult = res.response;
+      }
 
-      if (rawBody) {
+      const rawBody = (typeof res?.responseText === 'string' && res.responseText.trim())
+        ? res.responseText.trim()
+        : (typeof res?.response === 'string' ? res.response.trim() : '');
+
+      if (!serverResult && rawBody) {
         try {
           serverResult = JSON.parse(rawBody);
         } catch (_) {
@@ -585,37 +603,74 @@ export default function FilesScreen({ navigation }) {
         }
       }
 
-      // If serverResult is not yet parsed, but HTTP status is 2xx (e.g. empty body from FastCGI buffer),
-      // perform an active directory query to check whether the file was physically saved to Unraid
+      // If serverResult is not yet parsed, but HTTP status is 2xx,
+      // perform resilient multi-attempt active directory verification
       if (!serverResult && res && res.status >= 200 && res.status < 300) {
-        try {
-          await new Promise(r => setTimeout(r, 350));
-          const checkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_list&path=${encodeURIComponent(taskItem.targetPath)}`;
-          const checkData = await apiFetchJson(checkUrl, {}, 6000, 1);
-          if (checkData && checkData.status === 'success' && Array.isArray(checkData.items)) {
-            const targetNameNorm = (taskItem.name || '').normalize('NFC').trim().toLowerCase();
-            const targetNameDecoded = decodeURIComponent(taskItem.name || '').toLowerCase();
-            const fileFound = checkData.items.find(it => {
-              const itNameNorm = (it.name || '').normalize('NFC').trim().toLowerCase();
-              const itNameDecoded = decodeURIComponent(it.name || '').toLowerCase();
-              return (
-                itNameNorm === targetNameNorm ||
-                itNameDecoded === targetNameDecoded ||
-                it.name === taskItem.name
-              );
-            });
-            if (fileFound) {
-              serverResult = {
-                status: 'success',
-                message: '文件已成功上传至 Unraid 存储',
-                path: fileFound.path,
-                size: fileFound.size,
-                name: fileFound.name,
-              };
-            }
+        setTransfers(prev => prev.map(t => (t.id === taskId ? {
+          ...t,
+          status: 'running',
+          progress: 99,
+          speedDisplay: '正在向 Unraid 磁盘确认落盘...',
+        } : t)));
+
+        // Multi-attempt verification with progressive backoff (up to 4 attempts: 400ms, 800ms, 1200ms, 1600ms)
+        const checkDelays = [400, 800, 1200, 1600];
+        const targetNameNorm = (taskItem.name || '').normalize('NFC').trim().toLowerCase();
+        const targetNameDecoded = decodeURIComponent(taskItem.name || '').toLowerCase();
+        const checkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_list&path=${encodeURIComponent(taskItem.targetPath)}`;
+
+        for (let attempt = 0; attempt < checkDelays.length; attempt++) {
+          await new Promise(r => setTimeout(r, checkDelays[attempt]));
+          if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
+            return;
           }
-        } catch (checkErr) {
-          console.log('[Upload] Fallback check error:', checkErr);
+
+          try {
+            const checkData = await apiFetchJson(checkUrl, {}, 6000, 1);
+            if (checkData && checkData.status === 'success' && Array.isArray(checkData.items)) {
+              // 1. Try matching by filename
+              let fileFound = checkData.items.find(it => {
+                const itNameNorm = (it.name || '').normalize('NFC').trim().toLowerCase();
+                const itNameDecoded = decodeURIComponent(it.name || '').toLowerCase();
+                return (
+                  itNameNorm === targetNameNorm ||
+                  itNameDecoded === targetNameDecoded ||
+                  it.name === taskItem.name
+                );
+              });
+
+              // 2. If not matched by exact name, try matching recently modified file with matching size
+              if (!fileFound && totalSize > 0) {
+                const nowSec = Math.floor(Date.now() / 1000);
+                fileFound = checkData.items.find(it => {
+                  if (it.isFolder) return false;
+                  const sizeDiff = Math.abs((it.size || 0) - totalSize);
+                  const isSizeMatch = sizeDiff === 0 || (sizeDiff / totalSize < 0.02);
+                  let isRecent = false;
+                  if (it.mtime) {
+                    const mtimeSec = Math.floor(new Date(it.mtime).getTime() / 1000);
+                    if (!isNaN(mtimeSec) && (nowSec - mtimeSec) < 180) {
+                      isRecent = true;
+                    }
+                  }
+                  return isSizeMatch && isRecent;
+                });
+              }
+
+              if (fileFound) {
+                serverResult = {
+                  status: 'success',
+                  message: '文件已成功上传至 Unraid 存储',
+                  path: fileFound.path,
+                  size: fileFound.size,
+                  name: fileFound.name,
+                };
+                break;
+              }
+            }
+          } catch (checkErr) {
+            console.log(`[Upload] Fallback check attempt ${attempt + 1} error:`, checkErr);
+          }
         }
       }
 
@@ -635,6 +690,7 @@ export default function FilesScreen({ navigation }) {
       const savedPath = serverResult.path || `${taskItem.targetPath}/${taskItem.name}`;
 
       delete activeTasksRef.current[taskId];
+      updateNetworkPoolLockState();
 
       // Mark success in transfer list
       setTransfers(prev => {
@@ -673,6 +729,7 @@ export default function FilesScreen({ navigation }) {
 
     } catch (err) {
       delete activeTasksRef.current[taskId];
+      updateNetworkPoolLockState();
       const isCancelled = abortController.signal.aborted || (activeTasksRef.current[taskId]?.cancelled) || err.name === 'AbortError' || (err.message && err.message.includes('abort'));
 
       try {
@@ -732,6 +789,7 @@ export default function FilesScreen({ navigation }) {
         } catch (_) {}
       }
     } catch (_) {}
+    updateNetworkPoolLockState();
     try {
       backgroundTransferManager.notifyTransferEnded(taskId, 'paused');
     } catch (_) {}

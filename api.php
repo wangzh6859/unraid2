@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.15.01
+ * Version: 2026.09.15.02
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.15.01');
+define('UNRAID_API_VERSION', '2026.09.15.02');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -570,14 +570,12 @@ function json_output($data, $code = 200) {
     if (!headers_sent()) {
         http_response_code($code);
         header('Content-Type: application/json; charset=utf-8');
+        header('X-Accel-Buffering: no');
+        header('Content-Length: ' . strlen($json));
     }
 
     echo $json;
-    if (function_exists('fastcgi_finish_request')) {
-        @fastcgi_finish_request();
-    } else {
-        @flush();
-    }
+    @flush();
     exit;
 }
 
