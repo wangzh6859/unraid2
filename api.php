@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.14.10
- * Release: 2026-09-14
+ * Version: 2026.09.15.01
+ * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.14.10');
+define('UNRAID_API_VERSION', '2026.09.15.01');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');

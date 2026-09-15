@@ -129,7 +129,8 @@ export default function FilesScreen({ navigation }) {
   const [transfers, setTransfers] = useState([]);
   const [csrfToken, setCsrfToken] = useState('');
   const csrfTokenRef = useRef('');
-  const activeTasksRef = useRef({}); // taskId -> FileSystem.UploadTask
+  const activeTasksRef = useRef({}); // taskId -> FileSystem.UploadTask or XHR
+  const isPickingFileRef = useRef(false);
 
   // Transfer Queue Persistence Key & Reference
   const QUEUE_STORAGE_KEY = '@transfers_queue_v1';
@@ -285,6 +286,10 @@ export default function FilesScreen({ navigation }) {
   useEffect(() => {
     const sub = AppState.addEventListener('change', nextAppState => {
       if (nextAppState === 'active') {
+        // If returning from document picker or an upload task is actively running, do not violently reset network pool or reload folder
+        if (isPickingFileRef.current || Object.keys(activeTasksRef.current).length > 0) {
+          return;
+        }
         resetNetworkPool();
         if (serverUrl && apiToken) {
           setTimeout(() => {
@@ -387,6 +392,7 @@ export default function FilesScreen({ navigation }) {
     // 250ms debounce: allows the touch gesture and menu overlay unmount to cleanly settle
     // on Android's main looper before launching the external DocumentPicker Activity.
     // This completely eliminates the native touch dispatcher NullPointerException crash.
+    isPickingFileRef.current = true;
     setTimeout(async () => {
       try {
         const result = await DocumentPicker.getDocumentAsync({
@@ -431,6 +437,9 @@ export default function FilesScreen({ navigation }) {
           return next;
         });
 
+        // Crucial: immediately open Transfer Center modal so user directly sees progress & speed
+        setIsTransferVisible(true);
+
         startUploadTask(newTask);
       } catch (e) {
         console.log('[Upload] DocumentPicker error:', e);
@@ -441,14 +450,19 @@ export default function FilesScreen({ navigation }) {
           confirmText: '知道了',
           showCancel: false,
         });
+      } finally {
+        setTimeout(() => {
+          isPickingFileRef.current = false;
+        }, 1500);
       }
     }, 250);
   };
 
   const startUploadTask = async (taskItem) => {
     const taskId = taskItem.id;
+    const xhr = new XMLHttpRequest();
     const abortController = new AbortController();
-    activeTasksRef.current[taskId] = { abortController, cancelled: false };
+    activeTasksRef.current[taskId] = { xhr, abortController, cancelled: false };
 
     try {
       await backgroundTransferManager.notifyTransferStarted(taskItem);
@@ -473,20 +487,80 @@ export default function FilesScreen({ navigation }) {
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
         status: 'running',
-        speedDisplay: '正在上传到 Unraid 存储...',
+        speedDisplay: '正在连接传输...',
       } : t)));
 
-      // Perform RFC standard multipart upload via native FileSystem.uploadAsync
       const uploadUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}&size=${totalSize}`;
 
-      const res = await FileSystem.uploadAsync(uploadUrl, workingUri, {
-        fieldName: 'file',
-        httpMethod: 'POST',
-        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-        headers: {
-          'X-API-Token': apiToken,
-          ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
-        },
+      const formData = new FormData();
+      formData.append('file', {
+        uri: workingUri,
+        name: taskItem.name,
+        type: 'application/octet-stream',
+      });
+      formData.append('path', taskItem.targetPath);
+      formData.append('filename', taskItem.name);
+      formData.append('size', String(totalSize));
+
+      const res = await new Promise((resolve, reject) => {
+        let lastTime = Date.now();
+        let lastLoaded = 0;
+        let currentSpeed = 0;
+
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && event.total > 0) {
+            const loaded = event.loaded;
+            const total = event.total;
+            const now = Date.now();
+            const dt = (now - lastTime) / 1000;
+            if (dt >= 0.4) {
+              const bytesDiff = loaded - lastLoaded;
+              currentSpeed = Math.max(0, bytesDiff / dt);
+              lastTime = now;
+              lastLoaded = loaded;
+            }
+            const pct = Math.min(99, Math.round((loaded / total) * 100));
+            setTransfers(prev => prev.map(t => (t.id === taskId ? {
+              ...t,
+              status: 'running',
+              progress: pct,
+              transferredBytes: loaded,
+              totalBytes: total,
+              sizeText: `${formatBytesFixed(loaded)} / ${formatBytesFixed(total)}`,
+              speedDisplay: currentSpeed > 0 ? `${formatBytesFixed(currentSpeed)}/s` : '正在传输...',
+            } : t)));
+          }
+        };
+
+        xhr.onload = () => {
+          resolve({
+            status: xhr.status,
+            responseText: xhr.responseText,
+          });
+        };
+
+        xhr.onerror = () => {
+          if (activeTasksRef.current[taskId]?.cancelled) {
+            reject(new Error('Upload aborted by user'));
+          } else {
+            reject(new Error(`网络传输异常 (XHR 状态: ${xhr.status || 0})`));
+          }
+        };
+
+        xhr.ontimeout = () => {
+          reject(new Error('上传请求超时，未收到服务端响应'));
+        };
+
+        xhr.onabort = () => {
+          reject(new Error('Upload aborted by user'));
+        };
+
+        xhr.open('POST', uploadUrl);
+        xhr.setRequestHeader('X-API-Token', apiToken);
+        if (activeCsrf) {
+          xhr.setRequestHeader('X-CSRF-Token', activeCsrf);
+        }
+        xhr.send(formData);
       });
 
       if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
@@ -495,7 +569,7 @@ export default function FilesScreen({ navigation }) {
 
       // Parse server response with full diagnostic visibility
       let serverResult = null;
-      const rawBody = typeof res?.body === 'string' ? res.body.trim() : '';
+      const rawBody = typeof res?.responseText === 'string' ? res.responseText.trim() : '';
 
       if (rawBody) {
         try {
@@ -509,8 +583,6 @@ export default function FilesScreen({ navigation }) {
             } catch (_) {}
           }
         }
-      } else if (typeof res?.body === 'object' && res.body !== null) {
-        serverResult = res.body;
       }
 
       // If serverResult is not yet parsed, but HTTP status is 2xx (e.g. empty body from FastCGI buffer),
@@ -601,7 +673,7 @@ export default function FilesScreen({ navigation }) {
 
     } catch (err) {
       delete activeTasksRef.current[taskId];
-      const isCancelled = abortController.signal.aborted || err.name === 'AbortError' || (err.message && err.message.includes('abort'));
+      const isCancelled = abortController.signal.aborted || (activeTasksRef.current[taskId]?.cancelled) || err.name === 'AbortError' || (err.message && err.message.includes('abort'));
 
       try {
         await backgroundTransferManager.notifyTransferEnded(taskId, isCancelled ? 'paused' : 'error', {
@@ -641,12 +713,17 @@ export default function FilesScreen({ navigation }) {
     }
   };
 
-    // Pause / Cancel active upload
+  // Pause / Cancel active upload
   const pauseUploadTask = (taskId) => {
     try {
       const task = activeTasksRef.current[taskId];
       if (task) {
         task.cancelled = true;
+        if (task.xhr && typeof task.xhr.abort === 'function') {
+          try {
+            task.xhr.abort();
+          } catch (_) {}
+        }
         if (task.uploadTask && typeof task.uploadTask.cancelAsync === 'function') {
           task.uploadTask.cancelAsync().catch(() => {});
         }
