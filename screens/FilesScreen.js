@@ -485,8 +485,8 @@ export default function FilesScreen({ navigation }) {
         speedDisplay: '正在连接传输...',
       } : t)));
 
-      // 1MB Chunk Engine: bypasses all PHP/Nginx POST size limits and guarantees physical disk write
-      const CHUNK_SIZE = 1024 * 1024; // 1MB
+      // 512KB Chunk Engine: optimal memory footprint, lightning-fast Base64 encoding and reliable physical writes
+      const CHUNK_SIZE = 512 * 1024; // 512KB
       const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
       let startChunk = Number(taskItem.chunkIndex) || 0;
       if (startChunk >= totalChunks) startChunk = 0;
@@ -525,7 +525,8 @@ export default function FilesScreen({ navigation }) {
           data: base64Data,
         });
 
-        const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_chunk&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}`;
+        // Pass all metadata in both query parameters and JSON body for maximum backend compatibility
+        const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_chunk&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}&chunk_index=${i}&total_chunks=${totalChunks}&offset=${offset}&total_size=${totalSize}`;
 
         let chunkSuccess = false;
         let serverChunkRes = null;
@@ -568,12 +569,21 @@ export default function FilesScreen({ navigation }) {
               if (resJson.path) savedPath = resJson.path;
               break;
             } else {
+              const preview = rawText ? (rawText.length > 120 ? rawText.substring(0, 120) + '...' : rawText) : '空响应 (0字节)';
+              let errorMsg = resJson?.message || preview;
+
+              if (preview.includes('未知操作') || errorMsg.includes('未知操作')) {
+                errorMsg = '服务端 API 脚本版本过旧，未包含分片上传接口。请进入 App【设置】点击【更新后端 API】后重试。';
+              }
+
               if (resJson && resJson.status === 'error') {
-                throw new Error(resJson.message || `服务端分片写入失败 (HTTP ${res.status})`);
+                throw new Error(errorMsg || `服务端分片写入失败 (HTTP ${res.status})`);
               }
+
               if (attempt === 2) {
-                throw new Error(`分片 ${i + 1}/${totalChunks} 写入异常 (HTTP ${res?.status || 'Unknown'})`);
+                throw new Error(`分片 ${i + 1}/${totalChunks} 写入失败 (HTTP ${res?.status || 'Unknown'}): ${errorMsg}`);
               }
+              await new Promise(r => setTimeout(r, 1200));
             }
           } catch (chunkErr) {
             if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
@@ -582,7 +592,7 @@ export default function FilesScreen({ navigation }) {
             if (attempt === 2) {
               throw chunkErr;
             }
-            await new Promise(r => setTimeout(r, 1000));
+            await new Promise(r => setTimeout(r, 1200));
           }
         }
 

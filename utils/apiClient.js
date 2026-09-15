@@ -55,16 +55,33 @@ export async function apiFetch(url, options = {}, timeoutMs = 6000, maxRetries =
       ...(options.headers || {}),
     };
 
+    let fetchSignal = controller.signal;
+    let onCallerAbort = null;
+    if (options.signal) {
+      if (options.signal.aborted) {
+        clearTimeout(timer);
+        throw new Error('Aborted');
+      }
+      onCallerAbort = () => controller.abort();
+      options.signal.addEventListener('abort', onCallerAbort);
+    }
+
     try {
       const res = await (global._originalFetch || fetch)(finalUrl, {
         ...options,
         headers: mergedHeaders,
-        signal: options.signal || controller.signal,
+        signal: fetchSignal,
       });
       clearTimeout(timer);
+      if (options.signal && onCallerAbort) {
+        options.signal.removeEventListener('abort', onCallerAbort);
+      }
       return res;
     } catch (err) {
       clearTimeout(timer);
+      if (options.signal && onCallerAbort) {
+        options.signal.removeEventListener('abort', onCallerAbort);
+      }
       lastError = err;
       attempt++;
 

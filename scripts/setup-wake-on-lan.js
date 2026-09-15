@@ -65,7 +65,6 @@ public class WakeOnLanModule extends ReactContextBaseJavaModule {
                             OkHttpClient client = OkHttpClientProvider.getOkHttpClient();
                             if (client != null) {
                                 client.connectionPool().evictAll();
-                                client.dispatcher().cancelAll();
                             }
                         } catch (Throwable ignored) {}
                     }
@@ -76,7 +75,6 @@ public class WakeOnLanModule extends ReactContextBaseJavaModule {
                             OkHttpClient client = OkHttpClientProvider.getOkHttpClient();
                             if (client != null) {
                                 client.connectionPool().evictAll();
-                                client.dispatcher().cancelAll();
                             }
                         } catch (Throwable ignored) {}
                     }
@@ -99,7 +97,6 @@ public class WakeOnLanModule extends ReactContextBaseJavaModule {
             OkHttpClient client = OkHttpClientProvider.getOkHttpClient();
             if (client != null) {
                 client.connectionPool().evictAll();
-                client.dispatcher().cancelAll();
             }
             promise.resolve(true);
         } catch (Throwable t) {

@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.15.04
+ * Version: 2026.09.15.05
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.15.04');
+define('UNRAID_API_VERSION', '2026.09.15.05');
 
 @ini_set('max_execution_time', '0');
 @ini_set('max_input_time', '0');
@@ -570,12 +570,14 @@ function json_output($data, $code = 200) {
     if (!headers_sent()) {
         http_response_code($code);
         header('Content-Type: application/json; charset=utf-8');
-        header('X-Accel-Buffering: no');
-        header('Content-Length: ' . strlen($json));
     }
 
     echo $json;
-    @flush();
+    if (function_exists('fastcgi_finish_request')) {
+        @fastcgi_finish_request();
+    } else {
+        @flush();
+    }
     exit;
 }
 
@@ -3345,6 +3347,9 @@ function handle_file_chunk() {
             log_upload_debug("chunk_mode: get_query, binLen=" . strlen($binaryData));
         } else {
             $rawInput = file_get_contents('php://input');
+            if (empty($rawInput) && !empty($GLOBALS['rawGlobalInput'])) {
+                $rawInput = $GLOBALS['rawGlobalInput'];
+            }
             $payload = json_decode($rawInput, true);
             if (is_array($payload)) {
                 $base64Data = isset($payload['data']) ? $payload['data'] : '';
@@ -3467,6 +3472,7 @@ function handle_file_chunk() {
                 'status' => 'success',
                 'complete' => false,
                 'chunk_index' => $chunkIndex,
+                'total_chunks' => $totalChunks,
                 'bytes_written' => $written,
                 'current_size' => $currentSize
             ]);
