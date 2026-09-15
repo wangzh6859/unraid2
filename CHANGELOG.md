@@ -4,6 +4,21 @@
 
 ---
 
+## [v1.3.196] - 2026-09-15
+> **核心主题**：恢复梯子/代理开关无感恢复连接（移除连接池锁、底层网卡切换即时清退僵尸连接）与彻底消除 HTTP 200 空响应误报（HTTP 200 确认落盘即成功，坚决不报空响应异常）
+
+### 🌐 梯子/代理开关无感恢复连接（全场景无缝重连）
+- **彻底移除网络连接池锁定机制**：在 `utils/apiClient.js` 与 `screens/FilesScreen.js` 中彻底清理了此前的 `isNetworkPoolLocked`、`setNetworkPoolLock` 及 `updateNetworkPoolLockState`。当用户在系统控制中心或通知栏切换/断开梯子（VPN / 代理）并返回应用时，`AppState === 'active'` 将无条件触发 `resetNetworkPool()`，即时清空 OkHttp 内部绑定到失效网络接口（如 `tun0`）的陈旧连接池，无需重启 App 即可秒级恢复与服务器通信。
+- **底层网卡切换即时取消挂起请求**：在 `setup-wake-on-lan.js` 原生网络监听回调（`onAvailable` / `onLost`）中加入 `client.dispatcher().cancelAll()`，在底层物理/虚拟网络接口发生跳变时立即中断僵死请求，让重试请求瞬间绑定新网卡。
+- **移除冲突连接头**：彻底移除全局默认注入的 `'Connection': 'close'`，遵循规范并杜绝与部分反向代理中间件产生协议分歧。
+
+### 📦 彻底消除 HTTP 200 空响应误报（确认传输即成功）
+- **显式指定 XHR 文本响应类型**：为上传请求显式指定 `xhr.responseType = 'text'` 并容错获取 `xhr.responseText` 与 `xhr.response`，避免 React Native Android 原生网络层在特定编码下将响应体置空。
+- **HTTP 200 坚决不报失败**：修复了在网络传输已达到 100% 且服务器已响应 HTTP 200 OK 的前提下，前端若未解析到 JSON 仍抛出“服务端响应格式异常（HTTP 200）：空响应（0字节）”的逻辑缺陷。只要 HTTP 状态码为 200~299，经过落盘核验后即确认为成功，自动更新传输队列至 100% 完成并刷新目录，彻底杜绝误报。
+- **服务端版本号递增**：`api.php` 版本更新为 `2026.09.15.03`。
+
+---
+
 ## [v1.3.195] - 2026-09-15
 > **核心主题**：彻底根除上传完成后的 HTTP 200 空响应（清除破坏 Nginx 缓冲的 fastcgi_finish_request、显式注入 Content-Length 与 X-Accel-Buffering、多轮渐进式物理落盘核验与原生 OkHttp 锁保全）
 

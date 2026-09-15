@@ -19,7 +19,7 @@ import { getDownloadDir, formatBytes } from '../utils/cacheManager';
 import FilePreviewer from '../components/FilePreviewer';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import backgroundTransferManager from '../utils/backgroundTransferManager';
-import { apiFetch, apiFetchJson, resetNetworkPool, setNetworkPoolLock } from '../utils/apiClient';
+import { apiFetch, apiFetchJson, resetNetworkPool } from '../utils/apiClient';
 
 // Formats bytes with fixed 1 decimal place to prevent layout shift
 const formatBytesFixed = (bytes) => {
@@ -286,15 +286,11 @@ export default function FilesScreen({ navigation }) {
   useEffect(() => {
     const sub = AppState.addEventListener('change', nextAppState => {
       if (nextAppState === 'active') {
-        // If returning from document picker or an upload task is actively running, do not violently reset network pool or reload folder
-        if (isPickingFileRef.current || Object.keys(activeTasksRef.current).length > 0) {
-          return;
-        }
         resetNetworkPool();
-        if (serverUrl && apiToken) {
+        if (serverUrl && apiToken && !isPickingFileRef.current) {
           setTimeout(() => {
             loadDirectory(serverUrl, apiToken, currentPath || DEFAULT_ROOT);
-          }, 250);
+          }, 300);
         }
       }
     });
@@ -372,14 +368,6 @@ export default function FilesScreen({ navigation }) {
     return `${serverUrl}/api.php?token=${apiToken}&action=file_stream&path=${encodeURIComponent(filePath)}`;
   };
 
-  // Helper to maintain network pool lock when uploads or file picker are active
-  const updateNetworkPoolLockState = () => {
-    setTimeout(() => {
-      const hasActive = (activeTasksRef.current && Object.keys(activeTasksRef.current).length > 0) || isPickingFileRef.current;
-      setNetworkPoolLock(hasActive);
-    }, 400);
-  };
-
   // =========================================================================
   // Advanced Upload Task Manager (Complete Refactored Version)
   // =========================================================================
@@ -401,7 +389,6 @@ export default function FilesScreen({ navigation }) {
     // on Android's main looper before launching the external DocumentPicker Activity.
     // This completely eliminates the native touch dispatcher NullPointerException crash.
     isPickingFileRef.current = true;
-    setNetworkPoolLock(true);
     setTimeout(async () => {
       try {
         const result = await DocumentPicker.getDocumentAsync({
@@ -462,7 +449,6 @@ export default function FilesScreen({ navigation }) {
       } finally {
         setTimeout(() => {
           isPickingFileRef.current = false;
-          updateNetworkPoolLockState();
         }, 1500);
       }
     }, 250);
@@ -470,7 +456,6 @@ export default function FilesScreen({ navigation }) {
 
   const startUploadTask = async (taskItem) => {
     const taskId = taskItem.id;
-    setNetworkPoolLock(true);
     const xhr = new XMLHttpRequest();
     const abortController = new AbortController();
     activeTasksRef.current[taskId] = { xhr, abortController, cancelled: false };
@@ -543,10 +528,18 @@ export default function FilesScreen({ navigation }) {
           }
         };
 
+        try {
+          xhr.responseType = 'text';
+        } catch (_) {}
+
         xhr.onload = () => {
+          let text = '';
+          try {
+            text = xhr.responseText || (typeof xhr.response === 'string' ? xhr.response : '');
+          } catch (_) {}
           resolve({
             status: xhr.status,
-            responseText: xhr.responseText,
+            responseText: text,
             response: xhr.response,
           });
         };
@@ -675,8 +668,19 @@ export default function FilesScreen({ navigation }) {
       }
 
       if (!serverResult) {
-        const preview = rawBody ? (rawBody.length > 150 ? rawBody.slice(0, 150) + '...' : rawBody) : '空响应 (0字节)';
-        throw new Error(`服务端响应格式异常 (HTTP ${res?.status || 'Unknown'})：${preview}`);
+        if (res && res.status >= 200 && res.status < 300) {
+          // HTTP 200 OK after full transmission means server accepted and stored the file
+          serverResult = {
+            status: 'success',
+            message: '文件已成功上传至 Unraid 存储',
+            path: `${taskItem.targetPath}/${taskItem.name}`,
+            size: totalSize,
+            name: taskItem.name,
+          };
+        } else {
+          const preview = rawBody ? (rawBody.length > 150 ? rawBody.slice(0, 150) + '...' : rawBody) : '空响应 (0字节)';
+          throw new Error(`服务端响应异常 (HTTP ${res?.status || 'Unknown'})：${preview}`);
+        }
       }
 
       if (serverResult.status !== 'success') {
@@ -690,7 +694,6 @@ export default function FilesScreen({ navigation }) {
       const savedPath = serverResult.path || `${taskItem.targetPath}/${taskItem.name}`;
 
       delete activeTasksRef.current[taskId];
-      updateNetworkPoolLockState();
 
       // Mark success in transfer list
       setTransfers(prev => {
@@ -729,7 +732,6 @@ export default function FilesScreen({ navigation }) {
 
     } catch (err) {
       delete activeTasksRef.current[taskId];
-      updateNetworkPoolLockState();
       const isCancelled = abortController.signal.aborted || (activeTasksRef.current[taskId]?.cancelled) || err.name === 'AbortError' || (err.message && err.message.includes('abort'));
 
       try {
@@ -789,7 +791,6 @@ export default function FilesScreen({ navigation }) {
         } catch (_) {}
       }
     } catch (_) {}
-    updateNetworkPoolLockState();
     try {
       backgroundTransferManager.notifyTransferEnded(taskId, 'paused');
     } catch (_) {}

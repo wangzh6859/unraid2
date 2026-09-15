@@ -3,22 +3,10 @@ import { NativeModules, AppState } from 'react-native';
 let lastAppState = 'active';
 let appResumedTimestamp = Date.now();
 
-let isNetworkPoolLocked = false;
-
-/**
- * Lock or unlock network pool reset (used during active uploads or file picking)
- */
-export function setNetworkPoolLock(locked) {
-  isNetworkPoolLocked = !!locked;
-}
-
 /**
  * Evicts and resets OkHttp's connection pool and cancel any hung requests in native layer
  */
 export function resetNetworkPool() {
-  if (isNetworkPoolLocked) {
-    return;
-  }
   try {
     if (NativeModules.WakeOnLan && typeof NativeModules.WakeOnLan.resetNetworkConnections === 'function') {
       NativeModules.WakeOnLan.resetNetworkConnections().catch(() => {});
@@ -31,9 +19,7 @@ if (AppState) {
   AppState.addEventListener('change', (nextState) => {
     if (nextState === 'active') {
       appResumedTimestamp = Date.now();
-      if (!isNetworkPoolLocked) {
-        resetNetworkPool();
-      }
+      resetNetworkPool();
     }
     lastAppState = nextState;
   });
@@ -66,7 +52,6 @@ export async function apiFetch(url, options = {}, timeoutMs = 6000, maxRetries =
       'Accept': 'application/json, text/plain, */*',
       'Cache-Control': 'no-cache, no-store, must-revalidate',
       'Pragma': 'no-cache',
-      'Connection': 'close',
       ...(options.headers || {}),
     };
 
@@ -116,7 +101,7 @@ export async function apiFetchJson(url, options = {}, timeoutMs = 6000, maxRetri
   }
   const rawText = (await res.text()).trim();
   if (!rawText) {
-    return { status: 'success' };
+    return { status: 'success', items: [] };
   }
   try {
     return JSON.parse(rawText);
