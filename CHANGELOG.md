@@ -4,6 +4,21 @@
 
 ---
 
+## [v1.3.209] - 2026-09-16
+> **核心主题**：还原 Unraid 系统原生 CSRF Token 动态校验链路，全维度解决 emhttpd 网关空响应丢包
+
+### 🛡️ 深度溯源与 CSRF Token 全面恢复
+- **真凶查明**：
+  - 此前在 v1.3.202 中误将 `csrf_token` 作为“无意义参数”彻底剔除，而 Unraid 系统的 `emhttpd` 守护进程对所有进入的 POST 请求均强制执行 CSRF 校验。一旦缺少 `csrf_token`，`emhttpd` 直接在网关层丢弃请求体并返回 0 字节的空 HTTP 200 响应，请求根本无法被转发给 PHP。
+- **全方位 CSRF 绑定与动态刷新**：
+  - 前端在目录载入（`file_list`）时即自动捕获并缓存服务端返回的有效 `csrf_token`。
+  - 在分片上传启动及重试阶段，通过 `ensureCsrfToken` 动态核验与获取最新的 CSRF Token。
+  - 将 CSRF Token 同时绑定至 **URL 查询参数** (`&csrf_token=...`)、**表单体参数** (`csrf_token=...`) 与 **HTTP 标头** (`X-CSRF-Token: ...`)，确保 `emhttpd` 任意维度的 CSRF 检查均能顺利放行。
+- **增强型透明错误与响应头诊断**：
+  - 异常诊断窗口新增针对服务端与客户端 CSRF 状态的实时对比展示，并在重试耗尽时输出服务端原始响应头（如 `Server`、`Content-Type`、`CF-RAY` 等），精准排除外部网络节点干扰。
+
+---
+
 ## [v1.3.208] - 2026-09-16
 > **核心主题**：采用 256KB 标准 urlencoded 表单传输引擎，彻底兼容 Unraid emhttpd 与 Nginx 1MB 缓冲，终结 0 字节丢包
 

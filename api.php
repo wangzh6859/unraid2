@@ -6,7 +6,7 @@
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.16.05');
+define('UNRAID_API_VERSION', '2026.09.16.06');
 
 @ob_start();
 @ini_set('max_execution_time', '0');

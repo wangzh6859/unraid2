@@ -169,6 +169,7 @@ export default function FilesScreen({ navigation }) {
   const activeTasksRef = useRef({}); // taskId -> FileSystem.UploadTask or XHR
   const isPickingFileRef = useRef(false);
   const serverApiVersionRef = useRef('');
+  const csrfTokenRef = useRef('');
 
   // Transfer Queue Persistence Key & Reference
   const QUEUE_STORAGE_KEY = '@transfers_queue_v1';
@@ -283,6 +284,9 @@ export default function FilesScreen({ navigation }) {
 
       if (data.status === 'success') {
 
+        if (data.csrf_token) {
+          csrfTokenRef.current = data.csrf_token;
+        }
         if (data.api_version) {
           serverApiVersionRef.current = data.api_version;
           if (data.api_version < BUNDLED_API_VERSION) {
@@ -310,6 +314,19 @@ export default function FilesScreen({ navigation }) {
       setIsLoadingList(false);
       setIsRefreshing(false);
     }
+  };
+
+  const ensureCsrfToken = async (baseUrl, token, forceRefresh = false) => {
+    if (!forceRefresh && csrfTokenRef.current) return csrfTokenRef.current;
+    const cleanUrl = (baseUrl || '').replace(/\/+$/, '');
+    try {
+      const data = await apiFetchJson(`${cleanUrl}/api.php?token=${encodeURIComponent(token)}&action=csrf_token&_t=${Date.now()}`, {}, 4000, 0).catch(() => null);
+      if (data && data.csrf_token) {
+        csrfTokenRef.current = data.csrf_token;
+        return data.csrf_token;
+      }
+    } catch (_) {}
+    return csrfTokenRef.current || '';
   };
 
   useEffect(() => {
@@ -544,6 +561,8 @@ export default function FilesScreen({ navigation }) {
       let finalServerResult = null;
       let savedPath = `${taskItem.targetPath}/${taskItem.name}`;
 
+      let activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
+
       for (let i = startChunk; i < totalChunks; i++) {
         if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
           return;
@@ -561,32 +580,41 @@ export default function FilesScreen({ navigation }) {
           });
         }
 
-        const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_chunk`;
         let chunkSuccess = false;
         let serverChunkRes = null;
-
-        // Standard application/x-www-form-urlencoded POST body (natively understood by emhttpd, Nginx, PHP $_POST)
-        const formBody = [
-          `action=file_chunk`,
-          `path=${encodeURIComponent(taskItem.targetPath)}`,
-          `filename=${encodeURIComponent(taskItem.name)}`,
-          `chunk_index=${i}`,
-          `total_chunks=${totalChunks}`,
-          `offset=${offset}`,
-          `total_size=${totalSize}`,
-          `data=${encodeURIComponent(base64Data)}`,
-        ].join('&');
 
         for (let attempt = 0; attempt < 3; attempt++) {
           if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
             return;
           }
+          if (attempt > 0) {
+            activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken, true);
+          }
+
+          const csrfQuery = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
+          const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_chunk`;
+
+          // Standard application/x-www-form-urlencoded POST body (natively understood by emhttpd, Nginx, PHP $_POST)
+          const formBody = [
+            `action=file_chunk`,
+            activeCsrf ? `csrf_token=${encodeURIComponent(activeCsrf)}` : '',
+            `path=${encodeURIComponent(taskItem.targetPath)}`,
+            `filename=${encodeURIComponent(taskItem.name)}`,
+            `chunk_index=${i}`,
+            `total_chunks=${totalChunks}`,
+            `offset=${offset}`,
+            `total_size=${totalSize}`,
+            `data=${encodeURIComponent(base64Data)}`,
+          ].filter(Boolean).join('&');
+
+          let res = null;
           try {
-            const res = await apiFetch(chunkUrl, {
+            res = await apiFetch(chunkUrl, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
                 'X-API-Token': apiToken,
+                ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
               },
               body: formBody,
               signal: abortController.signal,
@@ -651,11 +679,25 @@ export default function FilesScreen({ navigation }) {
                     const lastLines = (dbgRes.log || '').split('\n').filter(Boolean).slice(-8).join(' | ');
                     const sVer = dbgRes.api_version || dbgRes.version || serverApiVersionRef.current || '未知';
                     const nErr = dbgRes.nginx_err ? `\n[Nginx错误: ${dbgRes.nginx_err}]` : '';
-                    diagInfo = `\n[服务端API版本: ${sVer}]\n[服务端状态: ${lastLines || '无日志'}]${nErr}`;
+                    const csrfStatus = `\n[CSRF检测: 服务端=${dbgRes.csrf_token_found || '未知'}, 客户端=${activeCsrf ? '已附加' : '无'}]`;
+                    diagInfo = `\n[服务端API版本: ${sVer}]\n[服务端状态: ${lastLines || '无日志'}]${nErr}${csrfStatus}`;
                   }
                 } catch (_) {}
 
-                throw new Error(`分片 ${i + 1}/${totalChunks} 写入失败 (HTTP ${res?.status || 'Unknown'}): ${errorMsg}${diagInfo}`);
+                let headerSummary = '';
+                try {
+                  if (res && res.headers && typeof res.headers.forEach === 'function') {
+                    const hObj = {};
+                    res.headers.forEach((v, k) => {
+                      if (['server', 'content-type', 'content-length', 'x-powered-by', 'date', 'cf-ray'].includes(k.toLowerCase())) {
+                        hObj[k] = v;
+                      }
+                    });
+                    if (Object.keys(hObj).length > 0) headerSummary = `\n[响应头: ${JSON.stringify(hObj)}]`;
+                  }
+                } catch (_) {}
+
+                throw new Error(`分片 ${i + 1}/${totalChunks} 写入失败 (HTTP ${res?.status || 'Unknown'}): ${errorMsg}${diagInfo}${headerSummary}`);
               }
               await new Promise(r => setTimeout(r, 1200));
             }
