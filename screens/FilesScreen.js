@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
+﻿import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator,
   KeyboardAvoidingView, Platform, Alert, ScrollView, Modal, BackHandler,
@@ -85,7 +85,7 @@ export default function FilesScreen({ navigation }) {
     title: '',
     message: '',
     confirmText: '',
-    cancelText: '取消',
+    cancelText: '鍙栨秷',
     showCancel: true,
     onConfirm: null,
   });
@@ -95,7 +95,7 @@ export default function FilesScreen({ navigation }) {
     title,
     message,
     confirmText,
-    cancelText = '取消',
+    cancelText = '鍙栨秷',
     showCancel = true,
     onConfirm,
   }) => {
@@ -191,7 +191,7 @@ export default function FilesScreen({ navigation }) {
         transferredBytes: t.transferredBytes || 0,
         totalBytes: t.totalBytes || 0,
         sizeText: t.sizeText || '',
-        speedDisplay: t.status === 'running' ? '已暂停' : (t.speedDisplay || ''),
+        speedDisplay: t.status === 'running' ? '宸叉殏鍋? : (t.speedDisplay || ''),
         chunkIndex: t.chunkIndex || 0,
       }));
       await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(sanitized));
@@ -211,7 +211,7 @@ export default function FilesScreen({ navigation }) {
             const restored = parsed.map(t => ({
               ...t,
               status: t.status === 'running' ? 'paused' : t.status,
-              speedDisplay: t.status === 'running' ? '已暂停 (可继续)' : (t.speedDisplay || ''),
+              speedDisplay: t.status === 'running' ? '宸叉殏鍋?(鍙户缁?' : (t.speedDisplay || ''),
             }));
             setTransfers(restored);
           }
@@ -226,7 +226,7 @@ export default function FilesScreen({ navigation }) {
 
 
   /**
-   * 💡 Real-Time Sync on Screen Focus:
+   * 馃挕 Real-Time Sync on Screen Focus:
    * Whenever user navigates to Files tab, check if server URL or token changed in Settings.
    */
   useFocusEffect(
@@ -285,7 +285,7 @@ export default function FilesScreen({ navigation }) {
 
         if (data.api_version) {
           serverApiVersionRef.current = data.api_version;
-          if (data.api_version < BUNDLED_API_VERSION) {
+          if (data.api_version < '2026.09.16.04') {
             autoSyncServerApi(cleanUrl, token, serverApiVersionRef);
           }
         }
@@ -301,11 +301,11 @@ export default function FilesScreen({ navigation }) {
           loadDirectory(baseUrl, token, '/mnt');
           return;
         }
-        Alert.alert('读取目录失败', data.message || '服务器拒绝访问');
+        Alert.alert('璇诲彇鐩綍澶辫触', data.message || '鏈嶅姟鍣ㄦ嫆缁濊闂?);
       }
     } catch (e) {
       console.log('[FilesScreen] loadDirectory error:', e);
-      Alert.alert('网络异常', '无法连接到 Unraid 服务器文件模块，请检查网络或代理');
+      Alert.alert('缃戠粶寮傚父', '鏃犳硶杩炴帴鍒?Unraid 鏈嶅姟鍣ㄦ枃浠舵ā鍧楋紝璇锋鏌ョ綉缁滄垨浠ｇ悊');
     } finally {
       setIsLoadingList(false);
       setIsRefreshing(false);
@@ -406,9 +406,9 @@ export default function FilesScreen({ navigation }) {
     if (currentPath === '/mnt' || currentPath === DEFAULT_ROOT) {
       showConfirm({
         type: 'warning',
-        title: '无法直接上传到共享根目录',
-        message: 'Unraid 根目录不允许直接存放散装文件。请先进入具体的共享文件夹（例如 downloads、appdata 等）后再点击上传。',
-        confirmText: '我知道了',
+        title: '鏃犳硶鐩存帴涓婁紶鍒板叡浜牴鐩綍',
+        message: 'Unraid 鏍圭洰褰曚笉鍏佽鐩存帴瀛樻斁鏁ｈ鏂囦欢銆傝鍏堣繘鍏ュ叿浣撶殑鍏变韩鏂囦欢澶癸紙渚嬪 downloads銆乤ppdata 绛夛級鍚庡啀鐐瑰嚮涓婁紶銆?,
+        confirmText: '鎴戠煡閬撲簡',
         showCancel: false,
       });
       return;
@@ -444,13 +444,13 @@ export default function FilesScreen({ navigation }) {
           uri: fileUri,
           size: file.size || 0,
           targetPath: currentPath,
-          type: '上传',
+          type: '涓婁紶',
           status: 'running',
           progress: 0,
           transferredBytes: 0,
           totalBytes: file.size || 0,
           sizeText: `0.0 B / ${formatBytesFixed(file.size || 0)}`,
-          speedDisplay: '正在连接传输...',
+          speedDisplay: '姝ｅ湪杩炴帴浼犺緭...',
           chunkIndex: 0,
         };
 
@@ -469,9 +469,9 @@ export default function FilesScreen({ navigation }) {
         console.log('[Upload] DocumentPicker error:', e);
         showConfirm({
           type: 'warning',
-          title: '选择文件异常',
-          message: e.message || '打开文件选择器失败',
-          confirmText: '知道了',
+          title: '閫夋嫨鏂囦欢寮傚父',
+          message: e.message || '鎵撳紑鏂囦欢閫夋嫨鍣ㄥけ璐?,
+          confirmText: '鐭ラ亾浜?,
           showCancel: false,
         });
       } finally {
@@ -504,14 +504,14 @@ export default function FilesScreen({ navigation }) {
         setTransfers(prev => prev.map(t => (t.id === taskId ? {
           ...t,
           status: 'running',
-          speedDisplay: '正在缓冲流...',
+          speedDisplay: '姝ｅ湪缂撳啿娴?..',
         } : t)));
         try {
           await FileSystem.copyAsync({ from: workingUriOriginal, to: tempSourceUri });
           workingUri = tempSourceUri;
           usingTempSource = true;
         } catch (copyErr) {
-          throw new Error('无法读取系统文件，请检查存储权限或更换选择器: ' + copyErr.message);
+          throw new Error('鏃犳硶璇诲彇绯荤粺鏂囦欢锛岃妫€鏌ュ瓨鍌ㄦ潈闄愭垨鏇存崲閫夋嫨鍣? ' + copyErr.message);
         }
       }
 
@@ -529,7 +529,7 @@ export default function FilesScreen({ navigation }) {
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
         status: 'running',
-        speedDisplay: '正在连接传输...',
+        speedDisplay: '姝ｅ湪杩炴帴浼犺緭...',
       } : t)));
 
       // 1MB Chunk Engine: use MULTIPART for absolute proxy/WAF bypass and native OkHttp performance
@@ -566,36 +566,33 @@ export default function FilesScreen({ navigation }) {
           await FileSystem.writeAsStringAsync(tempChunkUri, '', { encoding: FileSystem.EncodingType.UTF8 });
         }
 
-        const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}`;
+        const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_chunk`;
         let chunkSuccess = false;
         let serverChunkRes = null;
 
-        for (let attempt = 0; attempt < 3; attempt++) {
+        for (let retry = 0; retry < 3; retry++) {
           if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
             return;
           }
           try {
-            // Using FileSystem.uploadAsync with MULTIPART acts as a standard file upload, 
-            // bypassing all WAF/emhttpd request body interception!
+            // Using FileSystem.uploadAsync with BINARY_CONTENT acts as a raw data stream, 
+            // bypassing all WAF JSON payload inspections and Multipart parsing issues.
+            // All metadata is safely encoded in HTTP headers.
             const uploadTask = FileSystem.createUploadTask(
               chunkUrl,
               tempChunkUri,
               {
-                uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-                fieldName: 'chunk',
-                mimeType: 'application/octet-stream',
+                uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
                 headers: {
                   'X-API-Token': apiToken,
-                },
-                parameters: {
-                  action: 'file_chunk',
-                  path: taskItem.targetPath,
-                  filename: taskItem.name,
-                  chunk_index: i.toString(),
-                  total_chunks: totalChunks.toString(),
-                  offset: offset.toString(),
-                  total_size: totalSize.toString(),
-                },
+                  'X-Chunk-Path': encodeURIComponent(taskItem.targetPath),
+                  'X-Chunk-Filename': encodeURIComponent(taskItem.name),
+                  'X-Chunk-Index': i.toString(),
+                  'X-Chunk-Total': totalChunks.toString(),
+                  'X-Chunk-Offset': offset.toString(),
+                  'X-Chunk-Size': totalSize.toString(),
+                  'Content-Type': 'application/octet-stream'
+                }
               }
             );
 
@@ -618,6 +615,7 @@ export default function FilesScreen({ navigation }) {
                   } catch (_) {}
                 }
               }
+            }
             }
 
             if (res.status === 200 && resJson && resJson.status === 'success') {
@@ -643,16 +641,16 @@ export default function FilesScreen({ navigation }) {
                 } catch (_) {}
               }
 
-              const preview = rawText ? (rawText.length > 120 ? rawText.substring(0, 120) + '...' : rawText) : '空响应 (0字节)';
+              const preview = rawText ? (rawText.length > 120 ? rawText.substring(0, 120) + '...' : rawText) : '绌哄搷搴?(0瀛楄妭)';
               let errorMsg = resJson?.message || preview;
 
-              if (preview.includes('未知操作') || errorMsg.includes('未知操作') || errorMsg.includes('Unknown action')) {
+              if (preview.includes('鏈煡鎿嶄綔') || errorMsg.includes('鏈煡鎿嶄綔') || errorMsg.includes('Unknown action')) {
                 await autoSyncServerApi(cleanBaseUrl, apiToken, serverApiVersionRef);
-                errorMsg = '已自动推送最新服务端 API 脚本，正在重试...';
+                errorMsg = '宸茶嚜鍔ㄦ帹閫佹渶鏂版湇鍔＄ API 鑴氭湰锛屾鍦ㄩ噸璇?..';
               }
 
               if (resJson && resJson.status === 'error') {
-                throw new Error(errorMsg || `服务端分片写入失败 (HTTP ${res.status})`);
+                throw new Error(errorMsg || `鏈嶅姟绔垎鐗囧啓鍏ュけ璐?(HTTP ${res.status})`);
               }
 
               if (attempt === 2) {
@@ -661,12 +659,12 @@ export default function FilesScreen({ navigation }) {
                   const dbgRes = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=upload_debug&_t=${Date.now()}`, {}, 4000, 0).catch(() => null);
                   if (dbgRes) {
                     const lastLines = (dbgRes.log || '').split('\n').filter(Boolean).slice(-8).join(' | ');
-                    const sVer = dbgRes.api_version || dbgRes.version || serverApiVersionRef.current || '未知';
-                    diagInfo = `\n[服务端API版本: ${sVer}]\n[服务端状态: ${lastLines || '无日志'}]`;
+                    const sVer = dbgRes.api_version || dbgRes.version || serverApiVersionRef.current || '鏈煡';
+                    diagInfo = `\n[鏈嶅姟绔疉PI鐗堟湰: ${sVer}]\n[鏈嶅姟绔姸鎬? ${lastLines || '鏃犳棩蹇?}]`;
                   }
                 } catch (_) {}
 
-                throw new Error(`分片 ${i + 1}/${totalChunks} 写入失败 (HTTP ${res?.status || 'Unknown'}): ${errorMsg}${diagInfo}`);
+                throw new Error(`鍒嗙墖 ${i + 1}/${totalChunks} 鍐欏叆澶辫触 (HTTP ${res?.status || 'Unknown'}): ${errorMsg}${diagInfo}`);
               }
               await new Promise(r => setTimeout(r, 1200));
             }
@@ -685,7 +683,7 @@ export default function FilesScreen({ navigation }) {
           if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
             return;
           }
-          throw new Error(`分片 ${i + 1}/${totalChunks} 上传失败，请检查网络连接`);
+          throw new Error(`鍒嗙墖 ${i + 1}/${totalChunks} 涓婁紶澶辫触锛岃妫€鏌ョ綉缁滆繛鎺);
         }
 
         finalServerResult = serverChunkRes;
@@ -712,7 +710,7 @@ export default function FilesScreen({ navigation }) {
             transferredBytes: isLastChunk ? totalSize : currentTransferred,
             totalBytes: totalSize,
             sizeText: `${formatBytesFixed(isLastChunk ? totalSize : currentTransferred)} / ${formatBytesFixed(totalSize)}`,
-            speedDisplay: isLastChunk ? '已完成' : (smoothedSpeed > 0 ? `${formatBytesFixed(smoothedSpeed)}/s` : '正在传输...'),
+            speedDisplay: isLastChunk ? '宸插畬鎴? : (smoothedSpeed > 0 ? `${formatBytesFixed(smoothedSpeed)}/s` : '姝ｅ湪浼犺緭...'),
             chunkIndex: isLastChunk ? 0 : (i + 1),
           } : t));
           if (isLastChunk || i % 5 === 0) {
@@ -733,7 +731,7 @@ export default function FilesScreen({ navigation }) {
       }
 
       if (!finalServerResult || finalServerResult.status !== 'success') {
-        throw new Error(finalServerResult?.message || '文件落盘确认失败，请重试');
+        throw new Error(finalServerResult?.message || '鏂囦欢钀界洏纭澶辫触锛岃閲嶈瘯');
       }
 
       delete activeTasksRef.current[taskId];
@@ -747,7 +745,7 @@ export default function FilesScreen({ navigation }) {
           transferredBytes: totalSize,
           totalBytes: totalSize,
           sizeText: `${formatBytesFixed(totalSize)} / ${formatBytesFixed(totalSize)}`,
-          speedDisplay: '已完成',
+          speedDisplay: '宸插畬鎴?,
           chunkIndex: 0,
         } : t));
         saveTransfersQueue(next);
@@ -767,9 +765,9 @@ export default function FilesScreen({ navigation }) {
 
       showConfirm({
         type: 'success',
-        title: '上传成功',
-        message: `文件 "${taskItem.name}" 已成功上传至 Unraid 存储：\n${savedPath}`,
-        confirmText: '好的',
+        title: '涓婁紶鎴愬姛',
+        message: `鏂囦欢 "${taskItem.name}" 宸叉垚鍔熶笂浼犺嚦 Unraid 瀛樺偍锛歕n${savedPath}`,
+        confirmText: '濂界殑',
         showCancel: false,
       });
 
@@ -799,7 +797,7 @@ export default function FilesScreen({ navigation }) {
           const next = prev.map(t => (t.id === taskId ? {
             ...t,
             status: 'paused',
-            speedDisplay: '已暂停',
+            speedDisplay: '宸叉殏鍋?,
           } : t));
           saveTransfersQueue(next);
           return next;
@@ -809,7 +807,7 @@ export default function FilesScreen({ navigation }) {
           const next = prev.map(t => (t.id === taskId ? {
             ...t,
             status: 'error',
-            speedDisplay: '失败',
+            speedDisplay: '澶辫触',
           } : t));
           saveTransfersQueue(next);
           return next;
@@ -817,9 +815,9 @@ export default function FilesScreen({ navigation }) {
 
         showConfirm({
           type: 'warning',
-          title: '上传失败',
-          message: err.message || '网络中断或服务端未响应',
-          confirmText: '知道了',
+          title: '涓婁紶澶辫触',
+          message: err.message || '缃戠粶涓柇鎴栨湇鍔＄鏈搷搴?,
+          confirmText: '鐭ラ亾浜?,
           showCancel: false,
         });
       }
@@ -853,7 +851,7 @@ export default function FilesScreen({ navigation }) {
           return {
             ...t,
             status: 'paused',
-            speedDisplay: '已暂停(可续传)',
+            speedDisplay: '宸叉殏鍋?鍙画浼?',
           };
         }
         return t;
@@ -872,7 +870,7 @@ export default function FilesScreen({ navigation }) {
       const next = prev.map(t => (t.id === taskItem.id ? {
         ...t,
         status: 'running',
-        speedDisplay: (latestItem.chunkIndex && latestItem.chunkIndex > 0) ? '断点续传中...' : '准备续传...',
+        speedDisplay: (latestItem.chunkIndex && latestItem.chunkIndex > 0) ? '鏂偣缁紶涓?..' : '鍑嗗缁紶...',
       } : t));
       saveTransfersQueue(next);
       return next;
@@ -919,13 +917,13 @@ export default function FilesScreen({ navigation }) {
       const newTask = {
         id: taskId,
         name: item.name,
-        type: '下载',
+        type: '涓嬭浇',
         status: 'running',
         progress: 0,
         transferredBytes: 0,
         totalBytes: item.size || 0,
         sizeText: `${formatBytesFixed(0)} / ${formatBytesFixed(item.size || 0)}`,
-        speedDisplay: '正在下载...',
+        speedDisplay: '姝ｅ湪涓嬭浇...',
       };
       setTransfers(prev => {
         const next = [newTask, ...prev];
@@ -962,7 +960,7 @@ export default function FilesScreen({ navigation }) {
           transferredBytes: item.size || 0,
           totalBytes: item.size || 0,
           sizeText: `${formatBytesFixed(item.size || 0)} / ${formatBytesFixed(item.size || 0)}`,
-          speedDisplay: '下载完成',
+          speedDisplay: '涓嬭浇瀹屾垚',
         } : t));
         saveTransfersQueue(next);
         return next;
@@ -974,16 +972,16 @@ export default function FilesScreen({ navigation }) {
       });
       showConfirm({
         type: 'warning',
-        title: '下载失败',
-        message: e.message || '网络或存储权限异常',
-        confirmText: '知道了',
+        title: '涓嬭浇澶辫触',
+        message: e.message || '缃戠粶鎴栧瓨鍌ㄦ潈闄愬紓甯?,
+        confirmText: '鐭ラ亾浜?,
         showCancel: false,
       });
       setTransfers(prev => {
         const next = prev.map(t => ((t.id === taskId || (t.name === item.name && t.status === 'running')) ? {
           ...t,
           status: 'error',
-          speedDisplay: '下载中断',
+          speedDisplay: '涓嬭浇涓柇',
         } : t));
         saveTransfersQueue(next);
         return next;
@@ -996,9 +994,9 @@ export default function FilesScreen({ navigation }) {
     if (items.length === 0) {
       showConfirm({
         type: 'info',
-        title: '提示',
-        message: '请选择要下载的文件（文件夹暂不支持批量打包下载）',
-        confirmText: '好的',
+        title: '鎻愮ず',
+        message: '璇烽€夋嫨瑕佷笅杞界殑鏂囦欢锛堟枃浠跺す鏆備笉鏀寔鎵归噺鎵撳寘涓嬭浇锛?,
+        confirmText: '濂界殑',
         showCancel: false,
       });
       return;
@@ -1025,10 +1023,10 @@ export default function FilesScreen({ navigation }) {
         setNewFolderName('');
         loadDirectory(serverUrl, apiToken, currentPath);
       } else {
-        Alert.alert('创建失败', data.message || '服务器拒绝创建');
+        Alert.alert('鍒涘缓澶辫触', data.message || '鏈嶅姟鍣ㄦ嫆缁濆垱寤?);
       }
     } catch (e) {
-      Alert.alert('异常', e.message);
+      Alert.alert('寮傚父', e.message);
     }
   };
 
@@ -1047,10 +1045,10 @@ export default function FilesScreen({ navigation }) {
         setRenameItem(null);
         loadDirectory(serverUrl, apiToken, currentPath);
       } else {
-        Alert.alert('重命名失败', data.message || '服务器拒绝');
+        Alert.alert('閲嶅懡鍚嶅け璐?, data.message || '鏈嶅姟鍣ㄦ嫆缁?);
       }
     } catch (e) {
-      Alert.alert('异常', e.message);
+      Alert.alert('寮傚父', e.message);
     }
   };
 
@@ -1068,9 +1066,9 @@ export default function FilesScreen({ navigation }) {
   const handleDelete = (item) => {
     showConfirm({
       type: 'danger',
-      title: '确认删除',
-      message: `确定彻底删除 ${item.isFolder ? '文件夹' : '文件'} \n"${item.name}" 吗？\n此操作不可撤销！`,
-      confirmText: '彻底删除',
+      title: '纭鍒犻櫎',
+      message: `纭畾褰诲簳鍒犻櫎 ${item.isFolder ? '鏂囦欢澶? : '鏂囦欢'} \n"${item.name}" 鍚楋紵\n姝ゆ搷浣滀笉鍙挙閿€锛乣,
+      confirmText: '褰诲簳鍒犻櫎',
       onConfirm: async () => {
         const ok = await doDelete(item);
         if (ok) {
@@ -1079,9 +1077,9 @@ export default function FilesScreen({ navigation }) {
         } else {
           showConfirm({
             type: 'warning',
-            title: '删除失败',
-            message: '服务器拒绝删除，请检查操作权限。',
-            confirmText: '知道了',
+            title: '鍒犻櫎澶辫触',
+            message: '鏈嶅姟鍣ㄦ嫆缁濆垹闄わ紝璇锋鏌ユ搷浣滄潈闄愩€?,
+            confirmText: '鐭ラ亾浜?,
             showCancel: false,
           });
         }
@@ -1094,9 +1092,9 @@ export default function FilesScreen({ navigation }) {
     if (items.length === 0) return;
     showConfirm({
       type: 'danger',
-      title: '批量删除确认',
-      message: `确定要彻底删除选中的 ${items.length} 个项目吗？\n此操作不可恢复！`,
-      confirmText: '全部删除',
+      title: '鎵归噺鍒犻櫎纭',
+      message: `纭畾瑕佸交搴曞垹闄ら€変腑鐨?${items.length} 涓」鐩悧锛焅n姝ゆ搷浣滀笉鍙仮澶嶏紒`,
+      confirmText: '鍏ㄩ儴鍒犻櫎',
       onConfirm: async () => {
         for (const item of items) {
           await doDelete(item);
@@ -1158,9 +1156,9 @@ export default function FilesScreen({ navigation }) {
     }
     showConfirm({
       type: 'success',
-      title: '操作完成',
-      message: `已成功将 ${count} 个项目${pickerMode === 'move' ? '移动' : '复制'}至目标目录。`,
-      confirmText: '好的',
+      title: '鎿嶄綔瀹屾垚',
+      message: `宸叉垚鍔熷皢 ${count} 涓」鐩?{pickerMode === 'move' ? '绉诲姩' : '澶嶅埗'}鑷崇洰鏍囩洰褰曘€俙,
+      confirmText: '濂界殑',
       showCancel: false,
     });
     loadDirectory(serverUrl, apiToken, currentPath);
@@ -1190,12 +1188,12 @@ export default function FilesScreen({ navigation }) {
       setIsExtracting(false);
 
       if (!data) {
-        const preview = resText ? (resText.length > 200 ? resText.slice(0, 200) + '...' : resText) : '（服务端返回空内容）';
+        const preview = resText ? (resText.length > 200 ? resText.slice(0, 200) + '...' : resText) : '锛堟湇鍔＄杩斿洖绌哄唴瀹癸級';
         showConfirm({
           type: 'danger',
-          title: '解压异常',
-          message: `服务端未返回有效的 JSON 数据 (HTTP ${res.status || '未知'})。\n\n服务端原始返回：\n${preview}\n\n【排查提示】：请确认 Unraid 服务器上的 /usr/local/emhttp/api.php 已同步替换为最新版本！`,
-          confirmText: '知道了',
+          title: '瑙ｅ帇寮傚父',
+          message: `鏈嶅姟绔湭杩斿洖鏈夋晥鐨?JSON 鏁版嵁 (HTTP ${res.status || '鏈煡'})銆俓n\n鏈嶅姟绔師濮嬭繑鍥烇細\n${preview}\n\n銆愭帓鏌ユ彁绀恒€戯細璇风‘璁?Unraid 鏈嶅姟鍣ㄤ笂鐨?/usr/local/emhttp/api.php 宸插悓姝ユ浛鎹负鏈€鏂扮増鏈紒`,
+          confirmText: '鐭ラ亾浜?,
           showCancel: false,
         });
         return;
@@ -1206,18 +1204,18 @@ export default function FilesScreen({ navigation }) {
         setExtractItem(null);
         showConfirm({
           type: 'success',
-          title: '解压成功',
-          message: `已成功在服务端解压 "${extractItem.name}"\n保存至：${targetDesc}`,
-          confirmText: '好的',
+          title: '瑙ｅ帇鎴愬姛',
+          message: `宸叉垚鍔熷湪鏈嶅姟绔В鍘?"${extractItem.name}"\n淇濆瓨鑷筹細${targetDesc}`,
+          confirmText: '濂界殑',
           showCancel: false,
         });
         loadDirectory(serverUrl, apiToken, currentPath);
       } else {
         showConfirm({
           type: 'danger',
-          title: '解压失败',
-          message: data.message || '服务端解压失败，请确认服务端环境是否支持对应格式。',
-          confirmText: '知道了',
+          title: '瑙ｅ帇澶辫触',
+          message: data.message || '鏈嶅姟绔В鍘嬪け璐ワ紝璇风‘璁ゆ湇鍔＄鐜鏄惁鏀寔瀵瑰簲鏍煎紡銆?,
+          confirmText: '鐭ラ亾浜?,
           showCancel: false,
         });
       }
@@ -1225,9 +1223,9 @@ export default function FilesScreen({ navigation }) {
       setIsExtracting(false);
       showConfirm({
         type: 'danger',
-        title: '解压异常',
-        message: e.message || '网络连接超时或服务器异常',
-        confirmText: '知道了',
+        title: '瑙ｅ帇寮傚父',
+        message: e.message || '缃戠粶杩炴帴瓒呮椂鎴栨湇鍔″櫒寮傚父',
+        confirmText: '鐭ラ亾浜?,
         showCancel: false,
       });
     }
@@ -1291,12 +1289,12 @@ export default function FilesScreen({ navigation }) {
       setIsCompressing(false);
 
       if (!data) {
-        const preview = resText ? (resText.length > 200 ? resText.slice(0, 200) + '...' : resText) : '（服务端返回空内容）';
+        const preview = resText ? (resText.length > 200 ? resText.slice(0, 200) + '...' : resText) : '锛堟湇鍔＄杩斿洖绌哄唴瀹癸級';
         showConfirm({
           type: 'danger',
-          title: '压缩打包异常',
-          message: `服务端未返回有效的 JSON 数据 (HTTP ${res?.status || '未知'})。\n\n服务端原始返回：\n${preview}\n\n【排查指引】：\n请确认已执行终端命令将脚本同步至运行目录：\ncp /boot/api.php /usr/local/emhttp/api.php\nchmod 755 /usr/local/emhttp/api.php`,
-          confirmText: '知道了',
+          title: '鍘嬬缉鎵撳寘寮傚父',
+          message: `鏈嶅姟绔湭杩斿洖鏈夋晥鐨?JSON 鏁版嵁 (HTTP ${res?.status || '鏈煡'})銆俓n\n鏈嶅姟绔師濮嬭繑鍥烇細\n${preview}\n\n銆愭帓鏌ユ寚寮曘€戯細\n璇风‘璁ゅ凡鎵ц缁堢鍛戒护灏嗚剼鏈悓姝ヨ嚦杩愯鐩綍锛歕ncp /boot/api.php /usr/local/emhttp/api.php\nchmod 755 /usr/local/emhttp/api.php`,
+          confirmText: '鐭ラ亾浜?,
           showCancel: false,
         });
         return;
@@ -1307,18 +1305,18 @@ export default function FilesScreen({ navigation }) {
         exitMultiSelect();
         showConfirm({
           type: 'success',
-          title: '打包完成',
-          message: `已成功在服务端生成压缩包：\n"${data.zip_name || name}"`,
-          confirmText: '好的',
+          title: '鎵撳寘瀹屾垚',
+          message: `宸叉垚鍔熷湪鏈嶅姟绔敓鎴愬帇缂╁寘锛歕n"${data.zip_name || name}"`,
+          confirmText: '濂界殑',
           showCancel: false,
         });
         loadDirectory(serverUrl, apiToken, currentPath);
       } else {
         showConfirm({
           type: 'danger',
-          title: '打包失败',
-          message: data.message || '服务端打包失败，请检查磁盘空间或写入权限。',
-          confirmText: '知道了',
+          title: '鎵撳寘澶辫触',
+          message: data.message || '鏈嶅姟绔墦鍖呭け璐ワ紝璇锋鏌ョ鐩樼┖闂存垨鍐欏叆鏉冮檺銆?,
+          confirmText: '鐭ラ亾浜?,
           showCancel: false,
         });
       }
@@ -1326,9 +1324,9 @@ export default function FilesScreen({ navigation }) {
       setIsCompressing(false);
       showConfirm({
         type: 'danger',
-        title: '打包异常',
-        message: e.message || '网络连接超时或服务器异常',
-        confirmText: '知道了',
+        title: '鎵撳寘寮傚父',
+        message: e.message || '缃戠粶杩炴帴瓒呮椂鎴栨湇鍔″櫒寮傚父',
+        confirmText: '鐭ラ亾浜?,
         showCancel: false,
       });
     }
@@ -1356,16 +1354,16 @@ export default function FilesScreen({ navigation }) {
   // Header configuration
   useLayoutEffect(() => {
     if (!isConfigured) {
-      navigation.setOptions({ title: 'Unraid 文件库', headerLeft: null, headerRight: null });
+      navigation.setOptions({ title: 'Unraid 鏂囦欢搴?, headerLeft: null, headerRight: null });
       return;
     }
 
     const pathSegments = currentPath.split('/').filter(Boolean);
-    const titleName = isAtRoot ? '根共享库 (/mnt/user)' : decodeURIComponent(pathSegments[pathSegments.length - 1] || '文件');
+    const titleName = isAtRoot ? '鏍瑰叡浜簱 (/mnt/user)' : decodeURIComponent(pathSegments[pathSegments.length - 1] || '鏂囦欢');
 
     if (multiSelect) {
       navigation.setOptions({
-        title: `已选 ${selected.size} 项`,
+        title: `宸查€?${selected.size} 椤筦,
         headerLeft: () => (
           <TouchableOpacity onPress={exitMultiSelect} style={styles.headerBtnLeft}>
             <X color={colors.textStrong} size={24} />
@@ -1431,16 +1429,15 @@ export default function FilesScreen({ navigation }) {
       <View style={styles.center}>
         <View style={styles.setupCard}>
           <Server color={colors.accent} size={52} style={{ alignSelf: 'center', marginBottom: 16 }} />
-          <Text style={styles.setupTitle}>未连接 Unraid 服务器</Text>
+          <Text style={styles.setupTitle}>鏈繛鎺?Unraid 鏈嶅姟鍣?/Text>
           <Text style={styles.setupSub}>
-            文件管理直接接入 Unraid 统一 API 核心，无需搭建繁琐的 WebDAV 服务。请先在「设置」页配置服务器地址与 API Token。
-          </Text>
+            鏂囦欢绠＄悊鐩存帴鎺ュ叆 Unraid 缁熶竴 API 鏍稿績锛屾棤闇€鎼缓绻佺悙鐨?WebDAV 鏈嶅姟銆傝鍏堝湪銆岃缃€嶉〉閰嶇疆鏈嶅姟鍣ㄥ湴鍧€涓?API Token銆?          </Text>
           <TouchableOpacity
             style={styles.saveBtn}
-            onPress={() => navigation.navigate('设置')}
+            onPress={() => navigation.navigate('璁剧疆')}
           >
             <Settings color="#ffffff" size={18} style={{ marginRight: 8 }} />
-            <Text style={styles.saveBtnText}>前往设置连接</Text>
+            <Text style={styles.saveBtnText}>鍓嶅線璁剧疆杩炴帴</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -1455,7 +1452,7 @@ export default function FilesScreen({ navigation }) {
           <Search color={colors.muted} size={18} style={{ marginRight: 8 }} />
           <TextInput
             style={styles.searchInput}
-            placeholder="搜索当前目录..."
+            placeholder="鎼滅储褰撳墠鐩綍..."
             placeholderTextColor={colors.muted}
             value={searchQuery}
             onChangeText={setSearchQuery}
@@ -1476,7 +1473,7 @@ export default function FilesScreen({ navigation }) {
           }}
         >
           <Text style={styles.sortToggleText}>
-            {sortBy === 'name' ? '名称' : sortBy === 'date' ? '时间' : '大小'}
+            {sortBy === 'name' ? '鍚嶇О' : sortBy === 'date' ? '鏃堕棿' : '澶у皬'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -1485,7 +1482,7 @@ export default function FilesScreen({ navigation }) {
       {isLoadingList && !isRefreshing ? (
         <View style={styles.listCenter}>
           <ActivityIndicator size="large" color={colors.accent} />
-          <Text style={[styles.emptyText, { marginTop: 12 }]}>正在加载文件列表...</Text>
+          <Text style={[styles.emptyText, { marginTop: 12 }]}>姝ｅ湪鍔犺浇鏂囦欢鍒楄〃...</Text>
         </View>
       ) : (
         <ScrollView
@@ -1503,7 +1500,7 @@ export default function FilesScreen({ navigation }) {
           {filteredFiles.length === 0 ? (
             <View style={styles.listCenter}>
               <FolderOpen color={colors.muted} size={48} style={{ marginBottom: 12 }} />
-              <Text style={styles.emptyText}>当前目录无内容，下拉可刷新</Text>
+              <Text style={styles.emptyText}>褰撳墠鐩綍鏃犲唴瀹癸紝涓嬫媺鍙埛鏂?/Text>
             </View>
           ) : (
             filteredFiles.map((item, index) => {
@@ -1530,7 +1527,7 @@ export default function FilesScreen({ navigation }) {
                     <Text style={styles.fileName} numberOfLines={1}>{item.name}</Text>
                     <View style={styles.fileMetaRow}>
                       <Text style={styles.fileSize}>
-                        {item.isFolder ? '文件夹' : formatBytes(item.size)}
+                        {item.isFolder ? '鏂囦欢澶? : formatBytes(item.size)}
                       </Text>
                       {item.mtime ? <Text style={styles.fileDate}>{item.mtime}</Text> : null}
                     </View>
@@ -1560,10 +1557,10 @@ export default function FilesScreen({ navigation }) {
       {multiSelect && (
         <View style={styles.bottomBar}>
           <View style={styles.bottomBarTop}>
-            <Text style={styles.bottomBarCount}>已选 {selected.size} 项</Text>
+            <Text style={styles.bottomBarCount}>宸查€?{selected.size} 椤?/Text>
             <TouchableOpacity onPress={toggleSelectAll}>
               <Text style={styles.bottomBarSelectAll}>
-                {selected.size === filteredFiles.length ? '取消全选' : '全选'}
+                {selected.size === filteredFiles.length ? '鍙栨秷鍏ㄩ€? : '鍏ㄩ€?}
               </Text>
             </TouchableOpacity>
           </View>
@@ -1571,12 +1568,12 @@ export default function FilesScreen({ navigation }) {
           <View style={styles.bottomBarBtns}>
             <TouchableOpacity style={styles.bottomBarBtn} onPress={handleBatchDownload}>
               <Download color={colors.accent} size={22} />
-              <Text style={styles.bottomBarBtnText}>下载</Text>
+              <Text style={styles.bottomBarBtnText}>涓嬭浇</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.bottomBarBtn} onPress={handleBatchDelete}>
               <Trash2 color={colors.red} size={22} />
-              <Text style={[styles.bottomBarBtnText, { color: colors.red }]}>删除</Text>
+              <Text style={[styles.bottomBarBtnText, { color: colors.red }]}>鍒犻櫎</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -1584,7 +1581,7 @@ export default function FilesScreen({ navigation }) {
               onPress={() => openPicker('move', fileList.filter(f => selected.has(f.path)))}
             >
               <MoveRight color={colors.accent} size={22} />
-              <Text style={styles.bottomBarBtnText}>移动</Text>
+              <Text style={styles.bottomBarBtnText}>绉诲姩</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -1592,7 +1589,7 @@ export default function FilesScreen({ navigation }) {
               onPress={() => openPicker('copy', fileList.filter(f => selected.has(f.path)))}
             >
               <Copy color={colors.accent} size={22} />
-              <Text style={styles.bottomBarBtnText}>复制</Text>
+              <Text style={styles.bottomBarBtnText}>澶嶅埗</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -1600,7 +1597,7 @@ export default function FilesScreen({ navigation }) {
               onPress={handleBatchCompress}
             >
               <Archive color={colors.green} size={22} />
-              <Text style={[styles.bottomBarBtnText, { color: colors.green }]}>压缩</Text>
+              <Text style={[styles.bottomBarBtnText, { color: colors.green }]}>鍘嬬缉</Text>
             </TouchableOpacity>
 
             {selected.size === 1 && (
@@ -1613,7 +1610,7 @@ export default function FilesScreen({ navigation }) {
                 }}
               >
                 <Info color={colors.amber} size={22} />
-                <Text style={styles.bottomBarBtnText}>详情</Text>
+                <Text style={styles.bottomBarBtnText}>璇︽儏</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -1637,7 +1634,7 @@ export default function FilesScreen({ navigation }) {
           <View style={styles.dropdownMenu}>
             <TouchableOpacity style={styles.menuItem} onPress={handleUpload}>
               <UploadCloud color={colors.text} size={20} />
-              <Text style={styles.menuText}>上传文件</Text>
+              <Text style={styles.menuText}>涓婁紶鏂囦欢</Text>
             </TouchableOpacity>
             <View style={styles.divider} />
             <TouchableOpacity
@@ -1649,7 +1646,7 @@ export default function FilesScreen({ navigation }) {
               }}
             >
               <FolderPlus color={colors.text} size={20} />
-              <Text style={styles.menuText}>新建文件夹</Text>
+              <Text style={styles.menuText}>鏂板缓鏂囦欢澶?/Text>
             </TouchableOpacity>
             <View style={styles.divider} />
             <TouchableOpacity
@@ -1660,7 +1657,7 @@ export default function FilesScreen({ navigation }) {
               }}
             >
               <RefreshCw color={colors.text} size={20} />
-              <Text style={styles.menuText}>刷新目录</Text>
+              <Text style={styles.menuText}>鍒锋柊鐩綍</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1674,22 +1671,22 @@ export default function FilesScreen({ navigation }) {
             <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
               <FolderPlus color={colors.accent} size={28} />
             </View>
-            <Text style={styles.dialogTitle}>新建文件夹</Text>
-            <Text style={styles.dialogSub}>在当前路径下创建一个新的子目录</Text>
+            <Text style={styles.dialogTitle}>鏂板缓鏂囦欢澶?/Text>
+            <Text style={styles.dialogSub}>鍦ㄥ綋鍓嶈矾寰勪笅鍒涘缓涓€涓柊鐨勫瓙鐩綍</Text>
             <TextInput
               style={styles.dialogInput}
               value={newFolderName}
               onChangeText={setNewFolderName}
               autoFocus
-              placeholder="请输入文件夹名称"
+              placeholder="璇疯緭鍏ユ枃浠跺す鍚嶇О"
               placeholderTextColor={colors.muted}
             />
             <View style={styles.dialogActions}>
               <TouchableOpacity style={[styles.dialogBtn, styles.dialogCancelBtn]} onPress={() => setMkdirVisible(false)}>
-                <Text style={styles.dialogCancelText}>取消</Text>
+                <Text style={styles.dialogCancelText}>鍙栨秷</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.dialogBtn, styles.dialogConfirmBtn]} onPress={confirmCreateFolder}>
-                <Text style={styles.dialogConfirmText}>创建</Text>
+                <Text style={styles.dialogConfirmText}>鍒涘缓</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1704,23 +1701,23 @@ export default function FilesScreen({ navigation }) {
             <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(245, 158, 11, 0.12)' }]}>
               <Pencil color={colors.amber} size={26} />
             </View>
-            <Text style={styles.dialogTitle}>重命名</Text>
-            <Text style={styles.dialogSub}>修改文件或文件夹的名称</Text>
+            <Text style={styles.dialogTitle}>閲嶅懡鍚?/Text>
+            <Text style={styles.dialogSub}>淇敼鏂囦欢鎴栨枃浠跺す鐨勫悕绉?/Text>
             <TextInput
               style={styles.dialogInput}
               value={renameValue}
               onChangeText={setRenameValue}
               autoFocus
               selectTextOnFocus
-              placeholder="输入新名称"
+              placeholder="杈撳叆鏂板悕绉?
               placeholderTextColor={colors.muted}
             />
             <View style={styles.dialogActions}>
               <TouchableOpacity style={[styles.dialogBtn, styles.dialogCancelBtn]} onPress={() => setRenameItem(null)}>
-                <Text style={styles.dialogCancelText}>取消</Text>
+                <Text style={styles.dialogCancelText}>鍙栨秷</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.dialogBtn, styles.dialogConfirmBtn]} onPress={confirmRename}>
-                <Text style={styles.dialogConfirmText}>保存</Text>
+                <Text style={styles.dialogConfirmText}>淇濆瓨</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1749,21 +1746,21 @@ export default function FilesScreen({ navigation }) {
 
             <View style={styles.detailRows}>
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>类型</Text>
+                <Text style={styles.detailLabel}>绫诲瀷</Text>
                 <Text style={styles.detailValue}>
-                  {detailItem?.isFolder ? '文件夹' : isArchiveFile(detailItem?.name) ? '压缩归档文件' : '文件'}
+                  {detailItem?.isFolder ? '鏂囦欢澶? : isArchiveFile(detailItem?.name) ? '鍘嬬缉褰掓。鏂囦欢' : '鏂囦欢'}
                 </Text>
               </View>
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>大小</Text>
+                <Text style={styles.detailLabel}>澶у皬</Text>
                 <Text style={styles.detailValue}>{detailItem?.isFolder ? '-' : formatBytes(detailItem?.size)}</Text>
               </View>
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>修改时间</Text>
-                <Text style={styles.detailValue}>{detailItem?.mtime || '未知'}</Text>
+                <Text style={styles.detailLabel}>淇敼鏃堕棿</Text>
+                <Text style={styles.detailValue}>{detailItem?.mtime || '鏈煡'}</Text>
               </View>
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>完整路径</Text>
+                <Text style={styles.detailLabel}>瀹屾暣璺緞</Text>
                 <Text style={styles.detailValue} numberOfLines={1}>{detailItem?.path}</Text>
               </View>
             </View>
@@ -1779,7 +1776,7 @@ export default function FilesScreen({ navigation }) {
                   }}
                 >
                   <Archive color={colors.green} size={18} style={{ marginRight: 6 }} />
-                  <Text style={[styles.detailActionText, { color: colors.green }]}>服务端解压</Text>
+                  <Text style={[styles.detailActionText, { color: colors.green }]}>鏈嶅姟绔В鍘?/Text>
                 </TouchableOpacity>
               )}
 
@@ -1793,7 +1790,7 @@ export default function FilesScreen({ navigation }) {
                 }}
               >
                 <Pencil color={colors.accent} size={18} style={{ marginRight: 6 }} />
-                <Text style={styles.detailActionText}>重命名</Text>
+                <Text style={styles.detailActionText}>閲嶅懡鍚?/Text>
               </TouchableOpacity>
 
               {!detailItem?.isFolder && (
@@ -1806,7 +1803,7 @@ export default function FilesScreen({ navigation }) {
                   }}
                 >
                   <Download color={colors.accent} size={18} style={{ marginRight: 6 }} />
-                  <Text style={styles.detailActionText}>下载</Text>
+                  <Text style={styles.detailActionText}>涓嬭浇</Text>
                 </TouchableOpacity>
               )}
 
@@ -1815,12 +1812,12 @@ export default function FilesScreen({ navigation }) {
                 onPress={() => handleDelete(detailItem)}
               >
                 <Trash2 color={colors.red} size={18} style={{ marginRight: 6 }} />
-                <Text style={[styles.detailActionText, { color: colors.red }]}>删除</Text>
+                <Text style={[styles.detailActionText, { color: colors.red }]}>鍒犻櫎</Text>
               </TouchableOpacity>
             </View>
 
             <TouchableOpacity style={styles.actionSheetCancel} onPress={() => setDetailItem(null)}>
-              <Text style={styles.actionSheetCancelText}>关闭</Text>
+              <Text style={styles.actionSheetCancelText}>鍏抽棴</Text>
             </TouchableOpacity>
           </View>
         </Pressable>
@@ -1834,13 +1831,13 @@ export default function FilesScreen({ navigation }) {
             <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(16, 185, 129, 0.12)' }]}>
               <Archive color={colors.green} size={28} />
             </View>
-            <Text style={styles.dialogTitle}>服务端在线解压</Text>
-            <Text style={styles.dialogSub}>由 Unraid 服务器原生极速解压，无需耗费手机流量</Text>
+            <Text style={styles.dialogTitle}>鏈嶅姟绔湪绾胯В鍘?/Text>
+            <Text style={styles.dialogSub}>鐢?Unraid 鏈嶅姟鍣ㄥ師鐢熸瀬閫熻В鍘嬶紝鏃犻渶鑰楄垂鎵嬫満娴侀噺</Text>
 
             <View style={{ backgroundColor: colors.surface, padding: 12, borderRadius: 10, marginVertical: 12, width: '100%' }}>
-              <Text style={{ fontSize: 13, color: colors.sub, marginBottom: 4 }}>待解压归档：</Text>
+              <Text style={{ fontSize: 13, color: colors.sub, marginBottom: 4 }}>寰呰В鍘嬪綊妗ｏ細</Text>
               <Text style={{ fontSize: 14, color: colors.textStrong, fontWeight: '600' }} numberOfLines={1}>{extractItem?.name}</Text>
-              <Text style={{ fontSize: 13, color: colors.sub, marginTop: 8, marginBottom: 4 }}>解压目标目录：</Text>
+              <Text style={{ fontSize: 13, color: colors.sub, marginTop: 8, marginBottom: 4 }}>瑙ｅ帇鐩爣鐩綍锛?/Text>
               <Text style={{ fontSize: 13, color: colors.accent }} numberOfLines={1}>{currentPath}</Text>
             </View>
 
@@ -1863,7 +1860,7 @@ export default function FilesScreen({ navigation }) {
               }}>
                 {extractCreateSubfolder && <Check color="#fff" size={14} />}
               </View>
-              <Text style={{ fontSize: 14, color: colors.textStrong }}>解压至新建同名子文件夹</Text>
+              <Text style={{ fontSize: 14, color: colors.textStrong }}>瑙ｅ帇鑷虫柊寤哄悓鍚嶅瓙鏂囦欢澶?/Text>
             </TouchableOpacity>
 
             <View style={styles.dialogActions}>
@@ -1872,7 +1869,7 @@ export default function FilesScreen({ navigation }) {
                 onPress={() => setExtractItem(null)}
                 disabled={isExtracting}
               >
-                <Text style={styles.dialogCancelText}>取消</Text>
+                <Text style={styles.dialogCancelText}>鍙栨秷</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.dialogBtn, { backgroundColor: colors.green }]}
@@ -1882,7 +1879,7 @@ export default function FilesScreen({ navigation }) {
                 {isExtracting ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
-                  <Text style={styles.dialogConfirmText}>立即解压</Text>
+                  <Text style={styles.dialogConfirmText}>绔嬪嵆瑙ｅ帇</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -1898,14 +1895,14 @@ export default function FilesScreen({ navigation }) {
             <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
               <Archive color={colors.accent} size={28} />
             </View>
-            <Text style={styles.dialogTitle}>服务端打包压缩 (Zip)</Text>
-            <Text style={styles.dialogSub}>已选 {selected.size} 个项目，将在 Unraid 服务器直接打包</Text>
+            <Text style={styles.dialogTitle}>鏈嶅姟绔墦鍖呭帇缂?(Zip)</Text>
+            <Text style={styles.dialogSub}>宸查€?{selected.size} 涓」鐩紝灏嗗湪 Unraid 鏈嶅姟鍣ㄧ洿鎺ユ墦鍖?/Text>
 
             <TextInput
               style={[styles.dialogInput, { marginTop: 12 }]}
               value={compressZipName}
               onChangeText={setCompressZipName}
-              placeholder="请输入压缩包文件名 (如 archive.zip)"
+              placeholder="璇疯緭鍏ュ帇缂╁寘鏂囦欢鍚?(濡?archive.zip)"
               placeholderTextColor={colors.muted}
               editable={!isCompressing}
             />
@@ -1916,7 +1913,7 @@ export default function FilesScreen({ navigation }) {
                 onPress={() => setCompressVisible(false)}
                 disabled={isCompressing}
               >
-                <Text style={styles.dialogCancelText}>取消</Text>
+                <Text style={styles.dialogCancelText}>鍙栨秷</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.dialogBtn, styles.dialogConfirmBtn]}
@@ -1926,7 +1923,7 @@ export default function FilesScreen({ navigation }) {
                 {isCompressing ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
-                  <Text style={styles.dialogConfirmText}>开始打包</Text>
+                  <Text style={styles.dialogConfirmText}>寮€濮嬫墦鍖?/Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -1940,9 +1937,9 @@ export default function FilesScreen({ navigation }) {
           <View style={styles.pickerHeader}>
             <TouchableOpacity onPress={pickerGoUp} style={styles.pickerUpBtn}>
               <ArrowUp color={colors.textStrong} size={22} />
-              <Text style={styles.pickerUpText}>上级</Text>
+              <Text style={styles.pickerUpText}>涓婄骇</Text>
             </TouchableOpacity>
-            <Text style={styles.pickerTitle}>{pickerMode === 'move' ? '移动到' : '复制到'}：</Text>
+            <Text style={styles.pickerTitle}>{pickerMode === 'move' ? '绉诲姩鍒? : '澶嶅埗鍒?}锛?/Text>
             <TouchableOpacity onPress={() => setPickerVisible(false)}>
               <X color={colors.textStrong} size={22} />
             </TouchableOpacity>
@@ -1954,10 +1951,10 @@ export default function FilesScreen({ navigation }) {
             <ScrollView contentContainerStyle={styles.pickerList}>
               <TouchableOpacity style={styles.pickerRow} onPress={pickerGoUp}>
                 <FolderOpen color={colors.accent} size={20} />
-                <Text style={styles.pickerFolderName}>返回上一级</Text>
+                <Text style={styles.pickerFolderName}>杩斿洖涓婁竴绾?/Text>
               </TouchableOpacity>
               {pickerFolders.length === 0 ? (
-                <View style={styles.listCenter}><Text style={styles.emptyText}>无子文件夹</Text></View>
+                <View style={styles.listCenter}><Text style={styles.emptyText}>鏃犲瓙鏂囦欢澶?/Text></View>
               ) : (
                 pickerFolders.map((folder, index) => (
                   <TouchableOpacity key={index} style={styles.pickerRow} onPress={() => loadPickerFolders(folder.path)}>
@@ -1970,7 +1967,7 @@ export default function FilesScreen({ navigation }) {
           )}
           <View style={styles.pickerFooter}>
             <TouchableOpacity style={styles.pickerConfirmBtn} onPress={confirmPicker} disabled={pickerLoading}>
-              <Text style={styles.pickerConfirmText}>确认{pickerMode === 'move' ? '移动' : '复制'}到此目录</Text>
+              <Text style={styles.pickerConfirmText}>纭{pickerMode === 'move' ? '绉诲姩' : '澶嶅埗'}鍒版鐩綍</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1980,15 +1977,15 @@ export default function FilesScreen({ navigation }) {
       <Modal visible={isTransferVisible} animationType="slide" onRequestClose={() => setIsTransferVisible(false)}>
         <View style={styles.transferModal}>
           <View style={styles.transferHeader}>
-            <Text style={styles.transferTitle}>传输任务中心</Text>
+            <Text style={styles.transferTitle}>浼犺緭浠诲姟涓績</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
               {transfers.some(t => t.status === 'success') && (
                 <TouchableOpacity onPress={clearCompletedTransfers}>
-                  <Text style={[styles.closeText, { color: colors.sub, fontSize: 13 }]}>清空已完成</Text>
+                  <Text style={[styles.closeText, { color: colors.sub, fontSize: 13 }]}>娓呯┖宸插畬鎴?/Text>
                 </TouchableOpacity>
               )}
               <TouchableOpacity onPress={() => setIsTransferVisible(false)}>
-                <Text style={styles.closeText}>关闭</Text>
+                <Text style={styles.closeText}>鍏抽棴</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1997,7 +1994,7 @@ export default function FilesScreen({ navigation }) {
             {transfers.length === 0 ? (
               <View style={[styles.listCenter, { marginTop: 100 }]}>
                 <ArrowDownUp color={colors.divider} size={54} style={{ marginBottom: 16 }} />
-                <Text style={styles.emptyText}>暂无传输任务记录</Text>
+                <Text style={styles.emptyText}>鏆傛棤浼犺緭浠诲姟璁板綍</Text>
               </View>
             ) : (
               transfers.map((item) => {
@@ -2022,7 +2019,7 @@ export default function FilesScreen({ navigation }) {
                             : 'rgba(59, 130, 246, 0.12)'
                         }
                       ]}>
-                        {item.type === '上传' ? (
+                        {item.type === '涓婁紶' ? (
                           <UploadCloud
                             color={isSuccess ? colors.green : isError ? colors.red : isPaused ? colors.amber : colors.accent}
                             size={20}
@@ -2062,7 +2059,7 @@ export default function FilesScreen({ navigation }) {
                                   : colors.accent
                               }
                             ]}>
-                              {item.type} · {isSuccess ? '已完成' : isError ? '传输失败' : isPaused ? '已暂停' : '传输中'}
+                              {item.type} 路 {isSuccess ? '宸插畬鎴? : isError ? '浼犺緭澶辫触' : isPaused ? '宸叉殏鍋? : '浼犺緭涓?}
                             </Text>
                           </View>
                         </View>
@@ -2070,7 +2067,7 @@ export default function FilesScreen({ navigation }) {
 
                       {/* Top-Right Optimized Action Buttons: Distinct, Ergonomic, Pill-shaped */}
                       <View style={styles.transferActionGroup}>
-                        {item.type === '上传' && isRunning && (
+                        {item.type === '涓婁紶' && isRunning && (
                           <TouchableOpacity
                             style={[styles.transferActionBtn, { backgroundColor: 'rgba(245, 158, 11, 0.14)' }]}
                             onPress={() => pauseUploadTask(item.id)}
@@ -2081,7 +2078,7 @@ export default function FilesScreen({ navigation }) {
                           </TouchableOpacity>
                         )}
 
-                        {item.type === '上传' && (isPaused || isError) && (
+                        {item.type === '涓婁紶' && (isPaused || isError) && (
                           <TouchableOpacity
                             style={[styles.transferActionBtn, { backgroundColor: 'rgba(59, 130, 246, 0.14)' }]}
                             onPress={() => resumeUploadTask(item)}
@@ -2147,7 +2144,7 @@ export default function FilesScreen({ navigation }) {
                           styles.transferSpeedText,
                           { color: isRunning ? colors.accent : colors.muted }
                         ]} numberOfLines={1}>
-                          {item.speedDisplay || (isRunning ? '计算中...' : isPaused ? '已暂停' : isSuccess ? '完成' : '停止')}
+                          {item.speedDisplay || (isRunning ? '璁＄畻涓?..' : isPaused ? '宸叉殏鍋? : isSuccess ? '瀹屾垚' : '鍋滄')}
                         </Text>
                       </View>
                     </View>
@@ -2549,3 +2546,4 @@ const createStyles = (colors) => StyleSheet.create({
     textAlign: 'right',
   },
 });
+

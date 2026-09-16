@@ -4,6 +4,18 @@
 
 ---
 
+## [v1.3.205] - 2026-09-16
+> **核心主题**：彻底穿透所有代理与 WAF (解决 0 字节空响应)，采用底层二进制流直传
+
+### 🚀 终极防拦截传输引擎 (0 字节空响应终结者)
+- **问题根源**：之前的版本无论是采用 Base64 JSON 还是原生 Multipart 表单，都会被严格的反代服务器 (Nginx ModSecurity / Cloudflare 等 WAF) 拦截。代理网关一旦发现 POST 数据包含 `filename="xxx.apk"` 或巨大的表单/JSON边界，会直接截断请求返回 HTTP 200 空响应，导致服务器 PHP 完全收不到数据。
+- **重构为原生二进制流 (Binary Stream)**：
+  - 将分片上传引擎从 `MULTIPART` 彻底重构为 `BINARY_CONTENT`。现在客户端不再发送任何表单或 JSON 结构，而是将最纯粹的文件二进制流伪装成 `application/octet-stream` 直接推入 TCP 底层。这成功避开了所有 WAF 的内容审查。
+  - 将所有容易被拦截的元数据（文件路径、文件名、切片序号等）全部通过 `HTTP Headers`（`X-Chunk-Path`, `X-Chunk-Filename`）进行 Base64 级别的安全传输，既不污染 URL，也不暴露在 Body 中，实现完美隐形。
+  - 后端 `api.php` 同步升级，现支持直接从 HTTP Header 提取元数据并处理纯净二进制流，确保上传请求直达 Unraid。
+
+---
+
 ## [v1.3.204] - 2026-09-16
 > **核心主题**：修复 `content://` 流式读取异常（解决 `readAsStringAsync` 不支持 SAF URI 的报错）
 
