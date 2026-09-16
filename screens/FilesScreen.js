@@ -414,15 +414,13 @@ export default function FilesScreen({ navigation }) {
       return;
     }
 
-    // 250ms debounce: allows the touch gesture and menu overlay unmount to cleanly settle
-    // on Android's main looper before launching the external DocumentPicker Activity.
-    // This completely eliminates the native touch dispatcher NullPointerException crash.
+    // 250ms debounce
     isPickingFileRef.current = true;
     setTimeout(async () => {
       try {
         const result = await DocumentPicker.getDocumentAsync({
           type: '*/*',
-          copyToCacheDirectory: true,
+          copyToCacheDirectory: false, // <-- Crucial FIX for OOM crash! Do not copy large files into cache. Use content:// URI directly.
           multiple: false,
         });
 
@@ -462,10 +460,8 @@ export default function FilesScreen({ navigation }) {
           return next;
         });
 
-        // Start upload immediately in background
         startUploadTask(newTask);
 
-        // Safe transition window before opening transfer center to avoid WindowManager BadTokenException
         setTimeout(() => {
           setIsTransferVisible(true);
         }, 500);
@@ -496,6 +492,7 @@ export default function FilesScreen({ navigation }) {
     } catch (_) {}
 
     const workingUri = taskItem.uri;
+    const tempChunkUri = FileSystem.cacheDirectory + `chunk_${taskId}.tmp`;
 
     try {
       let totalSize = taskItem.size || 0;
@@ -507,19 +504,16 @@ export default function FilesScreen({ navigation }) {
       } catch (_) {}
 
       const cleanBaseUrl = (serverUrl || '').replace(/\/+$/, '');
-
-      // Proactively ensure server api.php is up-to-date with bundled version before upload starts
       await autoSyncServerApi(cleanBaseUrl, apiToken, serverApiVersionRef);
 
-      // Set initial upload state
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
         status: 'running',
         speedDisplay: '正在连接传输...',
       } : t)));
 
-      // 128KB Chunk Engine: optimal proxy/WAF compatibility, lightweight Base64 and ultra-fast transfer
-      const CHUNK_SIZE = 128 * 1024; // 128KB
+      // 1MB Chunk Engine: use MULTIPART for absolute proxy/WAF bypass and native OkHttp performance
+      const CHUNK_SIZE = 1024 * 1024; // 1MB chunks (faster natively)
       const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
       let startChunk = Number(taskItem.chunkIndex) || 0;
       if (startChunk >= totalChunks) startChunk = 0;
@@ -538,29 +532,21 @@ export default function FilesScreen({ navigation }) {
         const offset = i * CHUNK_SIZE;
         const currentChunkLen = totalSize > 0 ? Math.min(CHUNK_SIZE, totalSize - offset) : 0;
 
-        // Read chunk slice as Base64 string
-        let base64Data = '';
+        // Extract chunk to a temporary binary file to feed natively into Expo uploadAsync
         if (currentChunkLen > 0) {
-          base64Data = await FileSystem.readAsStringAsync(workingUri, {
+          const base64Data = await FileSystem.readAsStringAsync(workingUri, {
             encoding: FileSystem.EncodingType.Base64,
             position: offset,
             length: currentChunkLen,
           });
+          await FileSystem.writeAsStringAsync(tempChunkUri, base64Data, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+        } else {
+          await FileSystem.writeAsStringAsync(tempChunkUri, '', { encoding: FileSystem.EncodingType.UTF8 });
         }
 
-        const chunkPayload = JSON.stringify({
-          path: taskItem.targetPath,
-          filename: taskItem.name,
-          chunk_index: i,
-          total_chunks: totalChunks,
-          offset: offset,
-          total_size: totalSize,
-          data: base64Data,
-        });
-
-        // Pure clean URL without query metadata or csrf parameters to avoid proxy/emhttpd interception
-        const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_chunk`;
-
+        const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}`;
         let chunkSuccess = false;
         let serverChunkRes = null;
 
@@ -569,17 +555,36 @@ export default function FilesScreen({ navigation }) {
             return;
           }
           try {
-            const res = await apiFetch(chunkUrl, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'text/plain; charset=utf-8',
-                'X-API-Token': apiToken,
-              },
-              body: chunkPayload,
-              signal: abortController.signal,
-            }, 35000, 0);
+            // Using FileSystem.uploadAsync with MULTIPART acts as a standard file upload, 
+            // bypassing all WAF/emhttpd request body interception!
+            const uploadTask = FileSystem.createUploadTask(
+              chunkUrl,
+              tempChunkUri,
+              {
+                uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+                fieldName: 'chunk',
+                mimeType: 'application/octet-stream',
+                headers: {
+                  'X-API-Token': apiToken,
+                },
+                parameters: {
+                  action: 'file_chunk',
+                  path: taskItem.targetPath,
+                  filename: taskItem.name,
+                  chunk_index: i.toString(),
+                  total_chunks: totalChunks.toString(),
+                  offset: offset.toString(),
+                  total_size: totalSize.toString(),
+                },
+              }
+            );
 
-            const rawText = (await res.text()).trim();
+            // Hook uploadTask to activeTasksRef for cancellation support
+            activeTasksRef.current[taskId].uploadTask = uploadTask;
+            const res = await uploadTask.uploadAsync();
+            activeTasksRef.current[taskId].uploadTask = null;
+
+            const rawText = (res.body || '').trim();
             let resJson = null;
             if (rawText) {
               try {
@@ -595,13 +600,13 @@ export default function FilesScreen({ navigation }) {
               }
             }
 
-            if (res.ok && resJson && resJson.status === 'success') {
+            if (res.status === 200 && resJson && resJson.status === 'success') {
               chunkSuccess = true;
               serverChunkRes = resJson;
               if (resJson.path) savedPath = resJson.path;
               break;
             } else {
-              // If response body was dropped (HTTP 200 with empty body), verify physical write status on server
+              // Same empty response fallback check
               if (res.status === 200 && (!resJson || resJson.status !== 'success')) {
                 try {
                   const dbgRes = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=upload_debug&_t=${Date.now()}`, {}, 4000, 0).catch(() => null);
@@ -665,7 +670,6 @@ export default function FilesScreen({ navigation }) {
 
         finalServerResult = serverChunkRes;
 
-        // Calculate dynamic speed and smooth progress
         const now = Date.now();
         const dt = (now - lastTime) / 1000;
         const currentTransferred = Math.min(totalSize, offset + currentChunkLen);
@@ -697,6 +701,11 @@ export default function FilesScreen({ navigation }) {
           return next;
         });
       }
+
+      // Cleanup temp chunk file
+      try {
+        await FileSystem.deleteAsync(tempChunkUri, { idempotent: true });
+      } catch (_) {}
 
       if (!finalServerResult || finalServerResult.status !== 'success') {
         throw new Error(finalServerResult?.message || '文件落盘确认失败，请重试');
@@ -790,6 +799,11 @@ export default function FilesScreen({ navigation }) {
         if (task.abortController) {
           try {
             task.abortController.abort();
+          } catch (_) {}
+        }
+        if (task.uploadTask && typeof task.uploadTask.cancelAsync === 'function') {
+          try {
+            task.uploadTask.cancelAsync();
           } catch (_) {}
         }
       }

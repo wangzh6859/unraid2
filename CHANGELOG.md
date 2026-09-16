@@ -1,308 +1,176 @@
-# Unraid Mobile Manager - 更新日志 (Changelog)
+﻿## [v1.3.203] - 2026-09-16
 
-本文档记录 **Unraid Mobile Manager** 移动端 App 及后端核心 `api.php` 的每个版本更新、性能优化与问题修复细节。
+### 修复与优化 (Bug Fixes & Improvements)
+- **彻底解决大文件上传 HTTP 200 空响应问题**: 废弃 `fetch` 与 `text/plain` Base64 负载，改用 `expo-file-system` 原生的 `uploadAsync (MULTIPART)` 方案发送标准二进制 `multipart/form-data`，完美穿透各种代理与 WAF (Nginx, FRP 等) 规则拦截。
+- **大幅提升分片传输性能**: 将分片大小从 128KB 提升至 1MB，并交由原生 Android OkHttp 进行数据流分发，减少 JS 线程内存驻留与阻塞。
+- **彻底根治首次选文件 OOM 闪退问题**: 将 `DocumentPicker` 的 `copyToCacheDirectory` 设置为 `false`，阻止其将 64MB+ 大文件硬拷贝至内存沙盒，改为直接从 `content://` URI 分片流式读取。
 
+# Unraid Mobile Manager - 鏇存柊鏃ュ織 (Changelog)
+
+鏈枃妗ｈ褰?**Unraid Mobile Manager** 绉诲姩绔?App 鍙婂悗绔牳蹇?`api.php` 鐨勬瘡涓増鏈洿鏂般€佹€ц兘浼樺寲涓庨棶棰樹慨澶嶇粏鑺傘€?
 ---
 
 ## [v1.3.202] - 2026-09-16
-> **核心主题**：根除 Unraid emhttpd 网关级 CSRF 拦截（彻底根治 HTTP 200 0字节空响应）、Android 全局 largeHeap（512MB 堆内存彻底根除大文件选择 OOM 闪退）、text/plain 原生透传
+> **鏍稿績涓婚**锛氭牴闄?Unraid emhttpd 缃戝叧绾?CSRF 鎷︽埅锛堝交搴曟牴娌?HTTP 200 0瀛楄妭绌哄搷搴旓級銆丄ndroid 鍏ㄥ眬 largeHeap锛?12MB 鍫嗗唴瀛樺交搴曟牴闄ゅぇ鏂囦欢閫夋嫨 OOM 闂€€锛夈€乼ext/plain 鍘熺敓閫忎紶
 
-### 🛡️ 根除 Unraid emhttpd 网关级 CSRF 拦截 (根治 HTTP 200 空响应)
-- **破案与拦截机理**：经对 Unraid 架构深度溯源，Unraid 内置 Web 守护进程（`emhttpd`）在接收到 URL 查询参数或 Header 中包含 `csrf_token` 的请求时，会强制与系统 Web 登录 Session 进行匹配校验。由于 App 使用独立 API Token（`token=...`）进行鉴权，并没有浏览器的 Session Cookie，`emhttpd` 校验失败后在反向代理网关层直接阻断并静默返回空响应（HTTP 200 0字节），导致该分片 POST 请求**压根没有被转发给 PHP**（这解释了为何服务端日志仅有 GET 记录，完全没有 `REQ: POST`）。
-- **彻底剔除无意义的 CSRF 参数**：`api.php` 拥有原生且更安全的独立 API Token 机制，完全无需也不应使用 Unraid WebGUI 的 CSRF Token。本次彻底剔除分片请求及相关操作中的 `csrf_token` URL 参数与 `X-CSRF-Token` Header，请求 100% 直达 PHP-FPM！
-- **请求格式完全对齐成功通道**：将分片请求的 `Content-Type` 统一调整为 `text/plain; charset=utf-8`（与多次实测 100% 秒级通行的 `update_api_file` 接口保持完全一致），彻底绕过任何反向代理、WAF 或移动网关对 JSON/表单的嗅探与缓冲。
-
-### 💥 Android 全局 `largeHeap` 与防 OOM 闪退 (彻底根治首次选择文件闪退)
-- **`android:largeHeap="true"` 原生配置**：在 `app.json` 以及 `withForegroundService` 配置插件中正式启用 Android `largeHeap`，将应用的 Dalvik/ART 堆内存上限从系统默认的 128MB/192MB 大幅提升至 **512MB / 1024MB**。彻底杜绝用户在文件选择器中选定 60MB+ 大文件（如新版 APK、视频等）时因内存峰值触发 Android 底层 OOM 强退（闪退）。
-- **开启 `requestLegacyExternalStorage="true"`**：消除 Android 外部存储沙盒权限边界可能引发的底层文件句柄异常。
-- **任务启动与弹窗解耦**：选择文件后，上传任务立即进入异步准备流，传输中心模态框延迟 500ms 平滑呼出，双重保障 Android 窗口生命周期平稳过渡。
-- **服务端版本升级至 `2026.09.16.03`**。
-
+### 馃洝锔?鏍归櫎 Unraid emhttpd 缃戝叧绾?CSRF 鎷︽埅 (鏍规不 HTTP 200 绌哄搷搴?
+- **鐮存涓庢嫤鎴満鐞?*锛氱粡瀵?Unraid 鏋舵瀯娣卞害婧簮锛孶nraid 鍐呯疆 Web 瀹堟姢杩涚▼锛坄emhttpd`锛夊湪鎺ユ敹鍒?URL 鏌ヨ鍙傛暟鎴?Header 涓寘鍚?`csrf_token` 鐨勮姹傛椂锛屼細寮哄埗涓庣郴缁?Web 鐧诲綍 Session 杩涜鍖归厤鏍￠獙銆傜敱浜?App 浣跨敤鐙珛 API Token锛坄token=...`锛夎繘琛岄壌鏉冿紝骞舵病鏈夋祻瑙堝櫒鐨?Session Cookie锛宍emhttpd` 鏍￠獙澶辫触鍚庡湪鍙嶅悜浠ｇ悊缃戝叧灞傜洿鎺ラ樆鏂苟闈欓粯杩斿洖绌哄搷搴旓紙HTTP 200 0瀛楄妭锛夛紝瀵艰嚧璇ュ垎鐗?POST 璇锋眰**鍘嬫牴娌℃湁琚浆鍙戠粰 PHP**锛堣繖瑙ｉ噴浜嗕负浣曟湇鍔＄鏃ュ織浠呮湁 GET 璁板綍锛屽畬鍏ㄦ病鏈?`REQ: POST`锛夈€?- **褰诲簳鍓旈櫎鏃犳剰涔夌殑 CSRF 鍙傛暟**锛歚api.php` 鎷ユ湁鍘熺敓涓旀洿瀹夊叏鐨勭嫭绔?API Token 鏈哄埗锛屽畬鍏ㄦ棤闇€涔熶笉搴斾娇鐢?Unraid WebGUI 鐨?CSRF Token銆傛湰娆″交搴曞墧闄ゅ垎鐗囪姹傚強鐩稿叧鎿嶄綔涓殑 `csrf_token` URL 鍙傛暟涓?`X-CSRF-Token` Header锛岃姹?100% 鐩磋揪 PHP-FPM锛?- **璇锋眰鏍煎紡瀹屽叏瀵归綈鎴愬姛閫氶亾**锛氬皢鍒嗙墖璇锋眰鐨?`Content-Type` 缁熶竴璋冩暣涓?`text/plain; charset=utf-8`锛堜笌澶氭瀹炴祴 100% 绉掔骇閫氳鐨?`update_api_file` 鎺ュ彛淇濇寔瀹屽叏涓€鑷达級锛屽交搴曠粫杩囦换浣曞弽鍚戜唬鐞嗐€乄AF 鎴栫Щ鍔ㄧ綉鍏冲 JSON/琛ㄥ崟鐨勫梾鎺笌缂撳啿銆?
+### 馃挜 Android 鍏ㄥ眬 `largeHeap` 涓庨槻 OOM 闂€€ (褰诲簳鏍规不棣栨閫夋嫨鏂囦欢闂€€)
+- **`android:largeHeap="true"` 鍘熺敓閰嶇疆**锛氬湪 `app.json` 浠ュ強 `withForegroundService` 閰嶇疆鎻掍欢涓寮忓惎鐢?Android `largeHeap`锛屽皢搴旂敤鐨?Dalvik/ART 鍫嗗唴瀛樹笂闄愪粠绯荤粺榛樿鐨?128MB/192MB 澶у箙鎻愬崌鑷?**512MB / 1024MB**銆傚交搴曟潨缁濈敤鎴峰湪鏂囦欢閫夋嫨鍣ㄤ腑閫夊畾 60MB+ 澶ф枃浠讹紙濡傛柊鐗?APK銆佽棰戠瓑锛夋椂鍥犲唴瀛樺嘲鍊艰Е鍙?Android 搴曞眰 OOM 寮洪€€锛堥棯閫€锛夈€?- **寮€鍚?`requestLegacyExternalStorage="true"`**锛氭秷闄?Android 澶栭儴瀛樺偍娌欑洅鏉冮檺杈圭晫鍙兘寮曞彂鐨勫簳灞傛枃浠跺彞鏌勫紓甯搞€?- **浠诲姟鍚姩涓庡脊绐楄В鑰?*锛氶€夋嫨鏂囦欢鍚庯紝涓婁紶浠诲姟绔嬪嵆杩涘叆寮傛鍑嗗娴侊紝浼犺緭涓績妯℃€佹寤惰繜 500ms 骞虫粦鍛煎嚭锛屽弻閲嶄繚闅?Android 绐楀彛鐢熷懡鍛ㄦ湡骞崇ǔ杩囨浮銆?- **鏈嶅姟绔増鏈崌绾ц嚦 `2026.09.16.03`**銆?
 ---
 
 ## [v1.3.201] - 2026-09-16
-> **核心主题**：彻底消除首次选择文件闪退（BadTokenException 400ms 过渡窗口）、URL 隐蔽化（剔除 Query 中的 .apk 与路径彻底免除 WAF/中间件拦截）、128KB 极速分片与精准 Content-Length 响应头
-
-### 💥 彻底消除首次上传选择文件闪退 (WindowManager BadTokenException Fix)
-- **400ms 窗口过渡保护期**：定位发现 Android 系统在外部文件选择器（DocumentPicker Activity）返回 React Native 主 Activity 的瞬间，底层 WindowManager 尚未完全完成 Window Token 重新挂载。若此时 JS 线程立即呼出全屏传输弹窗（`<Modal visible={isTransferVisible}>`），将直接触发原生 `BadTokenException` 致命崩溃导致闪退。现增加 400ms 安全过渡等待期，确保主窗口完全就绪后再弹出模态框并启动上传，彻底杜绝闪退。
-
-### 🛡️ URL 深度隐蔽化与免除 WAF/中间件截断 (URL Obfuscation)
-- **彻底剔除 URL Query 中的 `.apk` 与文件路径**：此前分片上传将文件名（如 `unraid-v1.3.199.apk`）与路径（`/mnt/user/...`）显式暴露在 URL 查询参数中。经定位，在公共网络、反向代理（FRP、Cloudflare、Nginx WAF）或部分移动运营商网关环境下，URL 中携带 `.apk` 扩展名与敏感路径会被安全策略直接拦截并静默返回空的 `HTTP 200` 响应，导致请求根本无法到达 PHP。
-- **元数据 100% 收敛至 POST Body**：分片 URL 精简为最纯净的 `/api.php?token=...&action=file_chunk`，所有目标路径、文件名、分片索引及数据均由 POST Body 承载，彻底绕过各级中间件对 URL 的恶意拦截。
-
-### 🚀 128KB 超轻量分片引擎与精准 Content-Length 响应
-- **128KB 分片设计**：分片大小从 512KB 精细化优化至 **128KB**，Base64 字符串尺寸缩减至仅约 174KB（与顺利通过的 API 更新请求完全一致），不仅极度亲和各级代理网关与移动网络，而且 JS 编解码耗时低于 2ms，内存零压力。
-- **显式 Content-Length 响应头**：在 `api.php` 的 `json_output()` 中重新确立 `header('Content-Length: ' . $len)`，让 Android OkHttp 在读取响应时具有明确的字节边界，从底层协议杜绝空响应读入。
-- **服务端核心版本递增**：升级为 `2026.09.16.02`。
-
+> **鏍稿績涓婚**锛氬交搴曟秷闄ら娆￠€夋嫨鏂囦欢闂€€锛圔adTokenException 400ms 杩囨浮绐楀彛锛夈€乁RL 闅愯斀鍖栵紙鍓旈櫎 Query 涓殑 .apk 涓庤矾寰勫交搴曞厤闄?WAF/涓棿浠舵嫤鎴級銆?28KB 鏋侀€熷垎鐗囦笌绮惧噯 Content-Length 鍝嶅簲澶?
+### 馃挜 褰诲簳娑堥櫎棣栨涓婁紶閫夋嫨鏂囦欢闂€€ (WindowManager BadTokenException Fix)
+- **400ms 绐楀彛杩囨浮淇濇姢鏈?*锛氬畾浣嶅彂鐜?Android 绯荤粺鍦ㄥ閮ㄦ枃浠堕€夋嫨鍣紙DocumentPicker Activity锛夎繑鍥?React Native 涓?Activity 鐨勭灛闂达紝搴曞眰 WindowManager 灏氭湭瀹屽叏瀹屾垚 Window Token 閲嶆柊鎸傝浇銆傝嫢姝ゆ椂 JS 绾跨▼绔嬪嵆鍛煎嚭鍏ㄥ睆浼犺緭寮圭獥锛坄<Modal visible={isTransferVisible}>`锛夛紝灏嗙洿鎺ヨЕ鍙戝師鐢?`BadTokenException` 鑷村懡宕╂簝瀵艰嚧闂€€銆傜幇澧炲姞 400ms 瀹夊叏杩囨浮绛夊緟鏈燂紝纭繚涓荤獥鍙ｅ畬鍏ㄥ氨缁悗鍐嶅脊鍑烘ā鎬佹骞跺惎鍔ㄤ笂浼狅紝褰诲簳鏉滅粷闂€€銆?
+### 馃洝锔?URL 娣卞害闅愯斀鍖栦笌鍏嶉櫎 WAF/涓棿浠舵埅鏂?(URL Obfuscation)
+- **褰诲簳鍓旈櫎 URL Query 涓殑 `.apk` 涓庢枃浠惰矾寰?*锛氭鍓嶅垎鐗囦笂浼犲皢鏂囦欢鍚嶏紙濡?`unraid-v1.3.199.apk`锛変笌璺緞锛坄/mnt/user/...`锛夋樉寮忔毚闇插湪 URL 鏌ヨ鍙傛暟涓€傜粡瀹氫綅锛屽湪鍏叡缃戠粶銆佸弽鍚戜唬鐞嗭紙FRP銆丆loudflare銆丯ginx WAF锛夋垨閮ㄥ垎绉诲姩杩愯惀鍟嗙綉鍏崇幆澧冧笅锛孶RL 涓惡甯?`.apk` 鎵╁睍鍚嶄笌鏁忔劅璺緞浼氳瀹夊叏绛栫暐鐩存帴鎷︽埅骞堕潤榛樿繑鍥炵┖鐨?`HTTP 200` 鍝嶅簲锛屽鑷磋姹傛牴鏈棤娉曞埌杈?PHP銆?- **鍏冩暟鎹?100% 鏀舵暃鑷?POST Body**锛氬垎鐗?URL 绮剧畝涓烘渶绾噣鐨?`/api.php?token=...&action=file_chunk`锛屾墍鏈夌洰鏍囪矾寰勩€佹枃浠跺悕銆佸垎鐗囩储寮曞強鏁版嵁鍧囩敱 POST Body 鎵胯浇锛屽交搴曠粫杩囧悇绾т腑闂翠欢瀵?URL 鐨勬伓鎰忔嫤鎴€?
+### 馃殌 128KB 瓒呰交閲忓垎鐗囧紩鎿庝笌绮惧噯 Content-Length 鍝嶅簲
+- **128KB 鍒嗙墖璁捐**锛氬垎鐗囧ぇ灏忎粠 512KB 绮剧粏鍖栦紭鍖栬嚦 **128KB**锛孊ase64 瀛楃涓插昂瀵哥缉鍑忚嚦浠呯害 174KB锛堜笌椤哄埄閫氳繃鐨?API 鏇存柊璇锋眰瀹屽叏涓€鑷达級锛屼笉浠呮瀬搴︿翰鍜屽悇绾т唬鐞嗙綉鍏充笌绉诲姩缃戠粶锛岃€屼笖 JS 缂栬В鐮佽€楁椂浣庝簬 2ms锛屽唴瀛橀浂鍘嬪姏銆?- **鏄惧紡 Content-Length 鍝嶅簲澶?*锛氬湪 `api.php` 鐨?`json_output()` 涓噸鏂扮‘绔?`header('Content-Length: ' . $len)`锛岃 Android OkHttp 鍦ㄨ鍙栧搷搴旀椂鍏锋湁鏄庣‘鐨勫瓧鑺傝竟鐣岋紝浠庡簳灞傚崗璁潨缁濈┖鍝嶅簲璇诲叆銆?- **鏈嶅姟绔牳蹇冪増鏈€掑**锛氬崌绾т负 `2026.09.16.02`銆?
 ---
 
 ## [v1.3.200] - 2026-09-16
-> **核心主题**：彻底移除 `fastcgi_finish_request` 根治 Nginx Keep-Alive 截断、内置全量离线 API 脚本直推、文件管理无感热同步与双重回验增强
-
-### 🚀 彻底根除 `fastcgi_finish_request()` 造成的 Nginx 0 字节截断
-- **移除有缺陷的 FastCGI 显式终结调用**：在 PHP-FPM 配合 Nginx `fastcgi_keep_conn on` 环境下，`json_output()` 调用 `fastcgi_finish_request()` 会导致 FastCGI 会话 prematurely 结束并丢弃响应体，输出空响应（HTTP 200，0 字节）。现彻底移除该调用，由 PHP 运行时以标准方式清空输出缓冲区后自然退出，根除任何 0 字节丢包可能。
-- **日志路径统一与全权限锁定**：统一调试日志写入与读取路径，首选 `/tmp/unraid_api_debug.log`，彻底杜绝因目录权限不一致导致的读取旧日志文件现象。
-- **所有响应显式附带 `api_version`**：分片成功、分片失败、调试信息接口均显式带回服务端的当前真实版本号，告别“服务端API版本: 未知”。
-
-### ⚡ 离线内置 API 脚本直推（零外部网络依赖）
-- **客户端随包内置最新 `api.php`**：在 App 打包构建时，将最新版本的 `api.php` 完整代码直接编译打包进应用（`utils/bundledApi.js`）。
-- **无感秒级静默直推**：进入【文件】页面或启动文件上传任务前，App 自动核验服务端版本号；若低于内置版本，无需 Unraid 服务器连接 GitHub（解决国内服务器无法访问 raw.githubusercontent.com 的问题），手机直接通过 `action=update_api_file` 将最新 API 代码推送给服务端，50毫秒内静默升级完成！
-- **设置页升级一键直推**：设置页中的【更新后端 API】新增 Engine 0 直推模式，点击即以毫秒级完成升级，再无需等待外部网络拉取。
-
+> **鏍稿績涓婚**锛氬交搴曠Щ闄?`fastcgi_finish_request` 鏍规不 Nginx Keep-Alive 鎴柇銆佸唴缃叏閲忕绾?API 鑴氭湰鐩存帹銆佹枃浠剁鐞嗘棤鎰熺儹鍚屾涓庡弻閲嶅洖楠屽寮?
+### 馃殌 褰诲簳鏍归櫎 `fastcgi_finish_request()` 閫犳垚鐨?Nginx 0 瀛楄妭鎴柇
+- **绉婚櫎鏈夌己闄风殑 FastCGI 鏄惧紡缁堢粨璋冪敤**锛氬湪 PHP-FPM 閰嶅悎 Nginx `fastcgi_keep_conn on` 鐜涓嬶紝`json_output()` 璋冪敤 `fastcgi_finish_request()` 浼氬鑷?FastCGI 浼氳瘽 prematurely 缁撴潫骞朵涪寮冨搷搴斾綋锛岃緭鍑虹┖鍝嶅簲锛圚TTP 200锛? 瀛楄妭锛夈€傜幇褰诲簳绉婚櫎璇ヨ皟鐢紝鐢?PHP 杩愯鏃朵互鏍囧噯鏂瑰紡娓呯┖杈撳嚭缂撳啿鍖哄悗鑷劧閫€鍑猴紝鏍归櫎浠讳綍 0 瀛楄妭涓㈠寘鍙兘銆?- **鏃ュ織璺緞缁熶竴涓庡叏鏉冮檺閿佸畾**锛氱粺涓€璋冭瘯鏃ュ織鍐欏叆涓庤鍙栬矾寰勶紝棣栭€?`/tmp/unraid_api_debug.log`锛屽交搴曟潨缁濆洜鐩綍鏉冮檺涓嶄竴鑷村鑷寸殑璇诲彇鏃ф棩蹇楁枃浠剁幇璞°€?- **鎵€鏈夊搷搴旀樉寮忛檮甯?`api_version`**锛氬垎鐗囨垚鍔熴€佸垎鐗囧け璐ャ€佽皟璇曚俊鎭帴鍙ｅ潎鏄惧紡甯﹀洖鏈嶅姟绔殑褰撳墠鐪熷疄鐗堟湰鍙凤紝鍛婂埆鈥滄湇鍔＄API鐗堟湰: 鏈煡鈥濄€?
+### 鈿?绂荤嚎鍐呯疆 API 鑴氭湰鐩存帹锛堥浂澶栭儴缃戠粶渚濊禆锛?- **瀹㈡埛绔殢鍖呭唴缃渶鏂?`api.php`**锛氬湪 App 鎵撳寘鏋勫缓鏃讹紝灏嗘渶鏂扮増鏈殑 `api.php` 瀹屾暣浠ｇ爜鐩存帴缂栬瘧鎵撳寘杩涘簲鐢紙`utils/bundledApi.js`锛夈€?- **鏃犳劅绉掔骇闈欓粯鐩存帹**锛氳繘鍏ャ€愭枃浠躲€戦〉闈㈡垨鍚姩鏂囦欢涓婁紶浠诲姟鍓嶏紝App 鑷姩鏍搁獙鏈嶅姟绔増鏈彿锛涜嫢浣庝簬鍐呯疆鐗堟湰锛屾棤闇€ Unraid 鏈嶅姟鍣ㄨ繛鎺?GitHub锛堣В鍐冲浗鍐呮湇鍔″櫒鏃犳硶璁块棶 raw.githubusercontent.com 鐨勯棶棰橈級锛屾墜鏈虹洿鎺ラ€氳繃 `action=update_api_file` 灏嗘渶鏂?API 浠ｇ爜鎺ㄩ€佺粰鏈嶅姟绔紝50姣鍐呴潤榛樺崌绾у畬鎴愶紒
+- **璁剧疆椤靛崌绾т竴閿洿鎺?*锛氳缃〉涓殑銆愭洿鏂板悗绔?API銆戞柊澧?Engine 0 鐩存帹妯″紡锛岀偣鍑诲嵆浠ユ绉掔骇瀹屾垚鍗囩骇锛屽啀鏃犻渶绛夊緟澶栭儴缃戠粶鎷夊彇銆?
 ---
 
 ## [v1.3.199] - 2026-09-15
-> **核心主题**：强制刷新 PHP 4KB 内部缓冲区根治 FastCGI 空响应、分片物理落盘日志二次回验、自动前置热更新与精准排障
-
-### 📡 彻底根治 FastCGI 内部缓冲丢弃小响应的致命缺陷
-- **强制冲刷 PHP 4096 字节内部缓冲区**：查明 PHP-FPM / FastCGI 默认存在 4KB 内部缓冲区。`file_chunk` 成功响应 JSON 仅约 120 字节，在调用 `fastcgi_finish_request()` 时，因未满 4KB 仍滞留在 PHP 内部缓冲区，导致 FastCGI 会话直接结束，Nginx 仅收到头部而输出 0 字节空响应。现显式在结束会话前执行 `while (ob_get_level() > 0) { @ob_end_flush(); } @flush();`，确保全部 JSON 实体完整推送至 Nginx 和客户端。
-- **置顶全局缓冲守护**：在 `api.php` 顶部立即启动 `@ob_start()`，阻断任何中间插件或配置在发送 JSON 头部前抛出偶发警告。
-
-### 🛡️ 服务端分片落盘日志双重回验（极端网络双保险）
-- **日志特征实时回验**：即使遭遇极端反向代理中间件（如部分 FRP/Cloudflare）在 POST 结束时丢弃小响应体，客户端在检测到 HTTP 200 且响应为空时，自动发起轻量 GET 请求调取服务端 `action=upload_debug`。一旦确认服务端日志包含该分片的 `chunk_ok` 物理落盘记录，立即判定该分片写入成功并平滑继续下一片传输，从根本上防止上传中断。
-- **全诊断信息透传**：若分片多次写入未果，抓取服务端最新两行真实日志与服务端 API 版本，直接附在弹窗中呈现，彻底告别盲猜。
-
-### 🔄 服务端 API 版本前置探测与静默自更新
-- **自动检测与静默同步**：进入文件管理与启动上传任务前，App 自动检测服务端 API 版本。若检测到服务器当前运行的 `api.php` 低于 `2026.09.15.06`，前端将自动发起静默自更新，无需用户手动寻找入口更新。
-- **服务端版本号递增**：`api.php` 核心版本升级为 `2026.09.15.06`。
-
+> **鏍稿績涓婚**锛氬己鍒跺埛鏂?PHP 4KB 鍐呴儴缂撳啿鍖烘牴娌?FastCGI 绌哄搷搴斻€佸垎鐗囩墿鐞嗚惤鐩樻棩蹇椾簩娆″洖楠屻€佽嚜鍔ㄥ墠缃儹鏇存柊涓庣簿鍑嗘帓闅?
+### 馃摗 褰诲簳鏍规不 FastCGI 鍐呴儴缂撳啿涓㈠純灏忓搷搴旂殑鑷村懡缂洪櫡
+- **寮哄埗鍐插埛 PHP 4096 瀛楄妭鍐呴儴缂撳啿鍖?*锛氭煡鏄?PHP-FPM / FastCGI 榛樿瀛樺湪 4KB 鍐呴儴缂撳啿鍖恒€俙file_chunk` 鎴愬姛鍝嶅簲 JSON 浠呯害 120 瀛楄妭锛屽湪璋冪敤 `fastcgi_finish_request()` 鏃讹紝鍥犳湭婊?4KB 浠嶆粸鐣欏湪 PHP 鍐呴儴缂撳啿鍖猴紝瀵艰嚧 FastCGI 浼氳瘽鐩存帴缁撴潫锛孨ginx 浠呮敹鍒板ご閮ㄨ€岃緭鍑?0 瀛楄妭绌哄搷搴斻€傜幇鏄惧紡鍦ㄧ粨鏉熶細璇濆墠鎵ц `while (ob_get_level() > 0) { @ob_end_flush(); } @flush();`锛岀‘淇濆叏閮?JSON 瀹炰綋瀹屾暣鎺ㄩ€佽嚦 Nginx 鍜屽鎴风銆?- **缃《鍏ㄥ眬缂撳啿瀹堟姢**锛氬湪 `api.php` 椤堕儴绔嬪嵆鍚姩 `@ob_start()`锛岄樆鏂换浣曚腑闂存彃浠舵垨閰嶇疆鍦ㄥ彂閫?JSON 澶撮儴鍓嶆姏鍑哄伓鍙戣鍛娿€?
+### 馃洝锔?鏈嶅姟绔垎鐗囪惤鐩樻棩蹇楀弻閲嶅洖楠岋紙鏋佺缃戠粶鍙屼繚闄╋級
+- **鏃ュ織鐗瑰緛瀹炴椂鍥為獙**锛氬嵆浣块伃閬囨瀬绔弽鍚戜唬鐞嗕腑闂翠欢锛堝閮ㄥ垎 FRP/Cloudflare锛夊湪 POST 缁撴潫鏃朵涪寮冨皬鍝嶅簲浣擄紝瀹㈡埛绔湪妫€娴嬪埌 HTTP 200 涓斿搷搴斾负绌烘椂锛岃嚜鍔ㄥ彂璧疯交閲?GET 璇锋眰璋冨彇鏈嶅姟绔?`action=upload_debug`銆備竴鏃︾‘璁ゆ湇鍔＄鏃ュ織鍖呭惈璇ュ垎鐗囩殑 `chunk_ok` 鐗╃悊钀界洏璁板綍锛岀珛鍗冲垽瀹氳鍒嗙墖鍐欏叆鎴愬姛骞跺钩婊戠户缁笅涓€鐗囦紶杈擄紝浠庢牴鏈笂闃叉涓婁紶涓柇銆?- **鍏ㄨ瘖鏂俊鎭€忎紶**锛氳嫢鍒嗙墖澶氭鍐欏叆鏈灉锛屾姄鍙栨湇鍔＄鏈€鏂颁袱琛岀湡瀹炴棩蹇椾笌鏈嶅姟绔?API 鐗堟湰锛岀洿鎺ラ檮鍦ㄥ脊绐椾腑鍛堢幇锛屽交搴曞憡鍒洸鐚溿€?
+### 馃攧 鏈嶅姟绔?API 鐗堟湰鍓嶇疆鎺㈡祴涓庨潤榛樿嚜鏇存柊
+- **鑷姩妫€娴嬩笌闈欓粯鍚屾**锛氳繘鍏ユ枃浠剁鐞嗕笌鍚姩涓婁紶浠诲姟鍓嶏紝App 鑷姩妫€娴嬫湇鍔＄ API 鐗堟湰銆傝嫢妫€娴嬪埌鏈嶅姟鍣ㄥ綋鍓嶈繍琛岀殑 `api.php` 浣庝簬 `2026.09.15.06`锛屽墠绔皢鑷姩鍙戣捣闈欓粯鑷洿鏂帮紝鏃犻渶鐢ㄦ埛鎵嬪姩瀵绘壘鍏ュ彛鏇存柊銆?- **鏈嶅姟绔増鏈彿閫掑**锛歚api.php` 鏍稿績鐗堟湰鍗囩骇涓?`2026.09.15.06`銆?
 ---
 
 ## [v1.3.198] - 2026-09-15
-> **核心主题**：512KB 极速分片落盘引擎、双路参数透传、协议级消除 HTTP 200 空响应冲突、消除 OkHttp 原生请求误杀与全透明诊断报错
+> **鏍稿績涓婚**锛?12KB 鏋侀€熷垎鐗囪惤鐩樺紩鎿庛€佸弻璺弬鏁伴€忎紶銆佸崗璁骇娑堥櫎 HTTP 200 绌哄搷搴斿啿绐併€佹秷闄?OkHttp 鍘熺敓璇锋眰璇潃涓庡叏閫忔槑璇婃柇鎶ラ敊
 
-### 🚀 512KB 分片引擎与极速传输
-- **优化分片尺寸至 512KB**：将分片大小由 1MB 优化为 512KB，Base64 字符串尺寸缩减至约 680KB，大幅降低 React Native JS 线程编解码耗时与内存开销，彻底消除大块传输在移动端可能引发的桥接阻塞与超时。
-- **URL 查询参数与 Body 双路透传**：分片索引 `chunk_index`、总分片数 `total_chunks`、偏移量 `offset` 及目标路径、文件名同时在 URL Query 与 POST Body 中传递，即便服务端或反向代理网关未正确解析 JSON 实体，服务端仍能通过 `$_GET` 准确获悉分片元数据并按偏移量精准写入。
-
-### 📡 协议级根治 HTTP 200 空响应与 OkHttp 误杀
-- **消除 Content-Length 与 Nginx Gzip 协议冲突**：彻底移除了 PHP 层面手动发送的 `Content-Length` 与 `X-Accel-Buffering: no` 标头。在 Unraid Nginx 开启 gzip 压缩的生产环境下，手工标头会导致 OkHttp 接收到解压前后的长度矛盾进而产生 0 字节空响应。现交由 Nginx 标准分块编码（Chunked Transfer）传输，并利用 `fastcgi_finish_request()` 确保小响应数据完整刷新。
-- **移除 OkHttp 请求误杀（`cancelAll()`）**：在原生网络监听模块 `WakeOnLanModule.java` 中移除了在网络接口变化或连接池重置时调用的 `client.dispatcher().cancelAll()`，仅保留 `connectionPool().evictAll()` 清除陈旧空闲连接，彻底避免网络路由刷新时正在进行的分片上传请求被原生层强行掐断。
-
-### 🔍 全透明诊断与智能版本引导
-- **拒绝掩盖真实返回**：当分片传输遇到任何异常时，不再显示笼统的“写入异常 (HTTP 200)”，而是抓取并展示服务端实际返回的诊断前 120 字符；若服务端返回了结构化错误，则直接向用户呈现服务端的清晰报错。
-- **旧版 API 自动提示与热更新引导**：若用户服务器仍运行着不支持分片上传的旧版 API 脚本，App 将在分片报错中精确提示：“服务端 API 脚本版本过旧，未包含分片上传接口。请进入 App【设置】点击【更新后端 API】后重试。”
-- **服务端版本号递增**：`api.php` 版本更新为 `2026.09.15.05`。
-
+### 馃殌 512KB 鍒嗙墖寮曟搸涓庢瀬閫熶紶杈?- **浼樺寲鍒嗙墖灏哄鑷?512KB**锛氬皢鍒嗙墖澶у皬鐢?1MB 浼樺寲涓?512KB锛孊ase64 瀛楃涓插昂瀵哥缉鍑忚嚦绾?680KB锛屽ぇ骞呴檷浣?React Native JS 绾跨▼缂栬В鐮佽€楁椂涓庡唴瀛樺紑閿€锛屽交搴曟秷闄ゅぇ鍧椾紶杈撳湪绉诲姩绔彲鑳藉紩鍙戠殑妗ユ帴闃诲涓庤秴鏃躲€?- **URL 鏌ヨ鍙傛暟涓?Body 鍙岃矾閫忎紶**锛氬垎鐗囩储寮?`chunk_index`銆佹€诲垎鐗囨暟 `total_chunks`銆佸亸绉婚噺 `offset` 鍙婄洰鏍囪矾寰勩€佹枃浠跺悕鍚屾椂鍦?URL Query 涓?POST Body 涓紶閫掞紝鍗充究鏈嶅姟绔垨鍙嶅悜浠ｇ悊缃戝叧鏈纭В鏋?JSON 瀹炰綋锛屾湇鍔＄浠嶈兘閫氳繃 `$_GET` 鍑嗙‘鑾锋倝鍒嗙墖鍏冩暟鎹苟鎸夊亸绉婚噺绮惧噯鍐欏叆銆?
+### 馃摗 鍗忚绾ф牴娌?HTTP 200 绌哄搷搴斾笌 OkHttp 璇潃
+- **娑堥櫎 Content-Length 涓?Nginx Gzip 鍗忚鍐茬獊**锛氬交搴曠Щ闄や簡 PHP 灞傞潰鎵嬪姩鍙戦€佺殑 `Content-Length` 涓?`X-Accel-Buffering: no` 鏍囧ご銆傚湪 Unraid Nginx 寮€鍚?gzip 鍘嬬缉鐨勭敓浜х幆澧冧笅锛屾墜宸ユ爣澶翠細瀵艰嚧 OkHttp 鎺ユ敹鍒拌В鍘嬪墠鍚庣殑闀垮害鐭涚浘杩涜€屼骇鐢?0 瀛楄妭绌哄搷搴斻€傜幇浜ょ敱 Nginx 鏍囧噯鍒嗗潡缂栫爜锛圕hunked Transfer锛変紶杈擄紝骞跺埄鐢?`fastcgi_finish_request()` 纭繚灏忓搷搴旀暟鎹畬鏁村埛鏂般€?- **绉婚櫎 OkHttp 璇锋眰璇潃锛坄cancelAll()`锛?*锛氬湪鍘熺敓缃戠粶鐩戝惉妯″潡 `WakeOnLanModule.java` 涓Щ闄や簡鍦ㄧ綉缁滄帴鍙ｅ彉鍖栨垨杩炴帴姹犻噸缃椂璋冪敤鐨?`client.dispatcher().cancelAll()`锛屼粎淇濈暀 `connectionPool().evictAll()` 娓呴櫎闄堟棫绌洪棽杩炴帴锛屽交搴曢伩鍏嶇綉缁滆矾鐢卞埛鏂版椂姝ｅ湪杩涜鐨勫垎鐗囦笂浼犺姹傝鍘熺敓灞傚己琛屾帎鏂€?
+### 馃攳 鍏ㄩ€忔槑璇婃柇涓庢櫤鑳界増鏈紩瀵?- **鎷掔粷鎺╃洊鐪熷疄杩斿洖**锛氬綋鍒嗙墖浼犺緭閬囧埌浠讳綍寮傚父鏃讹紝涓嶅啀鏄剧ず绗肩粺鐨勨€滃啓鍏ュ紓甯?(HTTP 200)鈥濓紝鑰屾槸鎶撳彇骞跺睍绀烘湇鍔＄瀹為檯杩斿洖鐨勮瘖鏂墠 120 瀛楃锛涜嫢鏈嶅姟绔繑鍥炰簡缁撴瀯鍖栭敊璇紝鍒欑洿鎺ュ悜鐢ㄦ埛鍛堢幇鏈嶅姟绔殑娓呮櫚鎶ラ敊銆?- **鏃х増 API 鑷姩鎻愮ず涓庣儹鏇存柊寮曞**锛氳嫢鐢ㄦ埛鏈嶅姟鍣ㄤ粛杩愯鐫€涓嶆敮鎸佸垎鐗囦笂浼犵殑鏃х増 API 鑴氭湰锛孉pp 灏嗗湪鍒嗙墖鎶ラ敊涓簿纭彁绀猴細鈥滄湇鍔＄ API 鑴氭湰鐗堟湰杩囨棫锛屾湭鍖呭惈鍒嗙墖涓婁紶鎺ュ彛銆傝杩涘叆 App銆愯缃€戠偣鍑汇€愭洿鏂板悗绔?API銆戝悗閲嶈瘯銆傗€?- **鏈嶅姟绔増鏈彿閫掑**锛歚api.php` 鐗堟湰鏇存柊涓?`2026.09.15.05`銆?
 ---
 
 ## [v1.3.197] - 2026-09-15
-> **核心主题**：重构 1MB 分片物理落盘上传引擎（根治单次大请求被 Nginx/PHP post_max_size 丢弃导致的“假成功实未保存”问题、逐片落盘确认、断点续传与动态速率保障）
-
-### 🚀 1MB 分片物理落盘上传引擎（确保文件 100% 真实写入磁盘）
-- **根治大文件与整包上传丢失根源**：查明当使用单次 HTTP 请求上传大文件时，因超出 Unraid 宿主机 PHP 默认 `post_max_size`（通常为 8MB）或 Nginx FastCGI 分块传输限制，PHP-FPM 会静默丢弃整个 POST 实体导致 0 字节写入。此前客户端在收到 HTTP 200 后误判为成功，造成“显示成功但文件夹内无文件”的严重假象。
-- **逐片物理写入与核验（`action=file_chunk`）**：客户端将文件自动切分为 1MB 独立分片，以标准 JSON Base64 逐片调用服务端的 `file_chunk` 接口。服务端对每一片执行物理 `fwrite`、`fflush`、`chmod 0666` 并回传当前落盘尺寸；最后一片写入后核验实际物理体积与总大小，确认 100% 落盘才返回完整成功标志，从根本上杜绝“假成功”。
-- **单片自动重试与断点续传**：每片独立支持 3 次瞬时错误自动重试（退避间隔 1 秒）；同时在传输队列中持久化保存当前已完成的分片索引 `chunkIndex`，支持随时暂停和断点续传，不因网络波动从头重传。
-- **实时平滑速率与进度计算**：基于每片实际写入字节与精确微秒时间差计算瞬时网络速率，进度条从 0% 到 100% 平滑更新，无停滞与跳变。
-- **服务端版本号递增**：`api.php` 版本更新为 `2026.09.15.04`。
-
+> **鏍稿績涓婚**锛氶噸鏋?1MB 鍒嗙墖鐗╃悊钀界洏涓婁紶寮曟搸锛堟牴娌诲崟娆″ぇ璇锋眰琚?Nginx/PHP post_max_size 涓㈠純瀵艰嚧鐨勨€滃亣鎴愬姛瀹炴湭淇濆瓨鈥濋棶棰樸€侀€愮墖钀界洏纭銆佹柇鐐圭画浼犱笌鍔ㄦ€侀€熺巼淇濋殰锛?
+### 馃殌 1MB 鍒嗙墖鐗╃悊钀界洏涓婁紶寮曟搸锛堢‘淇濇枃浠?100% 鐪熷疄鍐欏叆纾佺洏锛?- **鏍规不澶ф枃浠朵笌鏁村寘涓婁紶涓㈠け鏍规簮**锛氭煡鏄庡綋浣跨敤鍗曟 HTTP 璇锋眰涓婁紶澶ф枃浠舵椂锛屽洜瓒呭嚭 Unraid 瀹夸富鏈?PHP 榛樿 `post_max_size`锛堥€氬父涓?8MB锛夋垨 Nginx FastCGI 鍒嗗潡浼犺緭闄愬埗锛孭HP-FPM 浼氶潤榛樹涪寮冩暣涓?POST 瀹炰綋瀵艰嚧 0 瀛楄妭鍐欏叆銆傛鍓嶅鎴风鍦ㄦ敹鍒?HTTP 200 鍚庤鍒や负鎴愬姛锛岄€犳垚鈥滄樉绀烘垚鍔熶絾鏂囦欢澶瑰唴鏃犳枃浠垛€濈殑涓ラ噸鍋囪薄銆?- **閫愮墖鐗╃悊鍐欏叆涓庢牳楠岋紙`action=file_chunk`锛?*锛氬鎴风灏嗘枃浠惰嚜鍔ㄥ垏鍒嗕负 1MB 鐙珛鍒嗙墖锛屼互鏍囧噯 JSON Base64 閫愮墖璋冪敤鏈嶅姟绔殑 `file_chunk` 鎺ュ彛銆傛湇鍔＄瀵规瘡涓€鐗囨墽琛岀墿鐞?`fwrite`銆乣fflush`銆乣chmod 0666` 骞跺洖浼犲綋鍓嶈惤鐩樺昂瀵革紱鏈€鍚庝竴鐗囧啓鍏ュ悗鏍搁獙瀹為檯鐗╃悊浣撶Н涓庢€诲ぇ灏忥紝纭 100% 钀界洏鎵嶈繑鍥炲畬鏁存垚鍔熸爣蹇楋紝浠庢牴鏈笂鏉滅粷鈥滃亣鎴愬姛鈥濄€?- **鍗曠墖鑷姩閲嶈瘯涓庢柇鐐圭画浼?*锛氭瘡鐗囩嫭绔嬫敮鎸?3 娆＄灛鏃堕敊璇嚜鍔ㄩ噸璇曪紙閫€閬块棿闅?1 绉掞級锛涘悓鏃跺湪浼犺緭闃熷垪涓寔涔呭寲淇濆瓨褰撳墠宸插畬鎴愮殑鍒嗙墖绱㈠紩 `chunkIndex`锛屾敮鎸侀殢鏃舵殏鍋滃拰鏂偣缁紶锛屼笉鍥犵綉缁滄尝鍔ㄤ粠澶撮噸浼犮€?- **瀹炴椂骞虫粦閫熺巼涓庤繘搴﹁绠?*锛氬熀浜庢瘡鐗囧疄闄呭啓鍏ュ瓧鑺備笌绮剧‘寰鏃堕棿宸绠楃灛鏃剁綉缁滈€熺巼锛岃繘搴︽潯浠?0% 鍒?100% 骞虫粦鏇存柊锛屾棤鍋滄粸涓庤烦鍙樸€?- **鏈嶅姟绔増鏈彿閫掑**锛歚api.php` 鐗堟湰鏇存柊涓?`2026.09.15.04`銆?
 ---
 
 ## [v1.3.196] - 2026-09-15
-> **核心主题**：恢复梯子/代理开关无感恢复连接（移除连接池锁、底层网卡切换即时清退僵尸连接）与彻底消除 HTTP 200 空响应误报（HTTP 200 确认落盘即成功，坚决不报空响应异常）
+> **鏍稿績涓婚**锛氭仮澶嶆瀛?浠ｇ悊寮€鍏虫棤鎰熸仮澶嶈繛鎺ワ紙绉婚櫎杩炴帴姹犻攣銆佸簳灞傜綉鍗″垏鎹㈠嵆鏃舵竻閫€鍍靛案杩炴帴锛変笌褰诲簳娑堥櫎 HTTP 200 绌哄搷搴旇鎶ワ紙HTTP 200 纭钀界洏鍗虫垚鍔燂紝鍧氬喅涓嶆姤绌哄搷搴斿紓甯革級
 
-### 🌐 梯子/代理开关无感恢复连接（全场景无缝重连）
-- **彻底移除网络连接池锁定机制**：在 `utils/apiClient.js` 与 `screens/FilesScreen.js` 中彻底清理了此前的 `isNetworkPoolLocked`、`setNetworkPoolLock` 及 `updateNetworkPoolLockState`。当用户在系统控制中心或通知栏切换/断开梯子（VPN / 代理）并返回应用时，`AppState === 'active'` 将无条件触发 `resetNetworkPool()`，即时清空 OkHttp 内部绑定到失效网络接口（如 `tun0`）的陈旧连接池，无需重启 App 即可秒级恢复与服务器通信。
-- **底层网卡切换即时取消挂起请求**：在 `setup-wake-on-lan.js` 原生网络监听回调（`onAvailable` / `onLost`）中加入 `client.dispatcher().cancelAll()`，在底层物理/虚拟网络接口发生跳变时立即中断僵死请求，让重试请求瞬间绑定新网卡。
-- **移除冲突连接头**：彻底移除全局默认注入的 `'Connection': 'close'`，遵循规范并杜绝与部分反向代理中间件产生协议分歧。
-
-### 📦 彻底消除 HTTP 200 空响应误报（确认传输即成功）
-- **显式指定 XHR 文本响应类型**：为上传请求显式指定 `xhr.responseType = 'text'` 并容错获取 `xhr.responseText` 与 `xhr.response`，避免 React Native Android 原生网络层在特定编码下将响应体置空。
-- **HTTP 200 坚决不报失败**：修复了在网络传输已达到 100% 且服务器已响应 HTTP 200 OK 的前提下，前端若未解析到 JSON 仍抛出“服务端响应格式异常（HTTP 200）：空响应（0字节）”的逻辑缺陷。只要 HTTP 状态码为 200~299，经过落盘核验后即确认为成功，自动更新传输队列至 100% 完成并刷新目录，彻底杜绝误报。
-- **服务端版本号递增**：`api.php` 版本更新为 `2026.09.15.03`。
-
+### 馃寪 姊瓙/浠ｇ悊寮€鍏虫棤鎰熸仮澶嶈繛鎺ワ紙鍏ㄥ満鏅棤缂濋噸杩烇級
+- **褰诲簳绉婚櫎缃戠粶杩炴帴姹犻攣瀹氭満鍒?*锛氬湪 `utils/apiClient.js` 涓?`screens/FilesScreen.js` 涓交搴曟竻鐞嗕簡姝ゅ墠鐨?`isNetworkPoolLocked`銆乣setNetworkPoolLock` 鍙?`updateNetworkPoolLockState`銆傚綋鐢ㄦ埛鍦ㄧ郴缁熸帶鍒朵腑蹇冩垨閫氱煡鏍忓垏鎹?鏂紑姊瓙锛圴PN / 浠ｇ悊锛夊苟杩斿洖搴旂敤鏃讹紝`AppState === 'active'` 灏嗘棤鏉′欢瑙﹀彂 `resetNetworkPool()`锛屽嵆鏃舵竻绌?OkHttp 鍐呴儴缁戝畾鍒板け鏁堢綉缁滄帴鍙ｏ紙濡?`tun0`锛夌殑闄堟棫杩炴帴姹狅紝鏃犻渶閲嶅惎 App 鍗冲彲绉掔骇鎭㈠涓庢湇鍔″櫒閫氫俊銆?- **搴曞眰缃戝崱鍒囨崲鍗虫椂鍙栨秷鎸傝捣璇锋眰**锛氬湪 `setup-wake-on-lan.js` 鍘熺敓缃戠粶鐩戝惉鍥炶皟锛坄onAvailable` / `onLost`锛変腑鍔犲叆 `client.dispatcher().cancelAll()`锛屽湪搴曞眰鐗╃悊/铏氭嫙缃戠粶鎺ュ彛鍙戠敓璺冲彉鏃剁珛鍗充腑鏂兊姝昏姹傦紝璁╅噸璇曡姹傜灛闂寸粦瀹氭柊缃戝崱銆?- **绉婚櫎鍐茬獊杩炴帴澶?*锛氬交搴曠Щ闄ゅ叏灞€榛樿娉ㄥ叆鐨?`'Connection': 'close'`锛岄伒寰鑼冨苟鏉滅粷涓庨儴鍒嗗弽鍚戜唬鐞嗕腑闂翠欢浜х敓鍗忚鍒嗘銆?
+### 馃摝 褰诲簳娑堥櫎 HTTP 200 绌哄搷搴旇鎶ワ紙纭浼犺緭鍗虫垚鍔燂級
+- **鏄惧紡鎸囧畾 XHR 鏂囨湰鍝嶅簲绫诲瀷**锛氫负涓婁紶璇锋眰鏄惧紡鎸囧畾 `xhr.responseType = 'text'` 骞跺閿欒幏鍙?`xhr.responseText` 涓?`xhr.response`锛岄伩鍏?React Native Android 鍘熺敓缃戠粶灞傚湪鐗瑰畾缂栫爜涓嬪皢鍝嶅簲浣撶疆绌恒€?- **HTTP 200 鍧氬喅涓嶆姤澶辫触**锛氫慨澶嶄簡鍦ㄧ綉缁滀紶杈撳凡杈惧埌 100% 涓旀湇鍔″櫒宸插搷搴?HTTP 200 OK 鐨勫墠鎻愪笅锛屽墠绔嫢鏈В鏋愬埌 JSON 浠嶆姏鍑衡€滄湇鍔＄鍝嶅簲鏍煎紡寮傚父锛圚TTP 200锛夛細绌哄搷搴旓紙0瀛楄妭锛夆€濈殑閫昏緫缂洪櫡銆傚彧瑕?HTTP 鐘舵€佺爜涓?200~299锛岀粡杩囪惤鐩樻牳楠屽悗鍗崇‘璁や负鎴愬姛锛岃嚜鍔ㄦ洿鏂颁紶杈撻槦鍒楄嚦 100% 瀹屾垚骞跺埛鏂扮洰褰曪紝褰诲簳鏉滅粷璇姤銆?- **鏈嶅姟绔増鏈彿閫掑**锛歚api.php` 鐗堟湰鏇存柊涓?`2026.09.15.03`銆?
 ---
 
 ## [v1.3.195] - 2026-09-15
-> **核心主题**：彻底根除上传完成后的 HTTP 200 空响应（清除破坏 Nginx 缓冲的 fastcgi_finish_request、显式注入 Content-Length 与 X-Accel-Buffering、多轮渐进式物理落盘核验与原生 OkHttp 锁保全）
+> **鏍稿績涓婚**锛氬交搴曟牴闄や笂浼犲畬鎴愬悗鐨?HTTP 200 绌哄搷搴旓紙娓呴櫎鐮村潖 Nginx 缂撳啿鐨?fastcgi_finish_request銆佹樉寮忔敞鍏?Content-Length 涓?X-Accel-Buffering銆佸杞笎杩涘紡鐗╃悊钀界洏鏍搁獙涓庡師鐢?OkHttp 閿佷繚鍏級
 
-### 📡 根除 HTTP 200 空响应（0字节）底层诱因
-- **移除导致 Nginx 丢弃响应体的 `fastcgi_finish_request()`**：在 PHP-FPM 运行环境下，调用 `fastcgi_finish_request()` 会瞬间向 Nginx 发送 FastCGI 结束信号。由于 Nginx 默认启用了 FastCGI 缓冲机制，在小响应未达缓冲阈值前连接即被掐断，致使 Nginx 输出 0 字节的空 HTTP 200 响应。现彻底移除该调用，改用标准 PHP 输出流程。
-- **强制注入关键 HTTP 标头**：在 `json_output()` 中显式添加 `header('X-Accel-Buffering: no')` 命令 Nginx 立即透传数据流，并添加 `header('Content-Length: ' . strlen($json))` 明确帧长，彻底避免客户端网络库（OkHttp）因无长度且未分块而判定响应体为空。
-- **服务端版本号递增**：`2026.09.15.02`。
-
-### 🛡️ 客户端多轮智能落盘核验（容灾双保险）
-- **渐进式多轮核验（Backoff Retry）**：当遇到未升级服务端或特定网络代理导致响应体丢失时，前端自动启动 4 轮渐进式物理检测（400ms、800ms、1200ms、1600ms），给予 Unraid FUSE/shfs 阵列底层充足的文件落盘时间。
-- **双重特征匹配（文件名 + 变动时间/体积匹配）**：不仅比对 Unicode/URL 编码的文件名，更比对近 3 分钟内新修改、大小一致的物理文件，确保 100% 确认落盘后直接判定上传成功并刷新界面。
-
-### 🔒 原生网络池全生命周期锁（Network Pool Lock）
-- **封锁暴力重置**：在 `utils/apiClient.js` 中新增 `setNetworkPoolLock`，在用户选择文件、准备上传以及整个传输生命周期内对 `OkHttpClient` 连接池实施全局保护，严禁后台 `AppState` 唤醒或连接池驱逐切断活跃传输连接。
-
+### 馃摗 鏍归櫎 HTTP 200 绌哄搷搴旓紙0瀛楄妭锛夊簳灞傝鍥?- **绉婚櫎瀵艰嚧 Nginx 涓㈠純鍝嶅簲浣撶殑 `fastcgi_finish_request()`**锛氬湪 PHP-FPM 杩愯鐜涓嬶紝璋冪敤 `fastcgi_finish_request()` 浼氱灛闂村悜 Nginx 鍙戦€?FastCGI 缁撴潫淇″彿銆傜敱浜?Nginx 榛樿鍚敤浜?FastCGI 缂撳啿鏈哄埗锛屽湪灏忓搷搴旀湭杈剧紦鍐查槇鍊煎墠杩炴帴鍗宠鎺愭柇锛岃嚧浣?Nginx 杈撳嚭 0 瀛楄妭鐨勭┖ HTTP 200 鍝嶅簲銆傜幇褰诲簳绉婚櫎璇ヨ皟鐢紝鏀圭敤鏍囧噯 PHP 杈撳嚭娴佺▼銆?- **寮哄埗娉ㄥ叆鍏抽敭 HTTP 鏍囧ご**锛氬湪 `json_output()` 涓樉寮忔坊鍔?`header('X-Accel-Buffering: no')` 鍛戒护 Nginx 绔嬪嵆閫忎紶鏁版嵁娴侊紝骞舵坊鍔?`header('Content-Length: ' . strlen($json))` 鏄庣‘甯ч暱锛屽交搴曢伩鍏嶅鎴风缃戠粶搴擄紙OkHttp锛夊洜鏃犻暱搴︿笖鏈垎鍧楄€屽垽瀹氬搷搴斾綋涓虹┖銆?- **鏈嶅姟绔増鏈彿閫掑**锛歚2026.09.15.02`銆?
+### 馃洝锔?瀹㈡埛绔杞櫤鑳借惤鐩樻牳楠岋紙瀹圭伨鍙屼繚闄╋級
+- **娓愯繘寮忓杞牳楠岋紙Backoff Retry锛?*锛氬綋閬囧埌鏈崌绾ф湇鍔＄鎴栫壒瀹氱綉缁滀唬鐞嗗鑷村搷搴斾綋涓㈠け鏃讹紝鍓嶇鑷姩鍚姩 4 杞笎杩涘紡鐗╃悊妫€娴嬶紙400ms銆?00ms銆?200ms銆?600ms锛夛紝缁欎簣 Unraid FUSE/shfs 闃靛垪搴曞眰鍏呰冻鐨勬枃浠惰惤鐩樻椂闂淬€?- **鍙岄噸鐗瑰緛鍖归厤锛堟枃浠跺悕 + 鍙樺姩鏃堕棿/浣撶Н鍖归厤锛?*锛氫笉浠呮瘮瀵?Unicode/URL 缂栫爜鐨勬枃浠跺悕锛屾洿姣斿杩?3 鍒嗛挓鍐呮柊淇敼銆佸ぇ灏忎竴鑷寸殑鐗╃悊鏂囦欢锛岀‘淇?100% 纭钀界洏鍚庣洿鎺ュ垽瀹氫笂浼犳垚鍔熷苟鍒锋柊鐣岄潰銆?
+### 馃敀 鍘熺敓缃戠粶姹犲叏鐢熷懡鍛ㄦ湡閿侊紙Network Pool Lock锛?- **灏侀攣鏆村姏閲嶇疆**锛氬湪 `utils/apiClient.js` 涓柊澧?`setNetworkPoolLock`锛屽湪鐢ㄦ埛閫夋嫨鏂囦欢銆佸噯澶囦笂浼犱互鍙婃暣涓紶杈撶敓鍛藉懆鏈熷唴瀵?`OkHttpClient` 杩炴帴姹犲疄鏂藉叏灞€淇濇姢锛屼弗绂佸悗鍙?`AppState` 鍞ら啋鎴栬繛鎺ユ睜椹遍€愬垏鏂椿璺冧紶杈撹繛鎺ャ€?
 ---
 
 ## [v1.3.194] - 2026-09-15
-> **核心主题**：切换至标准 XMLHttpRequest 上传引擎（实时进度与传输速度、即时进入传输管理页面、防御系统 Activity 切回时的 AppState 抢占刷新）
-
-### 📊 实时进度与实时传输速度百分比展示
-- **彻底告别无进度盲等**：此前因 `FileSystem.uploadAsync` 在 Expo SDK 50 平台下不提供细粒度上传进度事件，导致上传过程中进度停滞、无速率显示。现全面迁移至核心 `XMLHttpRequest` + `FormData` 方案。
-- **动态瞬时传输速率计算**：通过原生 `xhr.upload.onprogress` 事件，精确计算当前传输字节数与时间增量，实时展示诸如 `12.5 MB/s`、`3.2 MB/s` 的真实网络传输速度以及 `X MB / Y MB` 实时传输体积。
-
-### 🔄 选定文件后即时跳转传输中心与防御 AppState 意外刷新
-- **选定文件即刻展开传输中心**：在选定文件创建任务后，立即调用 `setIsTransferVisible(true)`，让用户无需手动点击右上角传输中心即可直接进入文件传输页面查看进度与速度。
-- **彻底消除切回 App 导致的文件夹刷新与连接中断**：之前当用户从系统文件选择器返回 App 时，Android `AppState` 触发 `active` 状态，粗暴执行了 `resetNetworkPool()` 并重载当前目录，导致正在准备连接的上传套接字被 OkHttp 连接池驱逐并中断，页面闪烁重载为“正在加载文件列表...”。现引入 `isPickingFileRef` 与活跃传输任务防护锁，选文件返回及任务进行期间严禁意外清空连接池与刷新目录。
-
-### 🛡️ 彻底修复 HTTP 200 空响应（0字节）底层诱因
-- 查明并解决了“网速有占用但提示空响应”的根本根源：系统切回触发的连接池暴力重置截断了等待接收服务端响应的 TCP 通道。通过 `AppState` 保护与标准 `XMLHttpRequest` 网络通道协同，确保服务端 JSON 响应完整无损接收。
-- 服务端版本号递增至 `2026.09.15.01`。
-
+> **鏍稿績涓婚**锛氬垏鎹㈣嚦鏍囧噯 XMLHttpRequest 涓婁紶寮曟搸锛堝疄鏃惰繘搴︿笌浼犺緭閫熷害銆佸嵆鏃惰繘鍏ヤ紶杈撶鐞嗛〉闈€侀槻寰＄郴缁?Activity 鍒囧洖鏃剁殑 AppState 鎶㈠崰鍒锋柊锛?
+### 馃搳 瀹炴椂杩涘害涓庡疄鏃朵紶杈撻€熷害鐧惧垎姣斿睍绀?- **褰诲簳鍛婂埆鏃犺繘搴︾洸绛?*锛氭鍓嶅洜 `FileSystem.uploadAsync` 鍦?Expo SDK 50 骞冲彴涓嬩笉鎻愪緵缁嗙矑搴︿笂浼犺繘搴︿簨浠讹紝瀵艰嚧涓婁紶杩囩▼涓繘搴﹀仠婊炪€佹棤閫熺巼鏄剧ず銆傜幇鍏ㄩ潰杩佺Щ鑷虫牳蹇?`XMLHttpRequest` + `FormData` 鏂规銆?- **鍔ㄦ€佺灛鏃朵紶杈撻€熺巼璁＄畻**锛氶€氳繃鍘熺敓 `xhr.upload.onprogress` 浜嬩欢锛岀簿纭绠楀綋鍓嶄紶杈撳瓧鑺傛暟涓庢椂闂村閲忥紝瀹炴椂灞曠ず璇稿 `12.5 MB/s`銆乣3.2 MB/s` 鐨勭湡瀹炵綉缁滀紶杈撻€熷害浠ュ強 `X MB / Y MB` 瀹炴椂浼犺緭浣撶Н銆?
+### 馃攧 閫夊畾鏂囦欢鍚庡嵆鏃惰烦杞紶杈撲腑蹇冧笌闃插尽 AppState 鎰忓鍒锋柊
+- **閫夊畾鏂囦欢鍗冲埢灞曞紑浼犺緭涓績**锛氬湪閫夊畾鏂囦欢鍒涘缓浠诲姟鍚庯紝绔嬪嵆璋冪敤 `setIsTransferVisible(true)`锛岃鐢ㄦ埛鏃犻渶鎵嬪姩鐐瑰嚮鍙充笂瑙掍紶杈撲腑蹇冨嵆鍙洿鎺ヨ繘鍏ユ枃浠朵紶杈撻〉闈㈡煡鐪嬭繘搴︿笌閫熷害銆?- **褰诲簳娑堥櫎鍒囧洖 App 瀵艰嚧鐨勬枃浠跺す鍒锋柊涓庤繛鎺ヤ腑鏂?*锛氫箣鍓嶅綋鐢ㄦ埛浠庣郴缁熸枃浠堕€夋嫨鍣ㄨ繑鍥?App 鏃讹紝Android `AppState` 瑙﹀彂 `active` 鐘舵€侊紝绮楁毚鎵ц浜?`resetNetworkPool()` 骞堕噸杞藉綋鍓嶇洰褰曪紝瀵艰嚧姝ｅ湪鍑嗗杩炴帴鐨勪笂浼犲鎺ュ瓧琚?OkHttp 杩炴帴姹犻┍閫愬苟涓柇锛岄〉闈㈤棯鐑侀噸杞戒负鈥滄鍦ㄥ姞杞芥枃浠跺垪琛?..鈥濄€傜幇寮曞叆 `isPickingFileRef` 涓庢椿璺冧紶杈撲换鍔￠槻鎶ら攣锛岄€夋枃浠惰繑鍥炲強浠诲姟杩涜鏈熼棿涓ョ鎰忓娓呯┖杩炴帴姹犱笌鍒锋柊鐩綍銆?
+### 馃洝锔?褰诲簳淇 HTTP 200 绌哄搷搴旓紙0瀛楄妭锛夊簳灞傝鍥?- 鏌ユ槑骞惰В鍐充簡鈥滅綉閫熸湁鍗犵敤浣嗘彁绀虹┖鍝嶅簲鈥濈殑鏍规湰鏍规簮锛氱郴缁熷垏鍥炶Е鍙戠殑杩炴帴姹犳毚鍔涢噸缃埅鏂簡绛夊緟鎺ユ敹鏈嶅姟绔搷搴旂殑 TCP 閫氶亾銆傞€氳繃 `AppState` 淇濇姢涓庢爣鍑?`XMLHttpRequest` 缃戠粶閫氶亾鍗忓悓锛岀‘淇濇湇鍔＄ JSON 鍝嶅簲瀹屾暣鏃犳崯鎺ユ敹銆?- 鏈嶅姟绔増鏈彿閫掑鑷?`2026.09.15.01`銆?
 ---
 
 ## [v1.3.193] - 2026-09-14
-> **核心主题**：根除 HTTP 200 空响应（清除 Connection: close 规避 TCP 提前断开、引入 FastCGI 强制输出冲刷、HTTP 200 空体自动目录核验成功兜底）
-
-### 📡 彻底解决“服务端响应格式异常（HTTP 200）：空响应（0字节）”
-- **根本原因 1 - TCP FIN 提前切断连接**：此前在客户端与服务端均注入了 `Connection: close` 头。在 PHP 执行 `echo $json; @flush(); exit;` 后，Nginx 收到 FastCGI 结束信号立即向移动端 OkHttp 发送 TCP FIN 切断连接包，导致数据包尚在缓冲区时连接即被强行中断，Android 端读取到的响应体直接为 0 字节空字符串。已彻底移除 `Connection: close` 头，改为由 Nginx 自适应维持 Keep-Alive。
-- **根本原因 2 - FastCGI 进程缓冲未强制刷盘**：在 PHP-FPM SAPI 架构下，单纯的 `flush()` 无法强制将字节推送给 Nginx。现已改用 `fastcgi_finish_request()`，保证 JSON 数据在 PHP 进程回收前完整交付给 Nginx 网关并传输给客户端。
-- **根本原因 3 - Expo SDK 50 Multipart 空响应容错与自动物理核验**：针对 Expo SDK 50 在 Android 端上传后偶尔返回空响应的已知平台缺陷，客户端新增自动化物理目录扫描机制——若服务端返回 HTTP 200 但响应体为空，前端自动向 Unraid 目标目录发起单次毫秒级 `file_list` 查询；一旦确认刚刚上传的文件已真实存在，立即无缝认定为上传成功并刷新界面，彻底消除假失败误报。
-- **服务端版本号递增**：`2026.09.14.10`。
-
+> **鏍稿績涓婚**锛氭牴闄?HTTP 200 绌哄搷搴旓紙娓呴櫎 Connection: close 瑙勯伩 TCP 鎻愬墠鏂紑銆佸紩鍏?FastCGI 寮哄埗杈撳嚭鍐插埛銆丠TTP 200 绌轰綋鑷姩鐩綍鏍搁獙鎴愬姛鍏滃簳锛?
+### 馃摗 褰诲簳瑙ｅ喅鈥滄湇鍔＄鍝嶅簲鏍煎紡寮傚父锛圚TTP 200锛夛細绌哄搷搴旓紙0瀛楄妭锛夆€?- **鏍规湰鍘熷洜 1 - TCP FIN 鎻愬墠鍒囨柇杩炴帴**锛氭鍓嶅湪瀹㈡埛绔笌鏈嶅姟绔潎娉ㄥ叆浜?`Connection: close` 澶淬€傚湪 PHP 鎵ц `echo $json; @flush(); exit;` 鍚庯紝Nginx 鏀跺埌 FastCGI 缁撴潫淇″彿绔嬪嵆鍚戠Щ鍔ㄧ OkHttp 鍙戦€?TCP FIN 鍒囨柇杩炴帴鍖咃紝瀵艰嚧鏁版嵁鍖呭皻鍦ㄧ紦鍐插尯鏃惰繛鎺ュ嵆琚己琛屼腑鏂紝Android 绔鍙栧埌鐨勫搷搴斾綋鐩存帴涓?0 瀛楄妭绌哄瓧绗︿覆銆傚凡褰诲簳绉婚櫎 `Connection: close` 澶达紝鏀逛负鐢?Nginx 鑷€傚簲缁存寔 Keep-Alive銆?- **鏍规湰鍘熷洜 2 - FastCGI 杩涚▼缂撳啿鏈己鍒跺埛鐩?*锛氬湪 PHP-FPM SAPI 鏋舵瀯涓嬶紝鍗曠函鐨?`flush()` 鏃犳硶寮哄埗灏嗗瓧鑺傛帹閫佺粰 Nginx銆傜幇宸叉敼鐢?`fastcgi_finish_request()`锛屼繚璇?JSON 鏁版嵁鍦?PHP 杩涚▼鍥炴敹鍓嶅畬鏁翠氦浠樼粰 Nginx 缃戝叧骞朵紶杈撶粰瀹㈡埛绔€?- **鏍规湰鍘熷洜 3 - Expo SDK 50 Multipart 绌哄搷搴斿閿欎笌鑷姩鐗╃悊鏍搁獙**锛氶拡瀵?Expo SDK 50 鍦?Android 绔笂浼犲悗鍋跺皵杩斿洖绌哄搷搴旂殑宸茬煡骞冲彴缂洪櫡锛屽鎴风鏂板鑷姩鍖栫墿鐞嗙洰褰曟壂鎻忔満鍒垛€斺€旇嫢鏈嶅姟绔繑鍥?HTTP 200 浣嗗搷搴斾綋涓虹┖锛屽墠绔嚜鍔ㄥ悜 Unraid 鐩爣鐩綍鍙戣捣鍗曟姣绾?`file_list` 鏌ヨ锛涗竴鏃︾‘璁ゅ垰鍒氫笂浼犵殑鏂囦欢宸茬湡瀹炲瓨鍦紝绔嬪嵆鏃犵紳璁ゅ畾涓轰笂浼犳垚鍔熷苟鍒锋柊鐣岄潰锛屽交搴曟秷闄ゅ亣澶辫触璇姤銆?- **鏈嶅姟绔増鏈彿閫掑**锛歚2026.09.14.10`銆?
 ---
 
 ## [v1.3.192] - 2026-09-14
-> **核心主题**：根除初次上传闪退（Android 触控响应器解绑时序修复）、根除服务端响应截断（彻底清除 PHP Content-Length 头与真实响应透传）、移除假 30% 进度卡顿
+> **鏍稿績涓婚**锛氭牴闄ゅ垵娆′笂浼犻棯閫€锛圓ndroid 瑙︽帶鍝嶅簲鍣ㄨВ缁戞椂搴忎慨澶嶏級銆佹牴闄ゆ湇鍔＄鍝嶅簲鎴柇锛堝交搴曟竻闄?PHP Content-Length 澶翠笌鐪熷疄鍝嶅簲閫忎紶锛夈€佺Щ闄ゅ亣 30% 杩涘害鍗￠】
 
-### 💥 彻底根除初次点击“上传文件”原生闪退 (Touch Event & Activity Transition Crash)
-- **根本原因**：当用户在下拉菜单中点击“上传文件”时，旧逻辑立即执行 `setIsMenuVisible(false)`，导致包含正在处理触摸事件（`ACTION_UP`）的视图节点在同一次事件分发循环中被强行从原生视图层级卸载，同时直接唤起 Android 系统的 `DocumentPicker` Activity。在冷启动或特定机型上，原生事件分发器（`JSTouchDispatcher`）会因失去活跃视图引用而抛出 `NullPointerException` 系统级崩溃。
-- **修复方案**：加入 250ms 防抖让步机制。点击“上传”后先安全退出菜单遮罩，等待 Android 主循环事件队列将触控手势完全回收注销后，再平稳唤起 `DocumentPicker`，彻底消除 Android 原生崩溃。
-
-### 📡 彻底解决上传后报“服务端拒绝写入文件或未确认保存”假错误
-- **根本原因**：服务端 `api.php` 原先在 `json_output()` 与全局 shutdown 处理函数中手动输出了 `header('Content-Length: ' . strlen($json))`。在开启 Gzip 压缩或多字节中文 UTF-8 字符环境下，手动计算的 Content-Length 与 Nginx 实际传输字节数不一致，导致客户端底层 OkHttp 提前切断连接，接收到的 JSON 结尾被暴力截断，引发客户端 `JSON.parse` 失败并抛出默认通用错误。
-- **修复方案**：
-  1. 彻底清除 `api.php` 中所有手动注入的 `Content-Length` 头，交由 Nginx 与 PHP-FPM 原生网关自适应管理 HTTP 分块分片传输，保证 JSON 完整不被截断；
-  2. 服务端版本号递增至 `2026.09.14.09`；
-  3. 客户端异常透明化：若服务端返回非 JSON 异常，错误弹窗将直接透传展示服务端返回的真实原始文本，拒绝任何模糊的盲猜错误。
-
-### ⏱️ 移除虚假的 30% 初始进度
-- 移除此前为了视觉展示而硬编码的初始 30% 假进度，改为真实连接传输状态提示，传输完毕直达 100% 并提示物理写入路径。
-
+### 馃挜 褰诲簳鏍归櫎鍒濇鐐瑰嚮鈥滀笂浼犳枃浠垛€濆師鐢熼棯閫€ (Touch Event & Activity Transition Crash)
+- **鏍规湰鍘熷洜**锛氬綋鐢ㄦ埛鍦ㄤ笅鎷夎彍鍗曚腑鐐瑰嚮鈥滀笂浼犳枃浠垛€濇椂锛屾棫閫昏緫绔嬪嵆鎵ц `setIsMenuVisible(false)`锛屽鑷村寘鍚鍦ㄥ鐞嗚Е鎽镐簨浠讹紙`ACTION_UP`锛夌殑瑙嗗浘鑺傜偣鍦ㄥ悓涓€娆′簨浠跺垎鍙戝惊鐜腑琚己琛屼粠鍘熺敓瑙嗗浘灞傜骇鍗歌浇锛屽悓鏃剁洿鎺ュ敜璧?Android 绯荤粺鐨?`DocumentPicker` Activity銆傚湪鍐峰惎鍔ㄦ垨鐗瑰畾鏈哄瀷涓婏紝鍘熺敓浜嬩欢鍒嗗彂鍣紙`JSTouchDispatcher`锛変細鍥犲け鍘绘椿璺冭鍥惧紩鐢ㄨ€屾姏鍑?`NullPointerException` 绯荤粺绾у穿婧冦€?- **淇鏂规**锛氬姞鍏?250ms 闃叉姈璁╂鏈哄埗銆傜偣鍑烩€滀笂浼犫€濆悗鍏堝畨鍏ㄩ€€鍑鸿彍鍗曢伄缃╋紝绛夊緟 Android 涓诲惊鐜簨浠堕槦鍒楀皢瑙︽帶鎵嬪娍瀹屽叏鍥炴敹娉ㄩ攢鍚庯紝鍐嶅钩绋冲敜璧?`DocumentPicker`锛屽交搴曟秷闄?Android 鍘熺敓宕╂簝銆?
+### 馃摗 褰诲簳瑙ｅ喅涓婁紶鍚庢姤鈥滄湇鍔＄鎷掔粷鍐欏叆鏂囦欢鎴栨湭纭淇濆瓨鈥濆亣閿欒
+- **鏍规湰鍘熷洜**锛氭湇鍔＄ `api.php` 鍘熷厛鍦?`json_output()` 涓庡叏灞€ shutdown 澶勭悊鍑芥暟涓墜鍔ㄨ緭鍑轰簡 `header('Content-Length: ' . strlen($json))`銆傚湪寮€鍚?Gzip 鍘嬬缉鎴栧瀛楄妭涓枃 UTF-8 瀛楃鐜涓嬶紝鎵嬪姩璁＄畻鐨?Content-Length 涓?Nginx 瀹為檯浼犺緭瀛楄妭鏁颁笉涓€鑷达紝瀵艰嚧瀹㈡埛绔簳灞?OkHttp 鎻愬墠鍒囨柇杩炴帴锛屾帴鏀跺埌鐨?JSON 缁撳熬琚毚鍔涙埅鏂紝寮曞彂瀹㈡埛绔?`JSON.parse` 澶辫触骞舵姏鍑洪粯璁ら€氱敤閿欒銆?- **淇鏂规**锛?  1. 褰诲簳娓呴櫎 `api.php` 涓墍鏈夋墜鍔ㄦ敞鍏ョ殑 `Content-Length` 澶达紝浜ょ敱 Nginx 涓?PHP-FPM 鍘熺敓缃戝叧鑷€傚簲绠＄悊 HTTP 鍒嗗潡鍒嗙墖浼犺緭锛屼繚璇?JSON 瀹屾暣涓嶈鎴柇锛?  2. 鏈嶅姟绔増鏈彿閫掑鑷?`2026.09.14.09`锛?  3. 瀹㈡埛绔紓甯搁€忔槑鍖栵細鑻ユ湇鍔＄杩斿洖闈?JSON 寮傚父锛岄敊璇脊绐楀皢鐩存帴閫忎紶灞曠ず鏈嶅姟绔繑鍥炵殑鐪熷疄鍘熷鏂囨湰锛屾嫆缁濅换浣曟ā绯婄殑鐩茬寽閿欒銆?
+### 鈴憋笍 绉婚櫎铏氬亣鐨?30% 鍒濆杩涘害
+- 绉婚櫎姝ゅ墠涓轰簡瑙嗚灞曠ず鑰岀‖缂栫爜鐨勫垵濮?30% 鍋囪繘搴︼紝鏀逛负鐪熷疄杩炴帴浼犺緭鐘舵€佹彁绀猴紝浼犺緭瀹屾瘯鐩磋揪 100% 骞舵彁绀虹墿鐞嗗啓鍏ヨ矾寰勩€?
 ---
 
 ## [v1.3.191] - 2026-09-14
-> **核心主题**：全链路彻底重构文件上传引擎（前后端全新重构、极简标准协议、强力真实落盘）
+> **鏍稿績涓婚**锛氬叏閾捐矾褰诲簳閲嶆瀯鏂囦欢涓婁紶寮曟搸锛堝墠鍚庣鍏ㄦ柊閲嶆瀯銆佹瀬绠€鏍囧噯鍗忚銆佸己鍔涚湡瀹炶惤鐩橈級
 
-### 🚀 文件上传全链路架构全面重构 (Complete Upload System Overhaul)
-- **前端极简直接唤起**：彻底废弃所有延迟定时器与复杂的过渡状态机。右上角菜单点击“上传文件”后直接瞬时调用 Android 原生 `DocumentPicker.getDocumentAsync`，零阻塞、零闪退、零延迟。
-- **纯粹的标准 Multipart 传输引擎**：移除旧版本中繁杂的多重分块与裸流回退逻辑，统一采用业界标准 RFC `multipart/form-data` 协议通过原生 OkHttp 管道直推至 Unraid 服务端，彻底消除传输中断与数据流畸变。
-- **服务端接口全新重写 (`api.php`)**：
-  1. 重写 `handle_file_upload()` 处理函数，精准处理 `$_FILES['file']` 接收流与缓冲写入；
-  2. 写入完成后主动执行 `clearstatcache` 强制同步 Unraid 存储池驱动，物理检验目标文件真实存在且字节有效；
-  3. 自动配置 Unraid 标准所有权与权限（`nobody:users 0666`），确保局域网 SMB、Docker 与网页端立即无障碍读写；
-  4. 严格响应结构校验：成功直接返回包含真实路径、文件名称、文件体积与修改时间的权威 JSON 数据，杜绝任何假成功。
-- **上传完成自动直读刷新**：上传确认落盘后，前端立即以服务端实际写入路径重新拉取当前目录，并在界面精准展示带有文件绝对路径与体积的成功弹窗，实现真正的所见即所得。
-
+### 馃殌 鏂囦欢涓婁紶鍏ㄩ摼璺灦鏋勫叏闈㈤噸鏋?(Complete Upload System Overhaul)
+- **鍓嶇鏋佺畝鐩存帴鍞よ捣**锛氬交搴曞簾寮冩墍鏈夊欢杩熷畾鏃跺櫒涓庡鏉傜殑杩囨浮鐘舵€佹満銆傚彸涓婅鑿滃崟鐐瑰嚮鈥滀笂浼犳枃浠垛€濆悗鐩存帴鐬椂璋冪敤 Android 鍘熺敓 `DocumentPicker.getDocumentAsync`锛岄浂闃诲銆侀浂闂€€銆侀浂寤惰繜銆?- **绾补鐨勬爣鍑?Multipart 浼犺緭寮曟搸**锛氱Щ闄ゆ棫鐗堟湰涓箒鏉傜殑澶氶噸鍒嗗潡涓庤８娴佸洖閫€閫昏緫锛岀粺涓€閲囩敤涓氱晫鏍囧噯 RFC `multipart/form-data` 鍗忚閫氳繃鍘熺敓 OkHttp 绠￠亾鐩存帹鑷?Unraid 鏈嶅姟绔紝褰诲簳娑堥櫎浼犺緭涓柇涓庢暟鎹祦鐣稿彉銆?- **鏈嶅姟绔帴鍙ｅ叏鏂伴噸鍐?(`api.php`)**锛?  1. 閲嶅啓 `handle_file_upload()` 澶勭悊鍑芥暟锛岀簿鍑嗗鐞?`$_FILES['file']` 鎺ユ敹娴佷笌缂撳啿鍐欏叆锛?  2. 鍐欏叆瀹屾垚鍚庝富鍔ㄦ墽琛?`clearstatcache` 寮哄埗鍚屾 Unraid 瀛樺偍姹犻┍鍔紝鐗╃悊妫€楠岀洰鏍囨枃浠剁湡瀹炲瓨鍦ㄤ笖瀛楄妭鏈夋晥锛?  3. 鑷姩閰嶇疆 Unraid 鏍囧噯鎵€鏈夋潈涓庢潈闄愶紙`nobody:users 0666`锛夛紝纭繚灞€鍩熺綉 SMB銆丏ocker 涓庣綉椤电绔嬪嵆鏃犻殰纰嶈鍐欙紱
+  4. 涓ユ牸鍝嶅簲缁撴瀯鏍￠獙锛氭垚鍔熺洿鎺ヨ繑鍥炲寘鍚湡瀹炶矾寰勩€佹枃浠跺悕绉般€佹枃浠朵綋绉笌淇敼鏃堕棿鐨勬潈濞?JSON 鏁版嵁锛屾潨缁濅换浣曞亣鎴愬姛銆?- **涓婁紶瀹屾垚鑷姩鐩磋鍒锋柊**锛氫笂浼犵‘璁よ惤鐩樺悗锛屽墠绔珛鍗充互鏈嶅姟绔疄闄呭啓鍏ヨ矾寰勯噸鏂版媺鍙栧綋鍓嶇洰褰曪紝骞跺湪鐣岄潰绮惧噯灞曠ず甯︽湁鏂囦欢缁濆璺緞涓庝綋绉殑鎴愬姛寮圭獥锛屽疄鐜扮湡姝ｇ殑鎵€瑙佸嵆鎵€寰椼€?
 ---
 
 ## [v1.3.190] - 2026-09-14
-> **核心主题**：修复 Android 平台点击上传无响应问题（弃用系统 Modal 弹窗改为纯 React Native 视图遮罩）、实现文件选择器即点即弹
-
-### 📂 彻底解决点击“上传文件”无法弹出系统选择器的问题
-- **根因分析**：在 v1.3.189 中尝试通过 React Native `<Modal onDismiss={launchDocumentPicker}>` 延迟唤起选择器，但 React Native 官方架构中 `Modal.onDismiss` 是 **仅支持 iOS** 的属性，在 Android 原生层中关闭 Modal 时 `onDismiss` 从不会被触发，导致用户在 Android 点击“上传文件”后选择器被彻底阻断、毫无反应。
-- **架构革新**：彻底弃用右上角功能菜单原有的原生系统 `<Modal>` 架构，将其重构为纯前端组件层面的绝对定位视图遮罩（`menuOverlayContainer` + `menuBackdrop`）。
-- **零延迟即点即弹**：因为功能菜单不再创建 Android 原生 `Dialog` 窗口，消除了所有 `WindowManager` 窗口令牌冲突风险。点击“上传文件”后立即通过标准 `DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true })` 瞬时唤起 Android 系统文件选择器，恢复毫秒级流畅响应，杜绝任何闪退与卡死。
-
+> **鏍稿績涓婚**锛氫慨澶?Android 骞冲彴鐐瑰嚮涓婁紶鏃犲搷搴旈棶棰橈紙寮冪敤绯荤粺 Modal 寮圭獥鏀逛负绾?React Native 瑙嗗浘閬僵锛夈€佸疄鐜版枃浠堕€夋嫨鍣ㄥ嵆鐐瑰嵆寮?
+### 馃搨 褰诲簳瑙ｅ喅鐐瑰嚮鈥滀笂浼犳枃浠垛€濇棤娉曞脊鍑虹郴缁熼€夋嫨鍣ㄧ殑闂
+- **鏍瑰洜鍒嗘瀽**锛氬湪 v1.3.189 涓皾璇曢€氳繃 React Native `<Modal onDismiss={launchDocumentPicker}>` 寤惰繜鍞よ捣閫夋嫨鍣紝浣?React Native 瀹樻柟鏋舵瀯涓?`Modal.onDismiss` 鏄?**浠呮敮鎸?iOS** 鐨勫睘鎬э紝鍦?Android 鍘熺敓灞備腑鍏抽棴 Modal 鏃?`onDismiss` 浠庝笉浼氳瑙﹀彂锛屽鑷寸敤鎴峰湪 Android 鐐瑰嚮鈥滀笂浼犳枃浠垛€濆悗閫夋嫨鍣ㄨ褰诲簳闃绘柇銆佹鏃犲弽搴斻€?- **鏋舵瀯闈╂柊**锛氬交搴曞純鐢ㄥ彸涓婅鍔熻兘鑿滃崟鍘熸湁鐨勫師鐢熺郴缁?`<Modal>` 鏋舵瀯锛屽皢鍏堕噸鏋勪负绾墠绔粍浠跺眰闈㈢殑缁濆瀹氫綅瑙嗗浘閬僵锛坄menuOverlayContainer` + `menuBackdrop`锛夈€?- **闆跺欢杩熷嵆鐐瑰嵆寮?*锛氬洜涓哄姛鑳借彍鍗曚笉鍐嶅垱寤?Android 鍘熺敓 `Dialog` 绐楀彛锛屾秷闄や簡鎵€鏈?`WindowManager` 绐楀彛浠ょ墝鍐茬獊椋庨櫓銆傜偣鍑烩€滀笂浼犳枃浠垛€濆悗绔嬪嵆閫氳繃鏍囧噯 `DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true })` 鐬椂鍞よ捣 Android 绯荤粺鏂囦欢閫夋嫨鍣紝鎭㈠姣绾ф祦鐣呭搷搴旓紝鏉滅粷浠讳綍闂€€涓庡崱姝汇€?
 ---
 
 ## [v1.3.189] - 2026-09-14
-> **核心主题**：彻底根除首次上传闪退（Android WindowManager 窗口令牌解绑时序修复）、根除假成功（移除 HTTP-200 强制通过、新增服务端 0 字节验证）
-
-### 💥 彻底根除首次上传 BadTokenException 闪退
-- **根本原因**：旧代码在菜单 Modal 的 `onPress` 回调中直接调用 `handleUpload`，而 `handleUpload` 仅做了 `setIsMenuVisible(false)`（React state 变更），Android 的 `WindowManager` 并不会在同一帧立即卸载窗口。随后在菜单 Modal Window Token 尚未从系统解绑时，立即启动 `DocumentPicker.getDocumentAsync`（需要打开新的 Android Activity），引发 `WindowManager$BadTokenException` 系统级闪退。
-- **修复方案**：彻底分离"关闭菜单"与"打开文件选择器"两个动作。点击"上传文件"仅设置一个 ref 标志位（`pendingUploadRef.current = true`）并关闭菜单 Modal；在 Modal 的原生 `onDismiss` 回调（**此时 Android WindowManager 已完全卸载窗口**）中才真正触发 `launchDocumentPicker()`，再额外等待 300ms 确保窗口层完全稳定后才启动 `DocumentPicker`，彻底消除窗口令牌冲突。
-
-### ✅ 根除虚假上传成功（显示成功但文件实际不存在）
-- **根本原因 1 - JS 端的兜底逻辑**：旧代码存在"若服务端返回 HTTP 200 则强制标记为成功"的兜底逻辑，即便服务端实际上未写入任何文件（例如 PHP 接收到 0 字节的上传流），只要 HTTP 状态码为 200 就通过，导致用户看到"上传成功"提示但目录中根本找不到文件。已**彻底移除**这条兜底规则，改为必须通过服务端确认（`serverResult.status === 'success'`）或二次目录验证才视为成功。
-- **根本原因 2 - JS 端重复 content:// 拷贝导致传空**：由于 `DocumentPicker.getDocumentAsync` 使用 `copyToCacheDirectory: true`，返回的 URI 已经是可直接读取的 `file://` cache 路径。旧代码对这个已缓存的文件**再次做一次 `FileSystem.copyAsync`**，当这次复制失败时回退到原始 URI，造成 `FileSystem.uploadAsync` 在某些机型上传了空数据流。已移除多余的重复 copy 步骤。
-- **根本原因 3 - PHP 端未检测 0 字节文件**：PHP 的 `handle_file_upload` 在 `move_uploaded_file` 后未检测目标文件是否为 0 字节即直接返回 `success`，导致上传数据流空洞时服务端仍报成功。现已在 PHP 端增加严格校验：若目标文件实际大小为 0 但预期大小 > 0，立即删除空文件并返回明确的错误提示（提示 Nginx `post_max_size` 或 `upload_max_filesize` 限制）。
-- **JS 服务端文件大小二次验证**：客户端在收到 `serverResult` 后额外验证 `serverResult.size`：若服务端报告写入文件为 0 字节但本地文件大小 > 0，立即抛出含诊断信息的错误，防止 0 字节空壳文件被错误地当成成功。
-
+> **鏍稿績涓婚**锛氬交搴曟牴闄ら娆′笂浼犻棯閫€锛圓ndroid WindowManager 绐楀彛浠ょ墝瑙ｇ粦鏃跺簭淇锛夈€佹牴闄ゅ亣鎴愬姛锛堢Щ闄?HTTP-200 寮哄埗閫氳繃銆佹柊澧炴湇鍔＄ 0 瀛楄妭楠岃瘉锛?
+### 馃挜 褰诲簳鏍归櫎棣栨涓婁紶 BadTokenException 闂€€
+- **鏍规湰鍘熷洜**锛氭棫浠ｇ爜鍦ㄨ彍鍗?Modal 鐨?`onPress` 鍥炶皟涓洿鎺ヨ皟鐢?`handleUpload`锛岃€?`handleUpload` 浠呭仛浜?`setIsMenuVisible(false)`锛圧eact state 鍙樻洿锛夛紝Android 鐨?`WindowManager` 骞朵笉浼氬湪鍚屼竴甯х珛鍗冲嵏杞界獥鍙ｃ€傞殢鍚庡湪鑿滃崟 Modal Window Token 灏氭湭浠庣郴缁熻В缁戞椂锛岀珛鍗冲惎鍔?`DocumentPicker.getDocumentAsync`锛堥渶瑕佹墦寮€鏂扮殑 Android Activity锛夛紝寮曞彂 `WindowManager$BadTokenException` 绯荤粺绾ч棯閫€銆?- **淇鏂规**锛氬交搴曞垎绂?鍏抽棴鑿滃崟"涓?鎵撳紑鏂囦欢閫夋嫨鍣?涓や釜鍔ㄤ綔銆傜偣鍑?涓婁紶鏂囦欢"浠呰缃竴涓?ref 鏍囧織浣嶏紙`pendingUploadRef.current = true`锛夊苟鍏抽棴鑿滃崟 Modal锛涘湪 Modal 鐨勫師鐢?`onDismiss` 鍥炶皟锛?*姝ゆ椂 Android WindowManager 宸插畬鍏ㄥ嵏杞界獥鍙?*锛変腑鎵嶇湡姝ｈЕ鍙?`launchDocumentPicker()`锛屽啀棰濆绛夊緟 300ms 纭繚绐楀彛灞傚畬鍏ㄧǔ瀹氬悗鎵嶅惎鍔?`DocumentPicker`锛屽交搴曟秷闄ょ獥鍙ｄ护鐗屽啿绐併€?
+### 鉁?鏍归櫎铏氬亣涓婁紶鎴愬姛锛堟樉绀烘垚鍔熶絾鏂囦欢瀹為檯涓嶅瓨鍦級
+- **鏍规湰鍘熷洜 1 - JS 绔殑鍏滃簳閫昏緫**锛氭棫浠ｇ爜瀛樺湪"鑻ユ湇鍔＄杩斿洖 HTTP 200 鍒欏己鍒舵爣璁颁负鎴愬姛"鐨勫厹搴曢€昏緫锛屽嵆渚挎湇鍔＄瀹為檯涓婃湭鍐欏叆浠讳綍鏂囦欢锛堜緥濡?PHP 鎺ユ敹鍒?0 瀛楄妭鐨勪笂浼犳祦锛夛紝鍙 HTTP 鐘舵€佺爜涓?200 灏遍€氳繃锛屽鑷寸敤鎴风湅鍒?涓婁紶鎴愬姛"鎻愮ず浣嗙洰褰曚腑鏍规湰鎵句笉鍒版枃浠躲€傚凡**褰诲簳绉婚櫎**杩欐潯鍏滃簳瑙勫垯锛屾敼涓哄繀椤婚€氳繃鏈嶅姟绔‘璁わ紙`serverResult.status === 'success'`锛夋垨浜屾鐩綍楠岃瘉鎵嶈涓烘垚鍔熴€?- **鏍规湰鍘熷洜 2 - JS 绔噸澶?content:// 鎷疯礉瀵艰嚧浼犵┖**锛氱敱浜?`DocumentPicker.getDocumentAsync` 浣跨敤 `copyToCacheDirectory: true`锛岃繑鍥炵殑 URI 宸茬粡鏄彲鐩存帴璇诲彇鐨?`file://` cache 璺緞銆傛棫浠ｇ爜瀵硅繖涓凡缂撳瓨鐨勬枃浠?*鍐嶆鍋氫竴娆?`FileSystem.copyAsync`**锛屽綋杩欐澶嶅埗澶辫触鏃跺洖閫€鍒板師濮?URI锛岄€犳垚 `FileSystem.uploadAsync` 鍦ㄦ煇浜涙満鍨嬩笂浼犱簡绌烘暟鎹祦銆傚凡绉婚櫎澶氫綑鐨勯噸澶?copy 姝ラ銆?- **鏍规湰鍘熷洜 3 - PHP 绔湭妫€娴?0 瀛楄妭鏂囦欢**锛歅HP 鐨?`handle_file_upload` 鍦?`move_uploaded_file` 鍚庢湭妫€娴嬬洰鏍囨枃浠舵槸鍚︿负 0 瀛楄妭鍗崇洿鎺ヨ繑鍥?`success`锛屽鑷翠笂浼犳暟鎹祦绌烘礊鏃舵湇鍔＄浠嶆姤鎴愬姛銆傜幇宸插湪 PHP 绔鍔犱弗鏍兼牎楠岋細鑻ョ洰鏍囨枃浠跺疄闄呭ぇ灏忎负 0 浣嗛鏈熷ぇ灏?> 0锛岀珛鍗冲垹闄ょ┖鏂囦欢骞惰繑鍥炴槑纭殑閿欒鎻愮ず锛堟彁绀?Nginx `post_max_size` 鎴?`upload_max_filesize` 闄愬埗锛夈€?- **JS 鏈嶅姟绔枃浠跺ぇ灏忎簩娆￠獙璇?*锛氬鎴风鍦ㄦ敹鍒?`serverResult` 鍚庨澶栭獙璇?`serverResult.size`锛氳嫢鏈嶅姟绔姤鍛婂啓鍏ユ枃浠朵负 0 瀛楄妭浣嗘湰鍦版枃浠跺ぇ灏?> 0锛岀珛鍗虫姏鍑哄惈璇婃柇淇℃伅鐨勯敊璇紝闃叉 0 瀛楄妭绌哄３鏂囦欢琚敊璇湴褰撴垚鎴愬姛銆?
 ---
 
 ## [v1.3.188] - 2026-09-14
-> **核心主题**：原生 OkHttp 套接字池主动驱逐彻底解决开关梯子断连、全面改用 RFC 标准 Multipart 规避 createUploadTask 闪退、原子落盘权威确认解决未检测到文件误报
+> **鏍稿績涓婚**锛氬師鐢?OkHttp 濂楁帴瀛楁睜涓诲姩椹遍€愬交搴曡В鍐冲紑鍏虫瀛愭柇杩炪€佸叏闈㈡敼鐢?RFC 鏍囧噯 Multipart 瑙勯伩 createUploadTask 闂€€銆佸師瀛愯惤鐩樻潈濞佺‘璁よВ鍐虫湭妫€娴嬪埌鏂囦欢璇姤
 
-### 🌐 Android 原生 OkHttp 连接池重置与路由自愈 (Native OkHttp Pool Eviction)
-- **原生层 Socket 驱逐与请求清理**：在原生 Java 模块（`WakeOnLanModule.java`）接入 React Native 的 `OkHttpClientProvider.getOkHttpClient()`，暴露原生方法 `resetNetworkConnections`，直接调用底层 `client.connectionPool().evictAll()` 与 `client.dispatcher().cancelAll()`，强力切断因开关梯子而失效的 TCP 僵死连接，终止挂起的异常请求。
-- **系统级网络状态回调监听**：在 Android 原生初始化中通过 `ConnectivityManager.registerDefaultNetworkCallback` 注册默认网络变更监听，当系统在 VPN 虚拟网卡（`tun0`）与物理物理网络（Wi-Fi/移动流量）切换触发 `onAvailable` 或 `onLost` 时，第一时间在系统原生层自动执行连接池全量驱逐。
-- **JS 客户端无缝协同复活**：在 `utils/apiClient.js` 导出 `resetNetworkPool()`，并在 App 前台唤醒（`AppState === 'active'`）、列表下拉刷新（`onRefresh`）及网络故障重试前主动触发连接池驱逐。将网络请求超时收敛至 6000ms，用户无需重启 App 即可无缝恢复通信。
-
-### 💥 根除首次文件上传闪退 (Multipart RFC Upload & WindowManager Fix)
-- **消除 WindowManager 窗口令牌冲突**：移除了选取文件后立即强行弹出全屏传输 Modal 的机制。彻底规避了 Android 系统文件选择器（DocumentsUI / ExternalStorageProvider）关闭阶段由于窗口尚未解绑导致的系统级 `WindowManager$BadTokenException` 闪退。文件选中后直接在后台静默发起上传，主界面平滑无感，用户随时可点击右上角传输中心图标查看进度。
-- **废弃易崩溃的 createUploadTask**：针对部分 Android 设备上 `FileSystem.createUploadTask` 在处理本地 content/cache 路径时易抛出未捕获原生异常、以及每 8KB 频繁向 JS 桥接发送进度事件导致 UI 线程阻塞闪退的问题，全面切换为极为稳健的原生 `FileSystem.uploadAsync`（`uploadType: MULTIPART`）。零内存膨胀、零桥接轰炸，彻底消除闪退。
-
-### ✅ 原子落盘权威确认与 FUSE 缓存容错 (Reliable Storage Verification)
-- **RFC 标准 Multipart 表单直传**：通过标准 `multipart/form-data` 将文件流推送至服务端，PHP 端直接由内核接管 `$_FILES['file']` 并执行原子级 `move_uploaded_file`，写入稳定性达 100%，彻底杜绝 FastCGI 裸流截断导致的 0 字节文件。
-- **服务端权威确认机制**：确立只要后端返回 HTTP 200 及 `status: 'success'`，即代表文件已由 PHP 成功落盘写入存储池，立即确立成功标记。
-- **Unraid FUSE 延迟容错与自动刷新**：针对 Unraid `/mnt/user` 用户共享存储池 FUSE 驱动索引更新延迟，提供 400ms 缓冲与 3 轮目录检索复核；校验完成后自动调用 `loadDirectory` 无感刷新当前目录并展示成功提示，彻底根治“文件写入未被服务端确认，目标目录未检测到该文件”的报错。
-
+### 馃寪 Android 鍘熺敓 OkHttp 杩炴帴姹犻噸缃笌璺敱鑷剤 (Native OkHttp Pool Eviction)
+- **鍘熺敓灞?Socket 椹遍€愪笌璇锋眰娓呯悊**锛氬湪鍘熺敓 Java 妯″潡锛坄WakeOnLanModule.java`锛夋帴鍏?React Native 鐨?`OkHttpClientProvider.getOkHttpClient()`锛屾毚闇插師鐢熸柟娉?`resetNetworkConnections`锛岀洿鎺ヨ皟鐢ㄥ簳灞?`client.connectionPool().evictAll()` 涓?`client.dispatcher().cancelAll()`锛屽己鍔涘垏鏂洜寮€鍏虫瀛愯€屽け鏁堢殑 TCP 鍍垫杩炴帴锛岀粓姝㈡寕璧风殑寮傚父璇锋眰銆?- **绯荤粺绾х綉缁滅姸鎬佸洖璋冪洃鍚?*锛氬湪 Android 鍘熺敓鍒濆鍖栦腑閫氳繃 `ConnectivityManager.registerDefaultNetworkCallback` 娉ㄥ唽榛樿缃戠粶鍙樻洿鐩戝惉锛屽綋绯荤粺鍦?VPN 铏氭嫙缃戝崱锛坄tun0`锛変笌鐗╃悊鐗╃悊缃戠粶锛圵i-Fi/绉诲姩娴侀噺锛夊垏鎹㈣Е鍙?`onAvailable` 鎴?`onLost` 鏃讹紝绗竴鏃堕棿鍦ㄧ郴缁熷師鐢熷眰鑷姩鎵ц杩炴帴姹犲叏閲忛┍閫愩€?- **JS 瀹㈡埛绔棤缂濆崗鍚屽娲?*锛氬湪 `utils/apiClient.js` 瀵煎嚭 `resetNetworkPool()`锛屽苟鍦?App 鍓嶅彴鍞ら啋锛坄AppState === 'active'`锛夈€佸垪琛ㄤ笅鎷夊埛鏂帮紙`onRefresh`锛夊強缃戠粶鏁呴殰閲嶈瘯鍓嶄富鍔ㄨЕ鍙戣繛鎺ユ睜椹遍€愩€傚皢缃戠粶璇锋眰瓒呮椂鏀舵暃鑷?6000ms锛岀敤鎴锋棤闇€閲嶅惎 App 鍗冲彲鏃犵紳鎭㈠閫氫俊銆?
+### 馃挜 鏍归櫎棣栨鏂囦欢涓婁紶闂€€ (Multipart RFC Upload & WindowManager Fix)
+- **娑堥櫎 WindowManager 绐楀彛浠ょ墝鍐茬獊**锛氱Щ闄や簡閫夊彇鏂囦欢鍚庣珛鍗冲己琛屽脊鍑哄叏灞忎紶杈?Modal 鐨勬満鍒躲€傚交搴曡閬夸簡 Android 绯荤粺鏂囦欢閫夋嫨鍣紙DocumentsUI / ExternalStorageProvider锛夊叧闂樁娈电敱浜庣獥鍙ｅ皻鏈В缁戝鑷寸殑绯荤粺绾?`WindowManager$BadTokenException` 闂€€銆傛枃浠堕€変腑鍚庣洿鎺ュ湪鍚庡彴闈欓粯鍙戣捣涓婁紶锛屼富鐣岄潰骞虫粦鏃犳劅锛岀敤鎴烽殢鏃跺彲鐐瑰嚮鍙充笂瑙掍紶杈撲腑蹇冨浘鏍囨煡鐪嬭繘搴︺€?- **搴熷純鏄撳穿婧冪殑 createUploadTask**锛氶拡瀵归儴鍒?Android 璁惧涓?`FileSystem.createUploadTask` 鍦ㄥ鐞嗘湰鍦?content/cache 璺緞鏃舵槗鎶涘嚭鏈崟鑾峰師鐢熷紓甯搞€佷互鍙婃瘡 8KB 棰戠箒鍚?JS 妗ユ帴鍙戦€佽繘搴︿簨浠跺鑷?UI 绾跨▼闃诲闂€€鐨勯棶棰橈紝鍏ㄩ潰鍒囨崲涓烘瀬涓虹ǔ鍋ョ殑鍘熺敓 `FileSystem.uploadAsync`锛坄uploadType: MULTIPART`锛夈€傞浂鍐呭瓨鑶ㄨ儉銆侀浂妗ユ帴杞扮偢锛屽交搴曟秷闄ら棯閫€銆?
+### 鉁?鍘熷瓙钀界洏鏉冨▉纭涓?FUSE 缂撳瓨瀹归敊 (Reliable Storage Verification)
+- **RFC 鏍囧噯 Multipart 琛ㄥ崟鐩翠紶**锛氶€氳繃鏍囧噯 `multipart/form-data` 灏嗘枃浠舵祦鎺ㄩ€佽嚦鏈嶅姟绔紝PHP 绔洿鎺ョ敱鍐呮牳鎺ョ `$_FILES['file']` 骞舵墽琛屽師瀛愮骇 `move_uploaded_file`锛屽啓鍏ョǔ瀹氭€ц揪 100%锛屽交搴曟潨缁?FastCGI 瑁告祦鎴柇瀵艰嚧鐨?0 瀛楄妭鏂囦欢銆?- **鏈嶅姟绔潈濞佺‘璁ゆ満鍒?*锛氱‘绔嬪彧瑕佸悗绔繑鍥?HTTP 200 鍙?`status: 'success'`锛屽嵆浠ｈ〃鏂囦欢宸茬敱 PHP 鎴愬姛钀界洏鍐欏叆瀛樺偍姹狅紝绔嬪嵆纭珛鎴愬姛鏍囪銆?- **Unraid FUSE 寤惰繜瀹归敊涓庤嚜鍔ㄥ埛鏂?*锛氶拡瀵?Unraid `/mnt/user` 鐢ㄦ埛鍏变韩瀛樺偍姹?FUSE 椹卞姩绱㈠紩鏇存柊寤惰繜锛屾彁渚?400ms 缂撳啿涓?3 杞洰褰曟绱㈠鏍革紱鏍￠獙瀹屾垚鍚庤嚜鍔ㄨ皟鐢?`loadDirectory` 鏃犳劅鍒锋柊褰撳墠鐩綍骞跺睍绀烘垚鍔熸彁绀猴紝褰诲簳鏍规不鈥滄枃浠跺啓鍏ユ湭琚湇鍔＄纭锛岀洰鏍囩洰褰曟湭妫€娴嬪埌璇ユ枃浠垛€濈殑鎶ラ敊銆?
 ---
 
 ## [v1.3.187] - 2026-09-14
-> **核心主题**：开关梯子/代理无缝自愈重连、首次上传闪退根除、上传权威确认与 FUSE 缓存时序修复、代码引用异常修复
-
-### 🌐 开关梯子/代理无缝重连 (VPN & Proxy Route Resilience)
-- **底层 Socket 僵死根治**：彻底解决用户开关梯子或切换网络（Wi-Fi/移动网络）后，Android 底层 OkHttp 连接池沿用旧网络接口（`tun0` / `wlan0`）失效 TCP 套接字导致 App 报错“网络请求失败”且必须彻底重启软件的问题。
-- **动态短连接与路由自愈**：在统一 API 客户端全面配置 `Connection: close` 与全局动态时间戳 `_t=${Date.now()}`，杜绝长连接池在路由表切换后缓存僵死套接字；当捕获到网络路由切换错误时，自动延迟 400ms 并执行自愈重试。
-- **前台唤醒自动刷新 (AppState Listener)**：新增前后台唤醒监听，用户切出 App 开关梯子返回后，App 自动触发静默通信复活与仪表盘数据同步，无需手动刷新或重启应用。
-
-### 💥 首次上传闪退彻底根除 (First-Time Upload Crash Fix)
-- **WindowManager 窗口层级防冲突**：修复 Android 系统中菜单 Modal 尚未彻底退出即唤起 `DocumentPicker` 导致的系统级 `BadTokenException`；弹窗解绑与文件选择器返回分别设立 450ms 与 350ms 的安全过渡窗口。
-- **JS 桥接流量削峰与错峰渲染**：修复原生 OkHttp 传输事件每秒数百次并发冲击 React Native 状态更新导致的内存溢出与线程阻塞；将进度更新平滑限流至 250ms/次并加入全局 `try/catch` 保护。
-- **异步错峰启动**：传输面板与底层 Native 上传线程错开 150ms 启动，杜绝首次上传时的视图竞态崩溃。
-
-### ✅ 上传落盘权威确认与 FUSE 时序修复 (Upload Verification & Reference Fix)
-- **剔除未定义变量**：修复任务完成时因引用未定义变量 `totalChunks` 触发的 JavaScript `ReferenceError` 导致误报上传中断的致命缺陷。
-- **服务端权威确认机制**：确立“服务端写入成功即权威确认”机制，只要后端返回 HTTP 200 及 `status: 'success'`，即视为文件可靠落盘，杜绝因二次校验误判造成失败假象。
-- **Unraid FUSE 延迟多轮比对**：为 Unraid `/mnt/user` 存储池 FUSE 缓存设立 350ms 缓冲同步窗口，目录复核支持最多 3 次多轮检索，并支持 Unicode NFC 规范化与 URL 解码双重文件名比对。
-- **双引擎传输容灾**：当底层二进制裸流（Binary Streaming）在特定机型受到限制时，自动平滑无缝降级至 Multipart 表单上传引擎。
-
+> **鏍稿績涓婚**锛氬紑鍏虫瀛?浠ｇ悊鏃犵紳鑷剤閲嶈繛銆侀娆′笂浼犻棯閫€鏍归櫎銆佷笂浼犳潈濞佺‘璁や笌 FUSE 缂撳瓨鏃跺簭淇銆佷唬鐮佸紩鐢ㄥ紓甯镐慨澶?
+### 馃寪 寮€鍏虫瀛?浠ｇ悊鏃犵紳閲嶈繛 (VPN & Proxy Route Resilience)
+- **搴曞眰 Socket 鍍垫鏍规不**锛氬交搴曡В鍐崇敤鎴峰紑鍏虫瀛愭垨鍒囨崲缃戠粶锛圵i-Fi/绉诲姩缃戠粶锛夊悗锛孉ndroid 搴曞眰 OkHttp 杩炴帴姹犳部鐢ㄦ棫缃戠粶鎺ュ彛锛坄tun0` / `wlan0`锛夊け鏁?TCP 濂楁帴瀛楀鑷?App 鎶ラ敊鈥滅綉缁滆姹傚け璐モ€濅笖蹇呴』褰诲簳閲嶅惎杞欢鐨勯棶棰樸€?- **鍔ㄦ€佺煭杩炴帴涓庤矾鐢辫嚜鎰?*锛氬湪缁熶竴 API 瀹㈡埛绔叏闈㈤厤缃?`Connection: close` 涓庡叏灞€鍔ㄦ€佹椂闂存埑 `_t=${Date.now()}`锛屾潨缁濋暱杩炴帴姹犲湪璺敱琛ㄥ垏鎹㈠悗缂撳瓨鍍垫濂楁帴瀛楋紱褰撴崟鑾峰埌缃戠粶璺敱鍒囨崲閿欒鏃讹紝鑷姩寤惰繜 400ms 骞舵墽琛岃嚜鎰堥噸璇曘€?- **鍓嶅彴鍞ら啋鑷姩鍒锋柊 (AppState Listener)**锛氭柊澧炲墠鍚庡彴鍞ら啋鐩戝惉锛岀敤鎴峰垏鍑?App 寮€鍏虫瀛愯繑鍥炲悗锛孉pp 鑷姩瑙﹀彂闈欓粯閫氫俊澶嶆椿涓庝华琛ㄧ洏鏁版嵁鍚屾锛屾棤闇€鎵嬪姩鍒锋柊鎴栭噸鍚簲鐢ㄣ€?
+### 馃挜 棣栨涓婁紶闂€€褰诲簳鏍归櫎 (First-Time Upload Crash Fix)
+- **WindowManager 绐楀彛灞傜骇闃插啿绐?*锛氫慨澶?Android 绯荤粺涓彍鍗?Modal 灏氭湭褰诲簳閫€鍑哄嵆鍞よ捣 `DocumentPicker` 瀵艰嚧鐨勭郴缁熺骇 `BadTokenException`锛涘脊绐楄В缁戜笌鏂囦欢閫夋嫨鍣ㄨ繑鍥炲垎鍒绔?450ms 涓?350ms 鐨勫畨鍏ㄨ繃娓＄獥鍙ｃ€?- **JS 妗ユ帴娴侀噺鍓婂嘲涓庨敊宄版覆鏌?*锛氫慨澶嶅師鐢?OkHttp 浼犺緭浜嬩欢姣忕鏁扮櫨娆″苟鍙戝啿鍑?React Native 鐘舵€佹洿鏂板鑷寸殑鍐呭瓨婧㈠嚭涓庣嚎绋嬮樆濉烇紱灏嗚繘搴︽洿鏂板钩婊戦檺娴佽嚦 250ms/娆″苟鍔犲叆鍏ㄥ眬 `try/catch` 淇濇姢銆?- **寮傛閿欏嘲鍚姩**锛氫紶杈撻潰鏉夸笌搴曞眰 Native 涓婁紶绾跨▼閿欏紑 150ms 鍚姩锛屾潨缁濋娆′笂浼犳椂鐨勮鍥剧珵鎬佸穿婧冦€?
+### 鉁?涓婁紶钀界洏鏉冨▉纭涓?FUSE 鏃跺簭淇 (Upload Verification & Reference Fix)
+- **鍓旈櫎鏈畾涔夊彉閲?*锛氫慨澶嶄换鍔″畬鎴愭椂鍥犲紩鐢ㄦ湭瀹氫箟鍙橀噺 `totalChunks` 瑙﹀彂鐨?JavaScript `ReferenceError` 瀵艰嚧璇姤涓婁紶涓柇鐨勮嚧鍛界己闄枫€?- **鏈嶅姟绔潈濞佺‘璁ゆ満鍒?*锛氱‘绔嬧€滄湇鍔＄鍐欏叆鎴愬姛鍗虫潈濞佺‘璁も€濇満鍒讹紝鍙鍚庣杩斿洖 HTTP 200 鍙?`status: 'success'`锛屽嵆瑙嗕负鏂囦欢鍙潬钀界洏锛屾潨缁濆洜浜屾鏍￠獙璇垽閫犳垚澶辫触鍋囪薄銆?- **Unraid FUSE 寤惰繜澶氳疆姣斿**锛氫负 Unraid `/mnt/user` 瀛樺偍姹?FUSE 缂撳瓨璁剧珛 350ms 缂撳啿鍚屾绐楀彛锛岀洰褰曞鏍告敮鎸佹渶澶?3 娆″杞绱紝骞舵敮鎸?Unicode NFC 瑙勮寖鍖栦笌 URL 瑙ｇ爜鍙岄噸鏂囦欢鍚嶆瘮瀵广€?- **鍙屽紩鎿庝紶杈撳鐏?*锛氬綋搴曞眰浜岃繘鍒惰８娴侊紙Binary Streaming锛夊湪鐗瑰畾鏈哄瀷鍙楀埌闄愬埗鏃讹紝鑷姩骞虫粦鏃犵紳闄嶇骇鑷?Multipart 琛ㄥ崟涓婁紶寮曟搸銆?
 ---
 
 ## [v1.3.186 / api.php v2026.09.14.07] - 2026-09-14
-> **核心主题**：服务端 FastCGI 传输协议彻底修复、流式上传 1MB 循环直写、准确 Content-Length 响应头、杜绝二次校验空响应
+> **鏍稿績涓婚**锛氭湇鍔＄ FastCGI 浼犺緭鍗忚褰诲簳淇銆佹祦寮忎笂浼?1MB 寰幆鐩村啓銆佸噯纭?Content-Length 鍝嶅簲澶淬€佹潨缁濅簩娆℃牎楠岀┖鍝嶅簲
 
-### 🔧 服务端 API 协议彻底修复 (api.php v2026.09.14.07)
-- **精准 Content-Length 响应头**：在 `json_output()` 中重新确立 `header('Content-Length: ' . strlen($json))` 与 `header('Connection: close')`，彻底消除由于缺少报文长度导致 Android OkHttp / Expo 偶发读取到空响应体（`res.body === ""`）的底层隐患。
-- **剔除过早 FastCGI 终止 (`fastcgi_finish_request`)**：移除在脚本退出前调用的 `fastcgi_finish_request()`，防止 Nginx 在 FastCGI 尚未将 JSON 字节流全部推入 TCP 缓冲区时过早切断连接，彻底根治“空响应 (HTTP 200)”和二次校验阶段 `file_list` 异常引起的“文件写入未被服务端确认”报错。
-- **1MB 稳健分块写入循环**：后端 `handle_file_upload()` 采用稳健的 1MB `fread` 循环持续读取 `php://input` 流并写入目标文件，免除不可靠的 `stream_copy_to_stream` 流包装兼容性问题。
-
-### 🚀 传输引擎革命性提速 (Native Streaming)
-- **原生二进制流直连 (Native Binary Stream)**：重构上传逻辑，弃用低效的 JavaScript Base64 编码与 JSON 切片打包方案，改用基于底层 OkHttp 的原生二进制流直连传输（`FileSystem.createUploadTask`）。
-- **性能飞跃**：消除了 33% 的 Base64 额外网络体积开销与 JS 桥接内存卡顿，在局域网与 Wi-Fi 6 环境下实测传输速率从原本的 1~2 MB/s 暴增至 **50 MB/s ~ 100 MB/s**，完全跑满网络线速。
-
-### 🛡️ 严格落盘二次校验（彻底解决“虚假成功”）
-- **杜绝误报**：修复了旧版本在未检测到文件落盘时仍误报“上传成功”的逻辑漏洞。
-- **双重校验机制**：上传完成后，客户端必须同时通过**后端写入状态确认**与**目录真实扫描 (`file_list`) 比对**（支持 Unicode NFC 规范化匹配），只有在物理磁盘上确认存在该文件后才会标记为完成；未通过校验将明确提示失败并引导排查权限。
-
-### 🚫 根目录写入智能拦截
-- **前端+后端双重防护**：Unraid 用户共享目录 `/mnt/user` 根路径受 FUSE 保护，不允许直接散落存放孤立文件。在 App 界面点击上传时增加即时拦截弹窗，指引用户进入具体的子共享目录（如 `downloads`、`appdata` 等）后再上传，防止无意写入根目录造成数据丢失。
-
-### 📝 版本专属更新日志体系
-- **专属版本说明**：更新日志明确对齐当前发布版本，告别千篇一律的通用占位文案。
-
+### 馃敡 鏈嶅姟绔?API 鍗忚褰诲簳淇 (api.php v2026.09.14.07)
+- **绮惧噯 Content-Length 鍝嶅簲澶?*锛氬湪 `json_output()` 涓噸鏂扮‘绔?`header('Content-Length: ' . strlen($json))` 涓?`header('Connection: close')`锛屽交搴曟秷闄ょ敱浜庣己灏戞姤鏂囬暱搴﹀鑷?Android OkHttp / Expo 鍋跺彂璇诲彇鍒扮┖鍝嶅簲浣擄紙`res.body === ""`锛夌殑搴曞眰闅愭偅銆?- **鍓旈櫎杩囨棭 FastCGI 缁堟 (`fastcgi_finish_request`)**锛氱Щ闄ゅ湪鑴氭湰閫€鍑哄墠璋冪敤鐨?`fastcgi_finish_request()`锛岄槻姝?Nginx 鍦?FastCGI 灏氭湭灏?JSON 瀛楄妭娴佸叏閮ㄦ帹鍏?TCP 缂撳啿鍖烘椂杩囨棭鍒囨柇杩炴帴锛屽交搴曟牴娌烩€滅┖鍝嶅簲 (HTTP 200)鈥濆拰浜屾鏍￠獙闃舵 `file_list` 寮傚父寮曡捣鐨勨€滄枃浠跺啓鍏ユ湭琚湇鍔＄纭鈥濇姤閿欍€?- **1MB 绋冲仴鍒嗗潡鍐欏叆寰幆**锛氬悗绔?`handle_file_upload()` 閲囩敤绋冲仴鐨?1MB `fread` 寰幆鎸佺画璇诲彇 `php://input` 娴佸苟鍐欏叆鐩爣鏂囦欢锛屽厤闄や笉鍙潬鐨?`stream_copy_to_stream` 娴佸寘瑁呭吋瀹规€ч棶棰樸€?
+### 馃殌 浼犺緭寮曟搸闈╁懡鎬ф彁閫?(Native Streaming)
+- **鍘熺敓浜岃繘鍒舵祦鐩磋繛 (Native Binary Stream)**锛氶噸鏋勪笂浼犻€昏緫锛屽純鐢ㄤ綆鏁堢殑 JavaScript Base64 缂栫爜涓?JSON 鍒囩墖鎵撳寘鏂规锛屾敼鐢ㄥ熀浜庡簳灞?OkHttp 鐨勫師鐢熶簩杩涘埗娴佺洿杩炰紶杈擄紙`FileSystem.createUploadTask`锛夈€?- **鎬ц兘椋炶穬**锛氭秷闄や簡 33% 鐨?Base64 棰濆缃戠粶浣撶Н寮€閿€涓?JS 妗ユ帴鍐呭瓨鍗￠】锛屽湪灞€鍩熺綉涓?Wi-Fi 6 鐜涓嬪疄娴嬩紶杈撻€熺巼浠庡師鏈殑 1~2 MB/s 鏆村鑷?**50 MB/s ~ 100 MB/s**锛屽畬鍏ㄨ窇婊＄綉缁滅嚎閫熴€?
+### 馃洝锔?涓ユ牸钀界洏浜屾鏍￠獙锛堝交搴曡В鍐斥€滆櫄鍋囨垚鍔熲€濓級
+- **鏉滅粷璇姤**锛氫慨澶嶄簡鏃х増鏈湪鏈娴嬪埌鏂囦欢钀界洏鏃朵粛璇姤鈥滀笂浼犳垚鍔熲€濈殑閫昏緫婕忔礊銆?- **鍙岄噸鏍￠獙鏈哄埗**锛氫笂浼犲畬鎴愬悗锛屽鎴风蹇呴』鍚屾椂閫氳繃**鍚庣鍐欏叆鐘舵€佺‘璁?*涓?*鐩綍鐪熷疄鎵弿 (`file_list`) 姣斿**锛堟敮鎸?Unicode NFC 瑙勮寖鍖栧尮閰嶏級锛屽彧鏈夊湪鐗╃悊纾佺洏涓婄‘璁ゅ瓨鍦ㄨ鏂囦欢鍚庢墠浼氭爣璁颁负瀹屾垚锛涙湭閫氳繃鏍￠獙灏嗘槑纭彁绀哄け璐ュ苟寮曞鎺掓煡鏉冮檺銆?
+### 馃毇 鏍圭洰褰曞啓鍏ユ櫤鑳芥嫤鎴?- **鍓嶇+鍚庣鍙岄噸闃叉姢**锛歎nraid 鐢ㄦ埛鍏变韩鐩綍 `/mnt/user` 鏍硅矾寰勫彈 FUSE 淇濇姢锛屼笉鍏佽鐩存帴鏁ｈ惤瀛樻斁瀛ょ珛鏂囦欢銆傚湪 App 鐣岄潰鐐瑰嚮涓婁紶鏃跺鍔犲嵆鏃舵嫤鎴脊绐楋紝鎸囧紩鐢ㄦ埛杩涘叆鍏蜂綋鐨勫瓙鍏变韩鐩綍锛堝 `downloads`銆乣appdata` 绛夛級鍚庡啀涓婁紶锛岄槻姝㈡棤鎰忓啓鍏ユ牴鐩綍閫犳垚鏁版嵁涓㈠け銆?
+### 馃摑 鐗堟湰涓撳睘鏇存柊鏃ュ織浣撶郴
+- **涓撳睘鐗堟湰璇存槑**锛氭洿鏂版棩蹇楁槑纭榻愬綋鍓嶅彂甯冪増鏈紝鍛婂埆鍗冪瘒涓€寰嬬殑閫氱敤鍗犱綅鏂囨銆?
 ---
 
 ## [v1.3.0] - 2026-09-13
-> **核心主题**：Docker Compose 容器重建逻辑升级、日志调取优化、镜像 Hash 准确区分
+> **鏍稿績涓婚**锛欴ocker Compose 瀹瑰櫒閲嶅缓閫昏緫鍗囩骇銆佹棩蹇楄皟鍙栦紭鍖栥€侀暅鍍?Hash 鍑嗙‘鍖哄垎
 
-### 🐳 Docker & Compose 重建重构
-- **规范化重建流程**：Compose 容器更新指令统一规范为 `pull && up -d --remove-orphans`，防止更新后出现旧孤儿容器残留与状态不一致。
-- **配置与日志加载保障**：新增 `find_compose_file()` 多层级递归定位算法，彻底修复了 YAML 配置与运行日志输出一直转圈无响应的痛点。
-
-### 🔍 镜像 Hash 区分与展示
-- **显示对齐**：更新成功模态框中明确区分本地短镜像 ID（12 位，如 `db771057fcc0`）与远端 Docker 镜像仓库的完整 `RepoDigest SHA256` 校验和，消除了用户在核对镜像版本时的困惑。
-
+### 馃惓 Docker & Compose 閲嶅缓閲嶆瀯
+- **瑙勮寖鍖栭噸寤烘祦绋?*锛欳ompose 瀹瑰櫒鏇存柊鎸囦护缁熶竴瑙勮寖涓?`pull && up -d --remove-orphans`锛岄槻姝㈡洿鏂板悗鍑虹幇鏃у鍎垮鍣ㄦ畫鐣欎笌鐘舵€佷笉涓€鑷淬€?- **閰嶇疆涓庢棩蹇楀姞杞戒繚闅?*锛氭柊澧?`find_compose_file()` 澶氬眰绾ч€掑綊瀹氫綅绠楁硶锛屽交搴曚慨澶嶄簡 YAML 閰嶇疆涓庤繍琛屾棩蹇楄緭鍑轰竴鐩磋浆鍦堟棤鍝嶅簲鐨勭棝鐐广€?
+### 馃攳 闀滃儚 Hash 鍖哄垎涓庡睍绀?- **鏄剧ず瀵归綈**锛氭洿鏂版垚鍔熸ā鎬佹涓槑纭尯鍒嗘湰鍦扮煭闀滃儚 ID锛?2 浣嶏紝濡?`db771057fcc0`锛変笌杩滅 Docker 闀滃儚浠撳簱鐨勫畬鏁?`RepoDigest SHA256` 鏍￠獙鍜岋紝娑堥櫎浜嗙敤鎴峰湪鏍稿闀滃儚鐗堟湰鏃剁殑鍥版儜銆?
 ---
 
 ## [v1.2.0] - 2026-09-12
-> **核心主题**：深浅色主题适配、多媒体与文档即时预览中心、电源安全控制
-
-### 🎨 主题与界面
-- **沉浸式双主题**：引入全局动态暗黑与明亮模式，系统状态栏与导航栏无缝自适应切换。
-
-### 📁 文件与多媒体预览
-- **全格式即时预览**：集成 HTTP 206 分片流式视频播放器、黑胶动画音频播放器、支持多点触控的手势缩放图片查看器、代码行号阅读器与 Office/PDF/Epub 文档预览。
-
-### ⚡ 系统管理与安全
-- **远程电源控制**：支持带双重防误触确认的服务器安全关机与重启操作。
-- **令牌保护**：支持从 `/boot/config/plugins/unraid_api_token.txt` 读取自定义 API Token，防范未授权访问。
+> **鏍稿績涓婚**锛氭繁娴呰壊涓婚閫傞厤銆佸濯掍綋涓庢枃妗ｅ嵆鏃堕瑙堜腑蹇冦€佺數婧愬畨鍏ㄦ帶鍒?
+### 馃帹 涓婚涓庣晫闈?- **娌夋蹈寮忓弻涓婚**锛氬紩鍏ュ叏灞€鍔ㄦ€佹殫榛戜笌鏄庝寒妯″紡锛岀郴缁熺姸鎬佹爮涓庡鑸爮鏃犵紳鑷€傚簲鍒囨崲銆?
+### 馃搧 鏂囦欢涓庡濯掍綋棰勮
+- **鍏ㄦ牸寮忓嵆鏃堕瑙?*锛氶泦鎴?HTTP 206 鍒嗙墖娴佸紡瑙嗛鎾斁鍣ㄣ€侀粦鑳跺姩鐢婚煶棰戞挱鏀惧櫒銆佹敮鎸佸鐐硅Е鎺х殑鎵嬪娍缂╂斁鍥剧墖鏌ョ湅鍣ㄣ€佷唬鐮佽鍙烽槄璇诲櫒涓?Office/PDF/Epub 鏂囨。棰勮銆?
+### 鈿?绯荤粺绠＄悊涓庡畨鍏?- **杩滅▼鐢垫簮鎺у埗**锛氭敮鎸佸甫鍙岄噸闃茶瑙︾‘璁ょ殑鏈嶅姟鍣ㄥ畨鍏ㄥ叧鏈轰笌閲嶅惎鎿嶄綔銆?- **浠ょ墝淇濇姢**锛氭敮鎸佷粠 `/boot/config/plugins/unraid_api_token.txt` 璇诲彇鑷畾涔?API Token锛岄槻鑼冩湭鎺堟潈璁块棶銆?
