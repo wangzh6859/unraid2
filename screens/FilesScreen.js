@@ -549,9 +549,10 @@ export default function FilesScreen({ navigation }) {
         speedDisplay: '正在连接传输...',
       } : t)));
 
-      // 2MB Chunk Engine with Crash-Proof Pipelined Async Prefetch:
-      // Reduces HTTP round-trips to only ~32 requests for a 64MB file (8x fewer than 256KB)
-      const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks (further speedup)
+      // 4MB Block-Aligned Chunk Engine with Full-Pipelined Background Pre-Encoding:
+      // Perfectly aligned to OS/disk block boundaries (4096 KB = 4,194,304 bytes).
+      // Reduces HTTP round-trips to only ~16 requests for a 64MB file (16x fewer than 256KB)
+      const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB chunks (further speedup)
       const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
       let startChunk = Number(taskItem.chunkIndex) || 0;
       if (startChunk >= totalChunks) startChunk = 0;
@@ -564,19 +565,21 @@ export default function FilesScreen({ navigation }) {
 
       let activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
 
-      // Async pre-fetch helper: reads chunk slice into Base64 memory safely
-      const readChunkSlice = async (chunkIdx) => {
+      // Async pre-fetch helper: reads chunk slice into Base64 memory AND URL-encodes it in the background!
+      const prepareChunkSlice = async (chunkIdx) => {
         const off = chunkIdx * CHUNK_SIZE;
         const len = totalSize > 0 ? Math.min(CHUNK_SIZE, totalSize - off) : 0;
-        if (len <= 0) return '';
+        if (len <= 0) return { base64Data: '', encodedData: '', len: 0 };
         try {
-          return await FileSystem.readAsStringAsync(workingUri, {
+          const base64Data = await FileSystem.readAsStringAsync(workingUri, {
             encoding: FileSystem.EncodingType.Base64,
             position: off,
             length: len,
           });
+          const encodedData = encodeURIComponent(base64Data);
+          return { base64Data, encodedData, len };
         } catch (readErr) {
-          console.log(`[Upload] readChunkSlice error at chunk ${chunkIdx}:`, readErr);
+          console.log(`[Upload] prepareChunkSlice error at chunk ${chunkIdx}:`, readErr);
           throw readErr;
         }
       };
@@ -585,7 +588,7 @@ export default function FilesScreen({ navigation }) {
       let nextChunkPromise = null;
       const startNextPrefetch = (idx) => {
         if (idx < totalChunks) {
-          nextChunkPromise = readChunkSlice(idx).catch(() => null);
+          nextChunkPromise = prepareChunkSlice(idx).catch(() => null);
         } else {
           nextChunkPromise = null;
         }
@@ -601,19 +604,21 @@ export default function FilesScreen({ navigation }) {
         const offset = i * CHUNK_SIZE;
         const currentChunkLen = totalSize > 0 ? Math.min(CHUNK_SIZE, totalSize - offset) : 0;
 
-        // Retrieve pre-fetched data or fallback to direct read
-        let base64Data = '';
+        // Retrieve pre-fetched and pre-encoded data with zero JS thread pause
+        let chunkPayload = null;
         if (currentChunkLen > 0) {
           if (nextChunkPromise) {
-            base64Data = await nextChunkPromise;
+            chunkPayload = await nextChunkPromise;
           }
-          if (!base64Data) {
-            base64Data = await readChunkSlice(i);
+          if (!chunkPayload || !chunkPayload.encodedData) {
+            chunkPayload = await prepareChunkSlice(i);
           }
         }
 
-        // Start reading the next chunk asynchronously while the current chunk is transmitted over network
+        // Start reading and encoding the next chunk in parallel with the upcoming network upload
         startNextPrefetch(i + 1);
+
+        const encodedData = chunkPayload?.encodedData || '';
 
         let chunkSuccess = false;
         let serverChunkRes = null;
@@ -639,7 +644,7 @@ export default function FilesScreen({ navigation }) {
             `total_chunks=${totalChunks}`,
             `offset=${offset}`,
             `total_size=${totalSize}`,
-            `data=${encodeURIComponent(base64Data)}`,
+            `data=${encodedData}`,
           ].filter(Boolean).join('&');
 
           let res = null;
@@ -653,7 +658,7 @@ export default function FilesScreen({ navigation }) {
               },
               body: formBody,
               signal: abortController.signal,
-            }, 30000, 1);
+            }, 60000, 1);
 
             const rawText = (await res.text()).trim();
             let resJson = null;
@@ -703,7 +708,7 @@ export default function FilesScreen({ navigation }) {
               }
 
               if (res?.status === 413) {
-                throw new Error(`分片大小 (1MB) 超出外部反代限制 (HTTP 413 Payload Too Large)，请在反向代理配置中增加 client_max_body_size 10m;`);
+                throw new Error(`分片大小 (4MB) 超出外部反代限制 (HTTP 413 Payload Too Large)，请在反向代理配置中增加 client_max_body_size 10m;`);
               }
 
               if (resJson && resJson.status === 'error') {

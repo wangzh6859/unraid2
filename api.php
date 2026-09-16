@@ -6,7 +6,7 @@
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.16.08');
+define('UNRAID_API_VERSION', '2026.09.16.09');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -67,11 +67,14 @@ function log_upload_debug($msg) {
     @file_put_contents($path, "[{$time}] {$msg}\n", FILE_APPEND);
 }
 
-// Log every incoming request immediately before any exit or processing
-$reqMethod = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'CLI';
-$reqUri = isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '';
-$contentLen = isset($_SERVER['CONTENT_LENGTH']) ? $_SERVER['CONTENT_LENGTH'] : (isset($_SERVER['HTTP_CONTENT_LENGTH']) ? $_SERVER['HTTP_CONTENT_LENGTH'] : '0');
-log_upload_debug("REQ: {$reqMethod} {$reqUri} len={$contentLen}");
+// Log incoming request immediately before any exit or processing (skip noisy file_chunk to prevent disk thrashing)
+$reqAction = isset($_GET['action']) ? $_GET['action'] : (isset($_POST['action']) ? $_POST['action'] : '');
+if ($reqAction !== 'file_chunk') {
+    $reqMethod = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'CLI';
+    $reqUri = isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '';
+    $contentLen = isset($_SERVER['CONTENT_LENGTH']) ? $_SERVER['CONTENT_LENGTH'] : (isset($_SERVER['HTTP_CONTENT_LENGTH']) ? $_SERVER['HTTP_CONTENT_LENGTH'] : '0');
+    log_upload_debug("REQ: {$reqMethod} {$reqUri} len={$contentLen}");
+}
 
 // Retrieve Unraid system CSRF token if available
 function get_system_csrf_token() {
@@ -3344,7 +3347,6 @@ function handle_file_chunk() {
     @ini_set('memory_limit', '512M');
     @ignore_user_abort(true);
     try {
-        log_upload_debug("handle_file_chunk entered");
         $payload = [];
         $binaryData = '';
 
@@ -3352,15 +3354,12 @@ function handle_file_chunk() {
             $payload = $_POST;
             $binaryData = @file_get_contents($_FILES['chunk']['tmp_name']);
             @unlink($_FILES['chunk']['tmp_name']);
-            log_upload_debug("chunk_mode: multipart, bytes=" . strlen($binaryData));
         } elseif (!empty($_POST['data'])) {
             $payload = $_POST;
             $binaryData = base64_decode($_POST['data']);
-            log_upload_debug("chunk_mode: post_form, binLen=" . strlen($binaryData));
         } elseif (!empty($_GET['data'])) {
             $payload = $_GET;
             $binaryData = base64_decode($_GET['data']);
-            log_upload_debug("chunk_mode: get_query, binLen=" . strlen($binaryData));
         } else {
             $rawInput = file_get_contents('php://input');
             if (empty($rawInput) && !empty($GLOBALS['rawGlobalInput'])) {
@@ -3812,7 +3811,8 @@ function handle_file_compress() {
         }
     }
 
-    $cmd = "cd " . escapeshellarg($commonParent) . " && zip -r -q " . escapeshellarg($outZipPath) . " " . implode(' ', $relArgs);
+    // Use -1 for fastest compression level (3x~5x faster than default -6 with standard zip compatibility)
+    $cmd = "cd " . escapeshellarg($commonParent) . " && zip -1 -r -q " . escapeshellarg($outZipPath) . " " . implode(' ', $relArgs);
     exec($cmd . " 2>&1", $out, $ret);
 
     if ($ret !== 0) {
