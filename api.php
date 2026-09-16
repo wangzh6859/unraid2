@@ -6,7 +6,7 @@
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.16.06');
+define('UNRAID_API_VERSION', '2026.09.16.07');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -3461,17 +3461,21 @@ function handle_file_chunk() {
             json_output(['status' => 'error', 'message' => "分片写入失败，目标磁盘可能空间不足。"], 500);
         }
 
-        @chmod($destPath, 0666);
-        if (function_exists('posix_getuid') && @posix_getuid() === 0) {
-            @chown($destPath, 'nobody');
-            @chgrp($destPath, 'users');
-        }
-        clearstatcache(true, $destPath);
-        clearstatcache(true, $targetDir);
-        $currentSize = @filesize($destPath);
         $isComplete = ($chunkIndex + 1 >= $totalChunks);
+        if ($chunkIndex === 0 || $isComplete) {
+            @chmod($destPath, 0666);
+            if (function_exists('posix_getuid') && @posix_getuid() === 0) {
+                @chown($destPath, 'nobody');
+                @chgrp($destPath, 'users');
+            }
+            clearstatcache(true, $destPath);
+            clearstatcache(true, $targetDir);
+        }
+        $currentSize = @filesize($destPath);
 
-        log_upload_debug("chunk_ok: file={$cleanName} chunk={$chunkIndex}/{$totalChunks} written={$written} curSize={$currentSize} complete=" . ($isComplete ? '1' : '0'));
+        if ($chunkIndex === 0 || $chunkIndex % 10 === 0 || $isComplete) {
+            log_upload_debug("chunk_ok: file={$cleanName} chunk={$chunkIndex}/{$totalChunks} written={$written} curSize={$currentSize} complete=" . ($isComplete ? '1' : '0'));
+        }
 
         if ($isComplete) {
             json_output([
