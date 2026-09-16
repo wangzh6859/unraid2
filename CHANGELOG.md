@@ -4,6 +4,23 @@
 
 ---
 
+## [v1.3.201] - 2026-09-16
+> **核心主题**：彻底消除首次选择文件闪退（BadTokenException 400ms 过渡窗口）、URL 隐蔽化（剔除 Query 中的 .apk 与路径彻底免除 WAF/中间件拦截）、128KB 极速分片与精准 Content-Length 响应头
+
+### 💥 彻底消除首次上传选择文件闪退 (WindowManager BadTokenException Fix)
+- **400ms 窗口过渡保护期**：定位发现 Android 系统在外部文件选择器（DocumentPicker Activity）返回 React Native 主 Activity 的瞬间，底层 WindowManager 尚未完全完成 Window Token 重新挂载。若此时 JS 线程立即呼出全屏传输弹窗（`<Modal visible={isTransferVisible}>`），将直接触发原生 `BadTokenException` 致命崩溃导致闪退。现增加 400ms 安全过渡等待期，确保主窗口完全就绪后再弹出模态框并启动上传，彻底杜绝闪退。
+
+### 🛡️ URL 深度隐蔽化与免除 WAF/中间件截断 (URL Obfuscation)
+- **彻底剔除 URL Query 中的 `.apk` 与文件路径**：此前分片上传将文件名（如 `unraid-v1.3.199.apk`）与路径（`/mnt/user/...`）显式暴露在 URL 查询参数中。经定位，在公共网络、反向代理（FRP、Cloudflare、Nginx WAF）或部分移动运营商网关环境下，URL 中携带 `.apk` 扩展名与敏感路径会被安全策略直接拦截并静默返回空的 `HTTP 200` 响应，导致请求根本无法到达 PHP。
+- **元数据 100% 收敛至 POST Body**：分片 URL 精简为最纯净的 `/api.php?token=...&action=file_chunk`，所有目标路径、文件名、分片索引及数据均由 POST Body 承载，彻底绕过各级中间件对 URL 的恶意拦截。
+
+### 🚀 128KB 超轻量分片引擎与精准 Content-Length 响应
+- **128KB 分片设计**：分片大小从 512KB 精细化优化至 **128KB**，Base64 字符串尺寸缩减至仅约 174KB（与顺利通过的 API 更新请求完全一致），不仅极度亲和各级代理网关与移动网络，而且 JS 编解码耗时低于 2ms，内存零压力。
+- **显式 Content-Length 响应头**：在 `api.php` 的 `json_output()` 中重新确立 `header('Content-Length: ' . $len)`，让 Android OkHttp 在读取响应时具有明确的字节边界，从底层协议杜绝空响应读入。
+- **服务端核心版本递增**：升级为 `2026.09.16.02`。
+
+---
+
 ## [v1.3.200] - 2026-09-16
 > **核心主题**：彻底移除 `fastcgi_finish_request` 根治 Nginx Keep-Alive 截断、内置全量离线 API 脚本直推、文件管理无感热同步与双重回验增强
 

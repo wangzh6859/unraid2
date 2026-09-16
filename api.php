@@ -6,7 +6,7 @@
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.16.01');
+define('UNRAID_API_VERSION', '2026.09.16.02');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -577,9 +577,11 @@ function json_output($data, $code = 200) {
 
     $GLOBALS['__api_response_sent'] = true;
 
+    $len = strlen($json);
     if (!headers_sent()) {
         http_response_code($code);
         header('Content-Type: application/json; charset=utf-8');
+        header('Content-Length: ' . $len);
         header('Cache-Control: no-cache, no-store, must-revalidate');
         header('Pragma: no-cache');
     }

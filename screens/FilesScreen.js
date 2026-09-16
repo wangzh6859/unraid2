@@ -479,10 +479,12 @@ export default function FilesScreen({ navigation }) {
           return next;
         });
 
-        // Crucial: immediately open Transfer Center modal so user directly sees progress & speed
-        setIsTransferVisible(true);
-
-        startUploadTask(newTask);
+        // 400ms safe transition window to prevent Android WindowManager BadTokenException
+        // when returning from external DocumentPicker Activity before mounting React Native Modal
+        setTimeout(() => {
+          setIsTransferVisible(true);
+          startUploadTask(newTask);
+        }, 400);
       } catch (e) {
         console.log('[Upload] DocumentPicker error:', e);
         showConfirm({
@@ -534,8 +536,8 @@ export default function FilesScreen({ navigation }) {
         speedDisplay: '正在连接传输...',
       } : t)));
 
-      // 512KB Chunk Engine: optimal memory footprint, lightning-fast Base64 encoding and reliable physical writes
-      const CHUNK_SIZE = 512 * 1024; // 512KB
+      // 128KB Chunk Engine: optimal proxy/WAF compatibility, lightweight Base64 and ultra-fast transfer
+      const CHUNK_SIZE = 128 * 1024; // 128KB
       const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
       let startChunk = Number(taskItem.chunkIndex) || 0;
       if (startChunk >= totalChunks) startChunk = 0;
@@ -574,8 +576,8 @@ export default function FilesScreen({ navigation }) {
           data: base64Data,
         });
 
-        // Pass all metadata in both query parameters and JSON body for maximum backend compatibility
-        const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_chunk&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}&chunk_index=${i}&total_chunks=${totalChunks}&offset=${offset}&total_size=${totalSize}`;
+        // Clean URL without exposed file extensions (.apk) or paths in query to prevent WAF / proxy interception
+        const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_chunk`;
 
         let chunkSuccess = false;
         let serverChunkRes = null;
