@@ -5,7 +5,13 @@
 ---
 
 ## [v1.3.207] - 2026-09-16
-> **修复**：修复上个版本由于变量名拼写错误导致的 `Property 'attempt' doesn't exist` 报错
+> **核心主题**：修复前端作用域变量引用异常（彻底解除 `Property 'attempt' doesn't exist` 报错），确保原生底层二进制直传引擎稳定执行
+
+### 🐛 异常修复 (前端重试循环变量作用域)
+- **问题根源**：在重构底层为 `BINARY_CONTENT` 二进制流时，外层重试循环一度将计数器命名重构为 `retry`，但底部的重试与异常抛出分支保留了 `attempt === 2` 的逻辑判断。在分片首度握手进入异常捕获流程时，因局部作用域无法找到 `attempt` 变量而触发了 React Native 前端运行时 Crash (`Property 'attempt' doesn't exist`)。
+- **修复方案**：
+  - 规范统一重试循环计数器变量为 `attempt`，严格保证三级重试机制与错误诊断逻辑 (`apiFetchJson('action=upload_debug')`) 正确联动。
+  - 保持底层二进制流 (`application/octet-stream`) 与 HTTP 请求头隐形元数据 (`X-Chunk-Path`, `X-Chunk-Filename`) 传输架构，全面打通防 WAF 拦截的端到端通道。
 
 ---
 
