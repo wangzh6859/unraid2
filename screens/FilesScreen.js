@@ -166,8 +166,6 @@ export default function FilesScreen({ navigation }) {
   // Transfer Manager (Uploads & Downloads)
   const [isTransferVisible, setIsTransferVisible] = useState(false);
   const [transfers, setTransfers] = useState([]);
-  const [csrfToken, setCsrfToken] = useState('');
-  const csrfTokenRef = useRef('');
   const activeTasksRef = useRef({}); // taskId -> FileSystem.UploadTask or XHR
   const isPickingFileRef = useRef(false);
   const serverApiVersionRef = useRef('');
@@ -225,19 +223,7 @@ export default function FilesScreen({ navigation }) {
     loadPersistedTransfers();
   }, []);
 
-  const ensureCsrfToken = async (baseUrl, token) => {
-    if (csrfTokenRef.current) return csrfTokenRef.current;
-    const cleanUrl = (baseUrl || '').replace(/\/+$/, '');
-    try {
-      const data = await apiFetchJson(`${cleanUrl}/api.php?token=${encodeURIComponent(token)}&action=csrf_token`, {}, 4000, 1);
-      if (data && data.csrf_token) {
-        setCsrfToken(data.csrf_token);
-        csrfTokenRef.current = data.csrf_token;
-        return data.csrf_token;
-      }
-    } catch (_) {}
-    return '';
-  };
+
 
   /**
    * 💡 Real-Time Sync on Screen Focus:
@@ -296,10 +282,7 @@ export default function FilesScreen({ navigation }) {
       const data = await apiFetchJson(url, {}, 9000, 1);
 
       if (data.status === 'success') {
-        if (data.csrf_token) {
-          setCsrfToken(data.csrf_token);
-          csrfTokenRef.current = data.csrf_token;
-        }
+
         if (data.api_version) {
           serverApiVersionRef.current = data.api_version;
           if (data.api_version < BUNDLED_API_VERSION) {
@@ -479,12 +462,13 @@ export default function FilesScreen({ navigation }) {
           return next;
         });
 
-        // 400ms safe transition window to prevent Android WindowManager BadTokenException
-        // when returning from external DocumentPicker Activity before mounting React Native Modal
+        // Start upload immediately in background
+        startUploadTask(newTask);
+
+        // Safe transition window before opening transfer center to avoid WindowManager BadTokenException
         setTimeout(() => {
           setIsTransferVisible(true);
-          startUploadTask(newTask);
-        }, 400);
+        }, 500);
       } catch (e) {
         console.log('[Upload] DocumentPicker error:', e);
         showConfirm({
@@ -523,8 +507,6 @@ export default function FilesScreen({ navigation }) {
       } catch (_) {}
 
       const cleanBaseUrl = (serverUrl || '').replace(/\/+$/, '');
-      const activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
-      const csrfQuery = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
 
       // Proactively ensure server api.php is up-to-date with bundled version before upload starts
       await autoSyncServerApi(cleanBaseUrl, apiToken, serverApiVersionRef);
@@ -576,8 +558,8 @@ export default function FilesScreen({ navigation }) {
           data: base64Data,
         });
 
-        // Clean URL without exposed file extensions (.apk) or paths in query to prevent WAF / proxy interception
-        const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_chunk`;
+        // Pure clean URL without query metadata or csrf parameters to avoid proxy/emhttpd interception
+        const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_chunk`;
 
         let chunkSuccess = false;
         let serverChunkRes = null;
@@ -590,9 +572,8 @@ export default function FilesScreen({ navigation }) {
             const res = await apiFetch(chunkUrl, {
               method: 'POST',
               headers: {
-                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Type': 'text/plain; charset=utf-8',
                 'X-API-Token': apiToken,
-                ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
               },
               body: chunkPayload,
               signal: abortController.signal,
@@ -654,7 +635,7 @@ export default function FilesScreen({ navigation }) {
                 try {
                   const dbgRes = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=upload_debug&_t=${Date.now()}`, {}, 4000, 0).catch(() => null);
                   if (dbgRes) {
-                    const lastLines = (dbgRes.log || '').split('\n').filter(Boolean).slice(-4).join(' | ');
+                    const lastLines = (dbgRes.log || '').split('\n').filter(Boolean).slice(-8).join(' | ');
                     const sVer = dbgRes.api_version || dbgRes.version || serverApiVersionRef.current || '未知';
                     diagInfo = `\n[服务端API版本: ${sVer}]\n[服务端状态: ${lastLines || '无日志'}]`;
                   }
@@ -1228,16 +1209,14 @@ export default function FilesScreen({ navigation }) {
     try {
       const sourcePaths = items.map(it => it.path);
       const cleanBaseUrl = (serverUrl || '').replace(/\/+$/, '');
-      const activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
-      const csrfParam = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
 
       // Prepare GET query (Unraid emhttp handles GET without POST chunking or FastCGI body drop)
-      const getQuery = `token=${encodeURIComponent(apiToken)}${csrfParam}&action=file_compress&target_dir=${encodeURIComponent(currentPath)}&zip_name=${encodeURIComponent(name)}&sources=${encodeURIComponent(JSON.stringify(sourcePaths))}`;
+      const getQuery = `token=${encodeURIComponent(apiToken)}&action=file_compress&target_dir=${encodeURIComponent(currentPath)}&zip_name=${encodeURIComponent(name)}&sources=${encodeURIComponent(JSON.stringify(sourcePaths))}`;
       let res;
       if (getQuery.length < 3500) {
         res = await fetch(`${cleanBaseUrl}/api.php?${getQuery}`);
       } else {
-        const postUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfParam}&action=file_compress`;
+        const postUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_compress`;
         res = await fetch(postUrl, {
           method: 'POST',
           headers: {

@@ -37,6 +37,12 @@ module.exports = function withForegroundService(config) {
     }
 
     const app = androidManifest.application[0];
+    if (!app.$) {
+      app.$ = {};
+    }
+    app.$['android:largeHeap'] = 'true';
+    app.$['android:requestLegacyExternalStorage'] = 'true';
+
     if (!app.service) {
       app.service = [];
     }
