@@ -6,7 +6,7 @@
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.16.07');
+define('UNRAID_API_VERSION', '2026.09.16.08');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -3747,6 +3747,9 @@ function handle_file_extract() {
 }
 
 function handle_file_compress() {
+    @set_time_limit(0);
+    @ini_set('max_execution_time', '0');
+    @ignore_user_abort(true);
     global $globalJsonInput;
     $rawInput = @file_get_contents('php://input');
     $jsonInput = !empty($rawInput) ? @json_decode($rawInput, true) : $globalJsonInput;

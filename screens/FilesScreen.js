@@ -431,13 +431,13 @@ export default function FilesScreen({ navigation }) {
       return;
     }
 
-    // 250ms debounce
+    if (isPickingFileRef.current) return;
     isPickingFileRef.current = true;
     setTimeout(async () => {
       try {
         const result = await DocumentPicker.getDocumentAsync({
           type: '*/*',
-          copyToCacheDirectory: false, // <-- Crucial FIX for OOM crash! Do not copy large files into cache. Use content:// URI directly.
+          copyToCacheDirectory: true, // Native Java streams into sandbox cache file://, fixing SAF permission crashes on first pick
           multiple: false,
         });
 
@@ -494,7 +494,7 @@ export default function FilesScreen({ navigation }) {
       } finally {
         setTimeout(() => {
           isPickingFileRef.current = false;
-        }, 1500);
+        }, 800);
       }
     }, 250);
   };
@@ -549,9 +549,9 @@ export default function FilesScreen({ navigation }) {
         speedDisplay: '正在连接传输...',
       } : t)));
 
-      // 1MB Chunk Engine with Pipelined Async Prefetch:
-      // Reduces HTTP round-trips by 75% compared to 256KB, while overlapping disk I/O with network transfer
-      const CHUNK_SIZE = 1024 * 1024; // 1MB chunks (4x speedup)
+      // 2MB Chunk Engine with Crash-Proof Pipelined Async Prefetch:
+      // Reduces HTTP round-trips to only ~32 requests for a 64MB file (8x fewer than 256KB)
+      const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks (further speedup)
       const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
       let startChunk = Number(taskItem.chunkIndex) || 0;
       if (startChunk >= totalChunks) startChunk = 0;
@@ -564,20 +564,34 @@ export default function FilesScreen({ navigation }) {
 
       let activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
 
-      // Async pre-fetch helper: reads chunk slice into Base64 memory in the background
-      const readChunkSlice = (chunkIdx) => {
+      // Async pre-fetch helper: reads chunk slice into Base64 memory safely
+      const readChunkSlice = async (chunkIdx) => {
         const off = chunkIdx * CHUNK_SIZE;
         const len = totalSize > 0 ? Math.min(CHUNK_SIZE, totalSize - off) : 0;
-        if (len <= 0) return Promise.resolve('');
-        return FileSystem.readAsStringAsync(workingUri, {
-          encoding: FileSystem.EncodingType.Base64,
-          position: off,
-          length: len,
-        });
+        if (len <= 0) return '';
+        try {
+          return await FileSystem.readAsStringAsync(workingUri, {
+            encoding: FileSystem.EncodingType.Base64,
+            position: off,
+            length: len,
+          });
+        } catch (readErr) {
+          console.log(`[Upload] readChunkSlice error at chunk ${chunkIdx}:`, readErr);
+          throw readErr;
+        }
       };
 
-      // Kick off prefetching for the first chunk
-      let nextChunkPromise = readChunkSlice(startChunk);
+      // Guarded prefetch promise that never unhandled-rejects
+      let nextChunkPromise = null;
+      const startNextPrefetch = (idx) => {
+        if (idx < totalChunks) {
+          nextChunkPromise = readChunkSlice(idx).catch(() => null);
+        } else {
+          nextChunkPromise = null;
+        }
+      };
+
+      startNextPrefetch(startChunk);
 
       for (let i = startChunk; i < totalChunks; i++) {
         if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
@@ -587,18 +601,19 @@ export default function FilesScreen({ navigation }) {
         const offset = i * CHUNK_SIZE;
         const currentChunkLen = totalSize > 0 ? Math.min(CHUNK_SIZE, totalSize - offset) : 0;
 
-        // Retrieve pre-fetched data (zero waiting time if previous chunk upload took longer than disk read)
+        // Retrieve pre-fetched data or fallback to direct read
         let base64Data = '';
         if (currentChunkLen > 0) {
-          base64Data = await nextChunkPromise;
+          if (nextChunkPromise) {
+            base64Data = await nextChunkPromise;
+          }
+          if (!base64Data) {
+            base64Data = await readChunkSlice(i);
+          }
         }
 
         // Start reading the next chunk asynchronously while the current chunk is transmitted over network
-        if (i + 1 < totalChunks) {
-          nextChunkPromise = readChunkSlice(i + 1);
-        } else {
-          nextChunkPromise = null;
-        }
+        startNextPrefetch(i + 1);
 
         let chunkSuccess = false;
         let serverChunkRes = null;
@@ -1311,28 +1326,42 @@ export default function FilesScreen({ navigation }) {
     if (!name) return;
 
     setIsCompressing(true);
+    const cleanBaseUrl = (serverUrl || '').replace(/\/+$/, '');
+    const activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
+    const expectedZipName = name.toLowerCase().endsWith('.zip') ? name : `${name}.zip`;
+
     try {
       const sourcePaths = items.map(it => it.path);
-      const cleanBaseUrl = (serverUrl || '').replace(/\/+$/, '');
+      const csrfQuery = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
 
       // Prepare GET query (Unraid emhttp handles GET without POST chunking or FastCGI body drop)
-      const getQuery = `token=${encodeURIComponent(apiToken)}&action=file_compress&target_dir=${encodeURIComponent(currentPath)}&zip_name=${encodeURIComponent(name)}&sources=${encodeURIComponent(JSON.stringify(sourcePaths))}`;
+      const getQuery = `token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_compress&target_dir=${encodeURIComponent(currentPath)}&zip_name=${encodeURIComponent(name)}&sources=${encodeURIComponent(JSON.stringify(sourcePaths))}`;
       let res;
       if (getQuery.length < 3500) {
-        res = await fetch(`${cleanBaseUrl}/api.php?${getQuery}`);
+        // Use apiFetch with 180s timeout so large compress operations don't abort
+        res = await apiFetch(`${cleanBaseUrl}/api.php?${getQuery}`, {
+          method: 'GET',
+          headers: activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {},
+        }, 180000, 0);
       } else {
-        const postUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_compress`;
-        res = await fetch(postUrl, {
+        const postUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_compress`;
+        const formBody = [
+          `action=file_compress`,
+          activeCsrf ? `csrf_token=${encodeURIComponent(activeCsrf)}` : '',
+          `target_dir=${encodeURIComponent(currentPath)}`,
+          `zip_name=${encodeURIComponent(name)}`,
+          `sources=${encodeURIComponent(JSON.stringify(sourcePaths))}`,
+        ].filter(Boolean).join('&');
+
+        res = await apiFetch(postUrl, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json; charset=utf-8',
+            'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
+            'X-API-Token': apiToken,
+            ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
           },
-          body: JSON.stringify({
-            sources: sourcePaths,
-            target_dir: currentPath,
-            zip_name: name,
-          }),
-        });
+          body: formBody,
+        }, 180000, 0);
       }
 
       const resText = await res.text();
@@ -1346,11 +1375,29 @@ export default function FilesScreen({ navigation }) {
       setIsCompressing(false);
 
       if (!data) {
+        // Recovery check: did the zip get created on server despite truncated HTTP response?
+        try {
+          const checkList = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_list&path=${encodeURIComponent(currentPath)}&_t=${Date.now()}`, {}, 6000, 0);
+          if (checkList && checkList.items && checkList.items.some(it => it.name === expectedZipName)) {
+            setCompressVisible(false);
+            exitMultiSelect();
+            showConfirm({
+              type: 'success',
+              title: '打包完成',
+              message: `已成功在服务端生成压缩包：\n"${expectedZipName}"`,
+              confirmText: '好的',
+              showCancel: false,
+            });
+            loadDirectory(serverUrl, apiToken, currentPath);
+            return;
+          }
+        } catch (_) {}
+
         const preview = resText ? (resText.length > 200 ? resText.slice(0, 200) + '...' : resText) : '（服务端返回空内容）';
         showConfirm({
           type: 'danger',
           title: '压缩打包异常',
-          message: `服务端未返回有效的 JSON 数据 (HTTP ${res?.status || '未知'})。\n\n服务端原始返回：\n${preview}\n\n【排查指引】：\n请确认已执行终端命令将脚本同步至运行目录：\ncp /boot/api.php /usr/local/emhttp/api.php\nchmod 755 /usr/local/emhttp/api.php`,
+          message: `服务端未返回有效的 JSON 数据 (HTTP ${res?.status || '未知'})。\n\n服务端原始返回：\n${preview}`,
           confirmText: '知道了',
           showCancel: false,
         });
@@ -1379,6 +1426,24 @@ export default function FilesScreen({ navigation }) {
       }
     } catch (e) {
       setIsCompressing(false);
+      // Recovery check: did the zip get created on server before connection timeout/abort?
+      try {
+        const checkList = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_list&path=${encodeURIComponent(currentPath)}&_t=${Date.now()}`, {}, 6000, 0);
+        if (checkList && checkList.items && checkList.items.some(it => it.name === expectedZipName)) {
+          setCompressVisible(false);
+          exitMultiSelect();
+          showConfirm({
+            type: 'success',
+            title: '打包完成',
+            message: `压缩包已在服务端生成完毕：\n"${expectedZipName}"`,
+            confirmText: '好的',
+            showCancel: false,
+          });
+          loadDirectory(serverUrl, apiToken, currentPath);
+          return;
+        }
+      } catch (_) {}
+
       showConfirm({
         type: 'danger',
         title: '打包异常',
