@@ -532,8 +532,8 @@ export default function FilesScreen({ navigation }) {
         speedDisplay: '正在连接传输...',
       } : t)));
 
-      // 1MB Chunk Engine: use MULTIPART for absolute proxy/WAF bypass and native OkHttp performance
-      const CHUNK_SIZE = 1024 * 1024; // 1MB chunks (faster natively)
+      // 256KB Chunk Engine: strictly under Nginx default 1MB (client_max_body_size) and emhttpd buffer limits
+      const CHUNK_SIZE = 256 * 1024; // 256KB chunks
       const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
       let startChunk = Number(taskItem.chunkIndex) || 0;
       if (startChunk >= totalChunks) startChunk = 0;
@@ -552,56 +552,47 @@ export default function FilesScreen({ navigation }) {
         const offset = i * CHUNK_SIZE;
         const currentChunkLen = totalSize > 0 ? Math.min(CHUNK_SIZE, totalSize - offset) : 0;
 
-        // Extract chunk to a temporary binary file to feed natively into Expo uploadAsync
+        let base64Data = '';
         if (currentChunkLen > 0) {
-          const base64Data = await FileSystem.readAsStringAsync(workingUri, {
+          base64Data = await FileSystem.readAsStringAsync(workingUri, {
             encoding: FileSystem.EncodingType.Base64,
             position: offset,
             length: currentChunkLen,
           });
-          await FileSystem.writeAsStringAsync(tempChunkUri, base64Data, {
-            encoding: FileSystem.EncodingType.Base64,
-          });
-        } else {
-          await FileSystem.writeAsStringAsync(tempChunkUri, '', { encoding: FileSystem.EncodingType.UTF8 });
         }
 
         const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_chunk`;
         let chunkSuccess = false;
         let serverChunkRes = null;
 
+        // Standard application/x-www-form-urlencoded POST body (natively understood by emhttpd, Nginx, PHP $_POST)
+        const formBody = [
+          `action=file_chunk`,
+          `path=${encodeURIComponent(taskItem.targetPath)}`,
+          `filename=${encodeURIComponent(taskItem.name)}`,
+          `chunk_index=${i}`,
+          `total_chunks=${totalChunks}`,
+          `offset=${offset}`,
+          `total_size=${totalSize}`,
+          `data=${encodeURIComponent(base64Data)}`,
+        ].join('&');
+
         for (let attempt = 0; attempt < 3; attempt++) {
           if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
             return;
           }
           try {
-            // Using FileSystem.uploadAsync with BINARY_CONTENT acts as a raw data stream, 
-            // bypassing all WAF JSON payload inspections and Multipart parsing issues.
-            // All metadata is safely encoded in HTTP headers.
-            const uploadTask = FileSystem.createUploadTask(
-              chunkUrl,
-              tempChunkUri,
-              {
-                uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-                headers: {
-                  'X-API-Token': apiToken,
-                  'X-Chunk-Path': encodeURIComponent(taskItem.targetPath),
-                  'X-Chunk-Filename': encodeURIComponent(taskItem.name),
-                  'X-Chunk-Index': i.toString(),
-                  'X-Chunk-Total': totalChunks.toString(),
-                  'X-Chunk-Offset': offset.toString(),
-                  'X-Chunk-Size': totalSize.toString(),
-                  'Content-Type': 'application/octet-stream'
-                }
-              }
-            );
+            const res = await apiFetch(chunkUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
+                'X-API-Token': apiToken,
+              },
+              body: formBody,
+              signal: abortController.signal,
+            }, 30000, 1);
 
-            // Hook uploadTask to activeTasksRef for cancellation support
-            activeTasksRef.current[taskId].uploadTask = uploadTask;
-            const res = await uploadTask.uploadAsync();
-            activeTasksRef.current[taskId].uploadTask = null;
-
-            const rawText = (res.body || '').trim();
+            const rawText = (await res.text()).trim();
             let resJson = null;
             if (rawText) {
               try {
@@ -623,7 +614,7 @@ export default function FilesScreen({ navigation }) {
               if (resJson.path) savedPath = resJson.path;
               break;
             } else {
-              // Same empty response fallback check
+              // Fallback log check
               if (res.status === 200 && (!resJson || resJson.status !== 'success')) {
                 try {
                   const dbgRes = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=upload_debug&_t=${Date.now()}`, {}, 4000, 0).catch(() => null);
@@ -659,7 +650,8 @@ export default function FilesScreen({ navigation }) {
                   if (dbgRes) {
                     const lastLines = (dbgRes.log || '').split('\n').filter(Boolean).slice(-8).join(' | ');
                     const sVer = dbgRes.api_version || dbgRes.version || serverApiVersionRef.current || '未知';
-                    diagInfo = `\n[服务端API版本: ${sVer}]\n[服务端状态: ${lastLines || '无日志'}]`;
+                    const nErr = dbgRes.nginx_err ? `\n[Nginx错误: ${dbgRes.nginx_err}]` : '';
+                    diagInfo = `\n[服务端API版本: ${sVer}]\n[服务端状态: ${lastLines || '无日志'}]${nErr}`;
                   }
                 } catch (_) {}
 

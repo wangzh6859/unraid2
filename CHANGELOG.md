@@ -4,6 +4,21 @@
 
 ---
 
+## [v1.3.208] - 2026-09-16
+> **核心主题**：采用 256KB 标准 urlencoded 表单传输引擎，彻底兼容 Unraid emhttpd 与 Nginx 1MB 缓冲，终结 0 字节丢包
+
+### 🚀 终极表单分片引擎 (彻底消除 0 字节拦截)
+- **破案与拦截机理**：
+  - 此前尝试通过 `FileSystem.createUploadTask` 配合 `BINARY_CONTENT` 或 `MULTIPART` 发送二进制流，但 Unraid 自带的 Web 守护进程 (`emhttpd`) 作为 FastCGI 反向代理，对自定义 HTTP 请求头和纯原始二进制流缺少解析支持，未经过 Web 会话验证的非标准 Body 会被直接阻断并返回 FastCGI 0 字节空响应，导致请求根本无法到达 PHP。
+  - 同时，1MB 分片在经过部分反向代理（如 Nginx 默认 `client_max_body_size 1m`）时极易因边界溢出而被静默截断。
+- **256KB 标准表单转码引擎**：
+  - 将分片大小严格收敛至 **256KB**，Base64 转码后仅约 340KB，完全位于 Nginx 1MB 默认限制与 emhttpd 接收安全区之内。
+  - 上传请求全线回归标准的 `application/x-www-form-urlencoded` 表单 POST 格式，由 React Native 共享会话的 `apiFetch` 原生通道直接推送。PHP 后端无需特殊协议即可由 `$_POST['data']` 原生解析并自动落盘。
+  - 省去各分片创建临时文件的多余磁盘读写，内存消耗控制在 350KB 级别，彻底免除 OOM 与 SAF 读权限异常。
+  - 服务端 `api.php` 同步升级至 `2026.09.16.05`，在调试诊断接口中新增 `/var/log/nginx/error.log` 实时日志追踪。
+
+---
+
 ## [v1.3.207] - 2026-09-16
 > **核心主题**：修复前端作用域变量引用异常（彻底解除 `Property 'attempt' doesn't exist` 报错），确保原生底层二进制直传引擎稳定执行
 

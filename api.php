@@ -6,7 +6,7 @@
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.16.04');
+define('UNRAID_API_VERSION', '2026.09.16.05');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -3525,11 +3525,21 @@ function handle_upload_debug() {
     $emhttpWritable = @is_writable('/var/local/emhttp');
     $curUser = (function_exists('posix_getpwuid') && function_exists('posix_geteuid')) ? @posix_getpwuid(posix_geteuid())['name'] : 'unknown';
 
+    $nginxErr = '';
+    if (@file_exists('/var/log/nginx/error.log')) {
+        $nRaw = @file_get_contents('/var/log/nginx/error.log');
+        if (!empty($nRaw)) {
+            $nLines = explode("\n", trim($nRaw));
+            $nginxErr = implode(" | ", array_slice($nLines, -6));
+        }
+    }
+
     json_output([
         'status' => 'success',
         'api_version' => UNRAID_API_VERSION,
         'version' => UNRAID_API_VERSION,
         'log' => $logContent,
+        'nginx_err' => $nginxErr,
         'log_file' => $usedPath ?: 'none',
         'php_version' => PHP_VERSION,
         'php_sapi' => php_sapi_name(),
