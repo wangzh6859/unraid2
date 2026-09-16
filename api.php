@@ -253,16 +253,16 @@ function verify_auth() {
             header('Content-Type: text/html; charset=utf-8');
             http_response_code(200);
             $host = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'IP:端口';
-            echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Unraid API 正常运行�?/title><style>body{font-family:system-ui,sans-serif;background:#111827;color:#f3f4f6;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0} .card{background:#1f2937;padding:32px;border-radius:16px;max-width:520px;box-shadow:0 10px 25px rgba(0,0,0,0.5)} h1{color:#10b981;font-size:22px;margin-top:0} code{background:#374151;padding:2px 8px;border-radius:4px;color:#f59e0b} a{color:#3b82f6;text-decoration:none} a:hover{text-decoration:underline}</style></head><body>';
-            echo '<div class="card"><h1>�?Unraid API 服务运行正常�?/h1>';
-            echo '<p>您正在访�?Unraid Mobile Manager 后端 API 接口�?/p>';
+            echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Unraid API 正常运行中</title><style>body{font-family:system-ui,sans-serif;background:#111827;color:#f3f4f6;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0} .card{background:#1f2937;padding:32px;border-radius:16px;max-width:520px;box-shadow:0 10px 25px rgba(0,0,0,0.5)} h1{color:#10b981;font-size:22px;margin-top:0} code{background:#374151;padding:2px 8px;border-radius:4px;color:#f59e0b} a{color:#3b82f6;text-decoration:none} a:hover{text-decoration:underline}</style></head><body>';
+            echo '<div class="card"><h1>✅ Unraid API 服务运行正常！</h1>';
+            echo '<p>您正在访问 Unraid Mobile Manager 后端 API 接口。</p>';
             $activeToken = get_configured_token();
             $isCustom = ($activeToken !== FALLBACK_TOKEN);
-            $tokenSourceDesc = $isCustom ? '取自自定�?(unraid_api_token.txt)' : '取自系统默认';
-            echo '<p>📱 <b>手机 App 连接配置�?/b></p>';
-            echo '<ul><li><b>服务器地址�?/b> <code>http://' . htmlspecialchars($host) . '</code></li><li><b>API Token�?/b> <code>已配�?· 已隐藏保�?/code> <span style="color:#10b981">(' . $tokenSourceDesc . ')</span></li></ul>';
-            echo '<p>⚙️ <b>API 版本�?/b> <code>' . UNRAID_API_VERSION . '</code> <small style="color:#10b981">(�?Unraid 网页端实时同�?</small><br>📁 <b>当前文件�?/b> <code>' . htmlspecialchars(__FILE__) . '</code></p>';
-            echo '<p style="color:#9ca3af;font-size:13px;border-top:1px solid #374151;padding-top:12px;">🛡�?<b>安全保护�?/b>为防�?Token 泄露，网页端不直接展示明文。请在手�?App 设置中填入您配置�?Token 进行连接�?/p>';
+            $tokenSourceDesc = $isCustom ? '取自自定义 (unraid_api_token.txt)' : '取自系统默认';
+            echo '<p>📱 <b>手机 App 连接配置：</b></p>';
+            echo '<ul><li><b>服务器地址：</b> <code>http://' . htmlspecialchars($host) . '</code></li><li><b>API Token：</b> <code>已配置 · 已隐藏保护</code> <span style="color:#10b981">(' . $tokenSourceDesc . ')</span></li></ul>';
+            echo '<p>⚙️ <b>API 版本：</b> <code>' . UNRAID_API_VERSION . '</code> <small style="color:#10b981">(与 Unraid 网页端实时同步)</small><br>📁 <b>当前文件：</b> <code>' . htmlspecialchars(__FILE__) . '</code></p>';
+            echo '<p style="color:#9ca3af;font-size:13px;border-top:1px solid #374151;padding-top:12px;">🛡️ <b>安全保护：</b>为防止 Token 泄露，网页端不直接展示明文。请在手机 App 设置中填入您配置的 Token 进行连接。</p>';
             echo '</div></body></html>';
             exit;
         }
@@ -604,7 +604,7 @@ function handle_reboot() {
     exec($cmd);
     json_output([
         'status' => 'success',
-        'message' => '服务器正在重启中，系统服务将在数分钟内重新上线�?
+        'message' => '服务器正在重启中，系统服务将在数分钟内重新上线。'
     ]);
 }
 
@@ -613,7 +613,7 @@ function handle_poweroff() {
     exec($cmd);
     json_output([
         'status' => 'success',
-        'message' => '服务器关机指令已生效，正在执行安全关机�?
+        'message' => '服务器关机指令已生效，正在执行安全关机。'
     ]);
 }
 
@@ -714,7 +714,7 @@ function get_docker_updates_map() {
             } elseif ($upVal === 'ready') {
                 $register($cName, ['has_update' => true, 'status' => 'ready', 'status_text' => '更新就绪']);
             } elseif ($upVal === 'true' || $upVal === '1') {
-                $register($cName, ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最�?]);
+                $register($cName, ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新']);
             }
         }
         break; // Successfully loaded official docker.json
@@ -835,7 +835,7 @@ function get_docker_updates_map() {
                         $rec = [
                             'has_update' => false,
                             'status' => 'up-to-date',
-                            'status_text' => '最�?,
+                            'status_text' => '最新',
                             'local_digest' => $localDigest,
                             'remote_digest' => $remoteDigest,
                             'running_image_id' => $cRunningId,
@@ -874,7 +874,7 @@ function get_docker_updates_map() {
                 } elseif ($rawUpdated === 'false') {
                     $register($secName, ['has_update' => true, 'status' => 'update', 'status_text' => '更新']);
                 } elseif ($rawUpdated === 'true') {
-                    $register($secName, ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最�?]);
+                    $register($secName, ['has_update' => false, 'status' => 'up-to-date', 'status_text' => '最新']);
                 }
             }
         }
@@ -1198,7 +1198,7 @@ $disks[] = [
 
                 $hasUpdate = !empty($info['has_update']);
                 $updateStatus = !empty($info['status']) ? $info['status'] : 'up-to-date';
-                $updateStatusText = !empty($info['status_text']) ? $info['status_text'] : '最�?;
+                $updateStatusText = !empty($info['status_text']) ? $info['status_text'] : '最新';
 
                 $dockersList[] = [
                     'name' => $cleanName,
@@ -1317,9 +1317,9 @@ $disks[] = [
                 if ($finishMin > 60) {
                     $hours = floor($finishMin / 60);
                     $mins = round($finishMin % 60);
-                    $parityData['finish'] = "�?{$hours} 小时 {$mins} 分钟";
+                    $parityData['finish'] = "约 {$hours} 小时 {$mins} 分钟";
                 } else {
-                    $parityData['finish'] = "�?" . round($finishMin) . " 分钟";
+                    $parityData['finish'] = "约 " . round($finishMin) . " 分钟";
                 }
             }
         }
@@ -1333,7 +1333,7 @@ $disks[] = [
         $sec = (int)explode(' ', trim($upSecs))[0];
         $days = floor($sec / 86400);
         $hours = floor(($sec % 86400) / 3600);
-        $uptimeStr = $days > 0 ? "已开�?{$days}�?{$hours}小时" : "已开�?{$hours}小时";
+        $uptimeStr = $days > 0 ? "已开机 {$days}天 {$hours}小时" : "已开机 {$hours}小时";
     }
 
     $cpuTemp = null;
@@ -1423,7 +1423,7 @@ function handle_docker_logs() {
     $escaped = escapeshellarg($target);
     $out = @shell_exec("docker logs --tail {$lines} --timestamps {$escaped} 2>&1");
     if ($out === null || $out === false) {
-        $out = "未能读取到容�?[{$target}] 的日志�?;
+        $out = "未能读取到容器 [{$target}] 的日志。";
     }
 
     json_output([
@@ -1463,13 +1463,13 @@ function handle_update_docker() {
     }
 
     if (empty($inspectRaw)) {
-        json_output(['status' => 'error', 'message' => "未在系统中找到容�?[{$cleanTarget}]"]);
+        json_output(['status' => 'error', 'message' => "未在系统中找到容器 [{$cleanTarget}]"]);
         return;
     }
 
     $inspectArr = @json_decode($inspectRaw, true);
     if (!is_array($inspectArr) || empty($inspectArr[0])) {
-        json_output(['status' => 'error', 'message' => "无法解析容器 [{$cleanTarget}] 的配置信�?]);
+        json_output(['status' => 'error', 'message' => "无法解析容器 [{$cleanTarget}] 的配置信息"]);
         return;
     }
     $c = $inspectArr[0];
@@ -1480,7 +1480,7 @@ function handle_update_docker() {
     $wasRunning = !empty($c['State']['Running']);
 
     if (empty($imageName)) {
-        json_output(['status' => 'error', 'message' => "无法获取容器 [{$cleanTarget}] 的镜像名�?]);
+        json_output(['status' => 'error', 'message' => "无法获取容器 [{$cleanTarget}] 的镜像名称"]);
         return;
     }
 
@@ -1540,7 +1540,7 @@ function handle_update_docker() {
         if (empty($latestPulledImgId)) {
             json_output([
                 'status' => 'error',
-                'message' => "拉取最新镜�?[{$imageName}] 失败：\n" . trim(substr($pullOut, 0, 300)),
+                'message' => "拉取最新镜像 [{$imageName}] 失败：\n" . trim(substr($pullOut, 0, 300)),
                 'output' => trim($updaterOut)
             ]);
             return;
@@ -1741,7 +1741,7 @@ function handle_update_docker() {
 
         json_output([
             'status' => 'success',
-            'message' => "容器 [{$cleanTarget}] 升级成功！已更新至最新版�? . ($wasRunning ? "并已重新运行�? : "（保持停止状态）�?),
+            'message' => "容器 [{$cleanTarget}] 升级成功！已更新至最新版本" . ($wasRunning ? "并已重新运行。" : "（保持停止状态）。"),
             'details' => [
                 'container' => $cleanTarget,
                 'old_container_id' => substr($oldId, 0, 12),
@@ -2030,7 +2030,7 @@ function handle_self_update_api() {
     if (!$newContent) {
         json_output([
             'status' => 'error',
-            'message' => "在线获取最�?api.php 失败，请检查服务器网络连接。错误：{$lastErr}"
+            'message' => "在线获取最新 api.php 失败，请检查服务器网络连接。错误：{$lastErr}"
         ]);
         return;
     }
@@ -2046,21 +2046,21 @@ function handle_self_update_api() {
         }
         json_output([
             'status' => 'error',
-            'message' => "写入文件 {$currentFile} 失败，可能缺少写入权限�?
+            'message' => "写入文件 {$currentFile} 失败，可能缺少写入权限。"
         ]);
         return;
     }
 
     @unlink($backupFile);
 
-    $updatedVer = '最�?;
+    $updatedVer = '最新';
     if (preg_match("/define\('UNRAID_API_VERSION',\s*'([^']+)'\)/", $newContent, $m)) {
         $updatedVer = $m[1];
     }
 
     json_output([
         'status' => 'success',
-        'message' => "api.php 在线更新成功！已通过 GitHub 仓库更新至版�?{$updatedVer}（大�? " . round($written / 1024, 1) . " KB）�?,
+        'message' => "api.php 在线更新成功！已通过 GitHub 仓库更新至版本 {$updatedVer}（大小: " . round($written / 1024, 1) . " KB）。",
         'api_version' => $updatedVer,
         'file' => $currentFile,
         'source' => $usedUrl,
@@ -2087,7 +2087,7 @@ function handle_update_api_file() {
         if (file_exists($backupFile)) {
             @copy($backupFile, $currentFile);
         }
-        json_output(['status' => 'error', 'message' => "写入文件 {$currentFile} 失败，可能缺少写入权限�?], 500);
+        json_output(['status' => 'error', 'message' => "写入文件 {$currentFile} 失败，可能缺少写入权限。"], 500);
     }
     @unlink($backupFile);
 
@@ -2098,7 +2098,7 @@ function handle_update_api_file() {
 
     json_output([
         'status' => 'success',
-        'message' => "API 文件热更新成功！已直接升级至版本 {$version}（大�? " . round($written / 1024, 1) . " KB）�?,
+        'message' => "API 文件热更新成功！已直接升级至版本 {$version}（大小: " . round($written / 1024, 1) . " KB）。",
         'api_version' => $version,
         'size' => $written
     ]);
@@ -2326,12 +2326,12 @@ function handle_compose_action() {
     $path = isset($_GET['path']) ? trim($_GET['path']) : '';
 
     if (empty($target) && empty($path)) {
-        json_output(['status' => 'error', 'message' => '缺少堆栈项目名称或路�?], 400);
+        json_output(['status' => 'error', 'message' => '缺少堆栈项目名称或路径'], 400);
     }
 
     $yamlFile = find_compose_file($target, $path);
     if (empty($yamlFile) || !file_exists($yamlFile)) {
-        json_output(['status' => 'error', 'message' => "未能找到堆栈 [{$target}] �?Compose 配置文件"], 404);
+        json_output(['status' => 'error', 'message' => "未能找到堆栈 [{$target}] 的 Compose 配置文件"], 404);
     }
 
     $composeBin = get_compose_cmd();
@@ -2381,8 +2381,8 @@ function handle_compose_action() {
         'project' => $projectName,
         'action' => $cmd,
         'message' => in_array($cmd, ['pull', 'upgrade', 'update'])
-            ? "堆栈 [{$projectName}] 已成功拉取最新镜像并完成容器重建升级�?
-            : "堆栈 [{$projectName}] 操作 [{$cmd}] 执行完成�?,
+            ? "堆栈 [{$projectName}] 已成功拉取最新镜像并完成容器重建升级！"
+            : "堆栈 [{$projectName}] 操作 [{$cmd}] 执行完成。",
         'output' => trim((string)$out)
     ]);
 }
@@ -2394,7 +2394,7 @@ function handle_compose_file() {
     $yamlFile = find_compose_file($target, $path);
 
     if (empty($yamlFile) || !file_exists($yamlFile)) {
-        json_output(['status' => 'error', 'message' => "未找到堆�?[{$target}] �?YAML 配置文件"], 404);
+        json_output(['status' => 'error', 'message' => "未找到堆栈 [{$target}] 的 YAML 配置文件"], 404);
     }
 
     $content = @file_get_contents($yamlFile);
@@ -2441,7 +2441,7 @@ function handle_compose_save() {
 
     json_output([
         'status' => 'success',
-        'message' => "Compose 文件已成功保�?,
+        'message' => "Compose 文件已成功保存",
         'file' => $yamlFile
     ]);
 }
@@ -2488,7 +2488,7 @@ function handle_compose_logs() {
     json_output([
         'status' => 'success',
         'project' => $target,
-        'logs' => (!empty(trim((string)$out))) ? trim((string)$out) : '暂无日志输出或容器尚未生成日�?
+        'logs' => (!empty(trim((string)$out))) ? trim((string)$out) : '暂无日志输出或容器尚未生成日志'
     ]);
 }
 
@@ -2516,9 +2516,9 @@ function handle_notifications() {
 
     if ($driftSeconds > 30) {
         $isNtpSynced = false;
-        $timeWarning = "系统时钟与手机相�?{$driftSeconds} 秒，可能未同�?NTP，将导致 Docker 镜像拉取�?SSL 证书异常�?;
+        $timeWarning = "系统时钟与手机相差 {$driftSeconds} 秒，可能未同步 NTP，将导致 Docker 镜像拉取与 SSL 证书异常！";
     } elseif (!$isNtpSynced) {
-        $timeWarning = "系统 NTP 服务未同步或时钟未校准，建议检查系统时间与 NTP 配置�?;
+        $timeWarning = "系统 NTP 服务未同步或时钟未校准，建议检查系统时间与 NTP 配置。";
     }
 
     // 2. Read Unraid notifications from /tmp/notifications/
@@ -2573,7 +2573,7 @@ function handle_notifications() {
                         'id' => 'disk_err_' . $name,
                         'importance' => 'alert',
                         'subject' => "磁盘 [{$name}] 存在读写/校验错误",
-                        'description' => "检测到磁盘 {$name} 累计错误计数: {$numErrors}，请及时查看 S.M.A.R.T. 诊断并复查数据完整性�?,
+                        'description' => "检测到磁盘 {$name} 累计错误计数: {$numErrors}，请及时查看 S.M.A.R.T. 诊断并复查数据完整性。",
                         'timestamp' => date('Y-m-d H:i:s'),
                         'is_read' => false,
                     ];
@@ -2583,7 +2583,7 @@ function handle_notifications() {
                         'id' => 'disk_temp_' . $name,
                         'importance' => 'warning',
                         'subject' => "磁盘 [{$name}] 温度偏高 ({$temp}°C)",
-                        'description' => "磁盘当前工作温度达到 {$temp}°C，超过推荐安全阈值，请检查机箱散热与风扇状态�?,
+                        'description' => "磁盘当前工作温度达到 {$temp}°C，超过推荐安全阈值，请检查机箱散热与风扇状态。",
                         'timestamp' => date('Y-m-d H:i:s'),
                         'is_read' => false,
                     ];
@@ -2707,16 +2707,16 @@ function handle_parity_control() {
     $msg = '';
     if ($cmd === 'start' || $cmd === 'check') {
         $out = @shell_exec('/usr/local/sbin/mdcmd check 2>&1');
-        $msg = '已发起阵列奇偶校�?;
+        $msg = '已发起阵列奇偶校验';
     } elseif ($cmd === 'pause') {
         $out = @shell_exec('/usr/local/sbin/mdcmd check pause 2>&1');
-        $msg = '已暂停阵列奇偶校�?;
+        $msg = '已暂停阵列奇偶校验';
     } elseif ($cmd === 'resume') {
         $out = @shell_exec('/usr/local/sbin/mdcmd check resume 2>&1');
-        $msg = '已恢复阵列奇偶校�?;
+        $msg = '已恢复阵列奇偶校验';
     } elseif ($cmd === 'cancel' || $cmd === 'stop') {
         $out = @shell_exec('/usr/local/sbin/mdcmd check cancel 2>&1');
-        $msg = '已终止阵列奇偶校�?;
+        $msg = '已终止阵列奇偶校验';
     } else {
         json_output(['status' => 'error', 'message' => "Unsupported parity command: {$cmd}"], 400);
     }
@@ -2744,7 +2744,7 @@ function handle_syslog() {
     if (file_exists($logFile)) {
         $out = @shell_exec("tail -n {$lines} " . escapeshellarg($logFile) . " 2>&1");
     } else {
-        $out = "系统日志文件未找�?(/var/log/syslog)";
+        $out = "系统日志文件未找到 (/var/log/syslog)";
     }
 
     json_output([
@@ -2859,11 +2859,11 @@ function handle_smart_info() {
     // Check if drive was in STANDBY mode
     $isStandby = (strpos($out, 'STANDBY mode') !== false || strpos($out, 'Device is in SLEEP mode') !== false);
     if ($isStandby) {
-        $notice = "【提示】磁盘当前处于待机休�?(Standby) 状态。\n";
+        $notice = "【提示】磁盘当前处于待机休眠 (Standby) 状态。\n";
         if ($uInfo) {
             $cachedTemp = isset($uInfo['temp']) ? $uInfo['temp'] : '待机';
             $cachedStatus = isset($uInfo['status']) ? $uInfo['status'] : '正常';
-            $notice .= "已从 Unraid 系统缓存载入基本指标（温�? {$cachedTemp} °C, 状�? {$cachedStatus}）。\n如需获取完整最新传感器数据，请唤醒磁盘。\n\n";
+            $notice .= "已从 Unraid 系统缓存载入基本指标（温度: {$cachedTemp} °C, 状态: {$cachedStatus}）。\n如需获取完整最新传感器数据，请唤醒磁盘。\n\n";
         }
         $out = $notice . $out;
     }
@@ -2961,7 +2961,7 @@ function handle_smart_info() {
     json_output([
         'status' => 'success',
         'device' => $dev,
-        'data' => $out ?: "未能获取�?/dev/{$dev} �?S.M.A.R.T. 数据",
+        'data' => $out ?: "未能获取到 /dev/{$dev} 的 S.M.A.R.T. 数据",
         'parsed' => $parsed
     ]);
 }
@@ -3208,7 +3208,7 @@ function handle_file_upload() {
     if ($targetDir === '/mnt' || $targetDir === '/mnt/user') {
         json_output([
             'status' => 'error',
-            'message' => '无法直接上传到共享根目录 /mnt/user，请先进入具体的共享文件夹（例如 downloads、appdata 等）后再上传�?
+            'message' => '无法直接上传到共享根目录 /mnt/user，请先进入具体的共享文件夹（例如 downloads、appdata 等）后再上传。'
         ], 400);
     }
 
@@ -3241,15 +3241,15 @@ function handle_file_upload() {
         $file = $_FILES['file'];
         if ($file['error'] !== UPLOAD_ERR_OK) {
             $errCodes = [
-                UPLOAD_ERR_INI_SIZE => '上传文件大小超出�?php.ini 允许的上�?(upload_max_filesize)',
+                UPLOAD_ERR_INI_SIZE => '上传文件大小超出了 php.ini 允许的上限 (upload_max_filesize)',
                 UPLOAD_ERR_FORM_SIZE => '上传文件大小超出了表单允许的上限 (MAX_FILE_SIZE)',
                 UPLOAD_ERR_PARTIAL => '文件仅部分被上传',
                 UPLOAD_ERR_NO_FILE => '未找到上传的文件',
-                UPLOAD_ERR_NO_TMP_DIR => '缺少临时文件�?,
+                UPLOAD_ERR_NO_TMP_DIR => '缺少临时文件夹',
                 UPLOAD_ERR_CANT_WRITE => '写入磁盘失败',
-                UPLOAD_ERR_EXTENSION => 'PHP 扩展停止了文件上�?
+                UPLOAD_ERR_EXTENSION => 'PHP 扩展停止了文件上传'
             ];
-            $detail = isset($errCodes[$file['error']]) ? $errCodes[$file['error']] : "错误�? {$file['error']}";
+            $detail = isset($errCodes[$file['error']]) ? $errCodes[$file['error']] : "错误码: {$file['error']}";
             json_output(['status' => 'error', 'message' => "上传失败: {$detail}"], 400);
         }
 
@@ -3302,9 +3302,9 @@ function handle_file_upload() {
     if (!$writeSuccess || !file_exists($destPath)) {
         @unlink($destPath);
         $err = error_get_last();
-        $msg = $err ? $err['message'] : '写入失败或目标磁盘无写权�?;
+        $msg = $err ? $err['message'] : '写入失败或目标磁盘无写权限';
         log_upload_debug("file_upload failed: dest={$destPath}, err={$msg}");
-        json_output(['status' => 'error', 'message' => "无法将文件写入目标路�? {$destPath} ({$msg})"], 500);
+        json_output(['status' => 'error', 'message' => "无法将文件写入目标路径: {$destPath} ({$msg})"], 500);
     }
 
     $finalSize = (float)@filesize($destPath);
@@ -3313,7 +3313,7 @@ function handle_file_upload() {
     if ($finalSize === 0.0 && $expectedSize > 0.0) {
         @unlink($destPath);
         log_upload_debug("file_upload 0-byte: dest={$destPath}, expected={$expectedSize}");
-        json_output(['status' => 'error', 'message' => '上传文件大小�?0 字节，可能超出了服务�?Nginx/PHP �?post_max_size 限制或网络流中断'], 400);
+        json_output(['status' => 'error', 'message' => '上传文件大小为 0 字节，可能超出了服务器 Nginx/PHP 的 post_max_size 限制或网络流中断'], 400);
     }
 
     // 5. Apply standard Unraid permissions (nobody:users 0666)
@@ -3383,7 +3383,6 @@ function handle_file_chunk() {
             }
         }
 
-        // Support HTTP Headers for metadata (to bypass WAF blocking filenames/paths in URL/Body)
         $rawPath = isset($_SERVER['HTTP_X_CHUNK_PATH']) ? rawurldecode($_SERVER['HTTP_X_CHUNK_PATH']) : (isset($payload['path']) ? $payload['path'] : (isset($_POST['path']) ? $_POST['path'] : (isset($_GET['path']) ? $_GET['path'] : ALLOWED_ROOT)));
         $targetDir = sanitize_path($rawPath);
 
@@ -3391,7 +3390,7 @@ function handle_file_chunk() {
             log_upload_debug("chunk_err: direct root target {$targetDir}");
             json_output([
                 'status' => 'error',
-                'message' => '无法直接上传到共享根目录 /mnt/user，请先点击进入具体的共享文件夹（例如 downloads、appdata 等）后再上传�?
+                'message' => '无法直接上传到共享根目录 /mnt/user，请先点击进入具体的共享文件夹（例如 downloads、appdata 等）后再上传。'
             ], 400);
         }
 
@@ -3414,7 +3413,7 @@ function handle_file_chunk() {
         $cleanName = safe_basename($filename);
         if (empty($cleanName)) {
             log_upload_debug("chunk_err: empty filename");
-            json_output(['status' => 'error', 'message' => '文件名不能为�?], 400);
+            json_output(['status' => 'error', 'message' => '文件名不能为空'], 400);
         }
 
         $destPath = rtrim($targetDir, '/') . '/' . $cleanName;
@@ -3422,7 +3421,6 @@ function handle_file_chunk() {
         $totalChunks = isset($_SERVER['HTTP_X_CHUNK_TOTAL']) ? intval($_SERVER['HTTP_X_CHUNK_TOTAL']) : (isset($payload['total_chunks']) ? intval($payload['total_chunks']) : (isset($_POST['total_chunks']) ? intval($_POST['total_chunks']) : (isset($_GET['total_chunks']) ? intval($_GET['total_chunks']) : 1)));
         $offset = isset($_SERVER['HTTP_X_CHUNK_OFFSET']) ? floatval($_SERVER['HTTP_X_CHUNK_OFFSET']) : (isset($payload['offset']) ? floatval($payload['offset']) : (isset($_POST['offset']) ? floatval($_POST['offset']) : (isset($_GET['offset']) ? floatval($_GET['offset']) : 0)));
         $totalSize = isset($_SERVER['HTTP_X_CHUNK_SIZE']) ? floatval($_SERVER['HTTP_X_CHUNK_SIZE']) : (isset($payload['total_size']) ? floatval($payload['total_size']) : (isset($_POST['total_size']) ? floatval($_POST['total_size']) : (isset($_GET['total_size']) ? floatval($_GET['total_size']) : 0)));
-
 
         // First chunk creates/truncates the file, subsequent chunks append/seek
         $fp = false;
@@ -3442,9 +3440,9 @@ function handle_file_chunk() {
 
         if (!$fp) {
             $err = error_get_last();
-            $msg = $err ? $err['message'] : '无法打开或创建目标文�?;
+            $msg = $err ? $err['message'] : '无法打开或创建目标文件';
             log_upload_debug("chunk_err: fopen failed for {$destPath}: {$msg}");
-            json_output(['status' => 'error', 'message' => "无法打开或创建目标文�? {$destPath} ({$msg})"], 500);
+            json_output(['status' => 'error', 'message' => "无法打开或创建目标文件: {$destPath} ({$msg})"], 500);
         }
 
         if ($offset > 0) {
@@ -3460,7 +3458,7 @@ function handle_file_chunk() {
 
         if (strlen($binaryData) > 0 && ($written === false || $written !== strlen($binaryData))) {
             log_upload_debug("chunk_err: write partial for {$destPath}, expected=" . strlen($binaryData) . " wrote={$written}");
-            json_output(['status' => 'error', 'message' => "分片写入失败，目标磁盘可能空间不足�?], 500);
+            json_output(['status' => 'error', 'message' => "分片写入失败，目标磁盘可能空间不足。"], 500);
         }
 
         @chmod($destPath, 0666);
@@ -3480,7 +3478,7 @@ function handle_file_chunk() {
                 'status' => 'success',
                 'api_version' => UNRAID_API_VERSION,
                 'complete' => true,
-                'message' => '文件已成功写�?Unraid 存储',
+                'message' => '文件已成功写入 Unraid 存储',
                 'path' => $destPath,
                 'name' => $cleanName,
                 'size' => $currentSize,
@@ -3685,7 +3683,7 @@ function handle_file_extract() {
         $targetDir = rtrim($targetDir, '/') . '/' . $folderName;
         if (!file_exists($targetDir)) {
             if (!@mkdir($targetDir, 0755, true)) {
-                json_output(['status' => 'error', 'message' => '无法创建解压子目�?], 500);
+                json_output(['status' => 'error', 'message' => '无法创建解压子目录'], 500);
             }
         }
     }
@@ -3744,7 +3742,7 @@ function handle_file_compress() {
     $zipName = isset($jsonInput['zip_name']) ? trim($jsonInput['zip_name']) : (isset($_POST['zip_name']) ? trim($_POST['zip_name']) : (isset($_GET['zip_name']) ? trim($_GET['zip_name']) : ''));
 
     if (empty($rawSources)) {
-        json_output(['status' => 'error', 'message' => '未指定需要打包的文件或目�?], 400);
+        json_output(['status' => 'error', 'message' => '未指定需要打包的文件或目录'], 400);
     }
 
     $sourcesList = is_array($rawSources) ? $rawSources : json_decode($rawSources, true);
@@ -3769,7 +3767,7 @@ function handle_file_compress() {
     }
 
     if (!file_exists($targetDir) || !is_dir($targetDir)) {
-        json_output(['status' => 'error', 'message' => '目标输出目录不存�?], 400);
+        json_output(['status' => 'error', 'message' => '目标输出目录不存在'], 400);
     }
 
     if (empty($zipName)) {
@@ -3847,7 +3845,7 @@ function handle_file_compress() {
     }
 
     if ($ret !== 0) {
-        $errMsg = !empty($out) ? implode("\n", array_slice($out, -3)) : '服务端打�?Zip 失败，请检查磁盘空间或安装 zip 工具/插件';
+        $errMsg = !empty($out) ? implode("\n", array_slice($out, -3)) : '服务端打包 Zip 失败，请检查磁盘空间或安装 zip 工具/插件';
         json_output(['status' => 'error', 'message' => $errMsg], 500);
     }
 
@@ -3887,7 +3885,7 @@ function get_disk_io_stats() {
 
 function get_gpu_telemetry() {
     $gpuData = [
-        'name' => '未配置独立显�?,
+        'name' => '未配置独立显卡',
         'vendor' => 'N/A',
         'usage' => 0,
         'temp' => null,
@@ -4051,7 +4049,7 @@ function get_gpu_telemetry() {
                             $amdName = trim($m[1]);
                         }
                     }
-                    if (!$amdName) $amdName = 'AMD Radeon�?显卡';
+                    if (!$amdName) $amdName = 'AMD Radeon™ 显卡';
 
                     $busyFile = "{$card}/device/gpu_busy_percent";
                     $usage = file_exists($busyFile) ? (float)trim(@file_get_contents($busyFile)) : 0;
@@ -4170,14 +4168,14 @@ function handle_check_docker_updates() {
 
     if ($updatesCount > 0) {
         if ($readyCount > 0 && $newVersionCount > 0) {
-            $msg = "检测完成，共发�?{$updatesCount} 个待更新容器（{$readyCount} 个更新就绪，{$newVersionCount} 个新版本待拉取）�?;
+            $msg = "检测完成，共发现 {$updatesCount} 个待更新容器（{$readyCount} 个更新就绪，{$newVersionCount} 个新版本待拉取）！";
         } elseif ($readyCount > 0) {
-            $msg = "检测完成，共发�?{$readyCount} 个容器「更新就绪」，已在列表中为您标绿，可直接点击应用升级！";
+            $msg = "检测完成，共发现 {$readyCount} 个容器「更新就绪」，已在列表中为您标绿，可直接点击应用升级！";
         } else {
-            $msg = "检测完成，共发�?{$newVersionCount} 个容器有新版本可用！";
+            $msg = "检测完成，共发现 {$newVersionCount} 个容器有新版本可用！";
         }
     } else {
-        $msg = "检测完成，所�?Docker 容器均为最新版本�?;
+        $msg = "检测完成，所有 Docker 容器均为最新版本。";
     }
 
     json_output([
