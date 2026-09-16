@@ -570,7 +570,7 @@ export default function FilesScreen({ navigation }) {
         let chunkSuccess = false;
         let serverChunkRes = null;
 
-        for (let retry = 0; retry < 3; retry++) {
+        for (let attempt = 0; attempt < 3; attempt++) {
           if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
             return;
           }
