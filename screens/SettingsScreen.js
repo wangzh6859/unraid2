@@ -23,6 +23,7 @@ import {
 } from '../utils/cacheManager';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import backgroundTransferManager from '../utils/backgroundTransferManager';
+import { BUNDLED_API_VERSION, BUNDLED_API_CODE } from '../utils/bundledApi';
 import {
   getWolConfig, saveWolConfig, sendWakeOnLanPacket,
   isValidMacAddress, formatMacAddress,
@@ -314,21 +315,42 @@ export default function SettingsScreen({ navigation }) {
       let updateSuccess = false;
       let successMsg = '';
 
-      // Engine 1: Server-side self-update via direct GitHub repo URL (raw.githubusercontent.com)
+      // Engine 0: Bundled API Direct Push (100% reliable, zero external network dependency)
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 15000);
-        const res = await fetch(`${cleanUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=self_update_api`, {
-          signal: controller.signal,
+        const pushRes = await fetch(`${cleanUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=update_api_file`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'X-API-Token': apiToken,
+          },
+          body: BUNDLED_API_CODE,
         });
-        clearTimeout(timer);
-        const data = await res.json().catch(() => null);
-        if (data && data.status === 'success') {
+        const pushData = await pushRes.json().catch(() => null);
+        if (pushData && pushData.status === 'success') {
           updateSuccess = true;
-          successMsg = data.message || '后端 API (api.php) 已成功通过 GitHub 仓库热更新至最新版本！';
+          successMsg = pushData.message || `后端 API 已成功直接升级至版本 ${BUNDLED_API_VERSION}！`;
         }
-      } catch (srvErr) {
-        console.log('[SettingsScreen] Server-side self_update_api failed, trying client push fallback:', srvErr);
+      } catch (bundlePushErr) {
+        console.log('[SettingsScreen] Bundled push failed, falling back to network:', bundlePushErr);
+      }
+
+      // Engine 1: Server-side self-update via direct GitHub repo URL (raw.githubusercontent.com)
+      if (!updateSuccess) {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 15000);
+          const res = await fetch(`${cleanUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=self_update_api`, {
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
+          const data = await res.json().catch(() => null);
+          if (data && data.status === 'success') {
+            updateSuccess = true;
+            successMsg = data.message || '后端 API (api.php) 已成功通过 GitHub 仓库热更新至最新版本！';
+          }
+        } catch (srvErr) {
+          console.log('[SettingsScreen] Server-side self_update_api failed, trying client push fallback:', srvErr);
+        }
       }
 
       // Engine 2: Client relay fallback (App fetches raw api.php from GitHub and pushes directly to server)

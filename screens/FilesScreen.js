@@ -20,6 +20,45 @@ import FilePreviewer from '../components/FilePreviewer';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import backgroundTransferManager from '../utils/backgroundTransferManager';
 import { apiFetch, apiFetchJson, resetNetworkPool } from '../utils/apiClient';
+import { BUNDLED_API_VERSION, BUNDLED_API_CODE } from '../utils/bundledApi';
+
+// Proactively and silently pushes bundled api.php to Unraid server if outdated
+async function autoSyncServerApi(cleanBaseUrl, apiToken, serverApiVersionRef) {
+  try {
+    let srvVer = serverApiVersionRef?.current;
+    if (!srvVer) {
+      const vData = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=version&_t=${Date.now()}`, {}, 3500, 0).catch(() => null);
+      if (vData && (vData.api_version || vData.version)) {
+        srvVer = vData.api_version || vData.version;
+        if (serverApiVersionRef) serverApiVersionRef.current = srvVer;
+      }
+    }
+
+    if (!srvVer || srvVer < BUNDLED_API_VERSION) {
+      console.log(`[AutoSync] Server API (${srvVer || 'unknown'}) < bundled (${BUNDLED_API_VERSION}), pushing update...`);
+      const pushRes = await apiFetch(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=update_api_file`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'X-API-Token': apiToken,
+        },
+        body: BUNDLED_API_CODE,
+      }, 12000, 0);
+
+      const raw = await pushRes.text().catch(() => '');
+      let pushJson = null;
+      try { pushJson = JSON.parse(raw); } catch (_) {}
+      if (pushJson && pushJson.status === 'success') {
+        if (serverApiVersionRef) serverApiVersionRef.current = BUNDLED_API_VERSION;
+        console.log(`[AutoSync] Successfully synced server api.php to ${BUNDLED_API_VERSION}`);
+        return true;
+      }
+    }
+  } catch (err) {
+    console.log('[AutoSync] Non-blocking push error:', err);
+  }
+  return false;
+}
 
 // Formats bytes with fixed 1 decimal place to prevent layout shift
 const formatBytesFixed = (bytes) => {
@@ -263,6 +302,9 @@ export default function FilesScreen({ navigation }) {
         }
         if (data.api_version) {
           serverApiVersionRef.current = data.api_version;
+          if (data.api_version < BUNDLED_API_VERSION) {
+            autoSyncServerApi(cleanUrl, token, serverApiVersionRef);
+          }
         }
         const items = (data.items || []).map(it => ({
           ...it,
@@ -482,20 +524,8 @@ export default function FilesScreen({ navigation }) {
       const activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
       const csrfQuery = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
 
-      // Check server API version and auto-update if outdated (< 2026.09.15.06)
-      try {
-        let currentSrvVer = serverApiVersionRef.current;
-        if (!currentSrvVer) {
-          const vData = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=version`, {}, 3000, 0).catch(() => null);
-          if (vData && (vData.api_version || vData.version)) {
-            currentSrvVer = vData.api_version || vData.version;
-            serverApiVersionRef.current = currentSrvVer;
-          }
-        }
-        if (currentSrvVer && currentSrvVer < '2026.09.15.06') {
-          await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=self_update_api`, {}, 7000, 0).catch(() => null);
-        }
-      } catch (_) {}
+      // Proactively ensure server api.php is up-to-date with bundled version before upload starts
+      await autoSyncServerApi(cleanBaseUrl, apiToken, serverApiVersionRef);
 
       // Set initial upload state
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
@@ -593,9 +623,9 @@ export default function FilesScreen({ navigation }) {
                 try {
                   const dbgRes = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=upload_debug&_t=${Date.now()}`, {}, 4000, 0).catch(() => null);
                   if (dbgRes && dbgRes.log) {
-                    const cleanItemName = taskItem.name || '';
-                    const hasOk = dbgRes.log.includes(`chunk_ok: file=${cleanItemName} chunk=${i}/${totalChunks}`) ||
-                                  dbgRes.log.includes(`chunk=${i}/${totalChunks}`);
+                    const cleanItemName = (taskItem.name || '').replace(/.*[\/\\]/, '');
+                    const hasOk = dbgRes.log.includes(`chunk=${i}/${totalChunks}`) ||
+                                  dbgRes.log.includes(`chunk_ok: file=${cleanItemName}`);
                     if (hasOk) {
                       chunkSuccess = true;
                       serverChunkRes = { status: 'success', verified_via_debug_log: true };
@@ -608,8 +638,9 @@ export default function FilesScreen({ navigation }) {
               const preview = rawText ? (rawText.length > 120 ? rawText.substring(0, 120) + '...' : rawText) : '空响应 (0字节)';
               let errorMsg = resJson?.message || preview;
 
-              if (preview.includes('未知操作') || errorMsg.includes('未知操作')) {
-                errorMsg = '服务端 API 脚本版本过旧，未包含分片上传接口。请进入 App【设置】点击【更新后端 API】后重试。';
+              if (preview.includes('未知操作') || errorMsg.includes('未知操作') || errorMsg.includes('Unknown action')) {
+                await autoSyncServerApi(cleanBaseUrl, apiToken, serverApiVersionRef);
+                errorMsg = '已自动推送最新服务端 API 脚本，正在重试...';
               }
 
               if (resJson && resJson.status === 'error') {
@@ -621,8 +652,9 @@ export default function FilesScreen({ navigation }) {
                 try {
                   const dbgRes = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=upload_debug&_t=${Date.now()}`, {}, 4000, 0).catch(() => null);
                   if (dbgRes) {
-                    const lastLines = (dbgRes.log || '').split('\n').filter(Boolean).slice(-2).join(' | ');
-                    diagInfo = `\n[服务端API版本: ${dbgRes.api_version || '未知'}]\n[服务端状态: ${lastLines || '无日志'}]`;
+                    const lastLines = (dbgRes.log || '').split('\n').filter(Boolean).slice(-4).join(' | ');
+                    const sVer = dbgRes.api_version || dbgRes.version || serverApiVersionRef.current || '未知';
+                    diagInfo = `\n[服务端API版本: ${sVer}]\n[服务端状态: ${lastLines || '无日志'}]`;
                   }
                 } catch (_) {}
 

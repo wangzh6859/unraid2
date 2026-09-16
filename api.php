@@ -6,7 +6,7 @@
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.15.06');
+define('UNRAID_API_VERSION', '2026.09.16.01');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -36,18 +36,29 @@ define('UNRAID_API_VERSION', '2026.09.15.06');
 
 // Diagnostic logger with multi-path fallback (guaranteed writable in Unraid WebGUI)
 function get_debug_log_path() {
+    static $chosen = null;
+    if ($chosen !== null) return $chosen;
     $candidates = [
-        '/var/local/emhttp/unraid_api_debug.log',
         '/tmp/unraid_api_debug.log',
-        '/tmp/unraid_upload_debug.log',
+        '/var/local/emhttp/unraid_api_debug.log',
         dirname(__FILE__) . '/unraid_api_debug.log',
     ];
     foreach ($candidates as $p) {
-        if (@file_exists($p) && @is_writable($p)) return $p;
-        $d = dirname($p);
-        if (@is_dir($d) && @is_writable($d)) return $p;
+        if (@file_exists($p)) {
+            if (@is_writable($p)) {
+                $chosen = $p;
+                return $chosen;
+            }
+        } else {
+            $d = dirname($p);
+            if (@is_dir($d) && @is_writable($d)) {
+                $chosen = $p;
+                return $chosen;
+            }
+        }
     }
-    return '/tmp/unraid_api_debug.log';
+    $chosen = '/tmp/unraid_api_debug.log';
+    return $chosen;
 }
 
 function log_upload_debug($msg) {
@@ -575,15 +586,11 @@ function json_output($data, $code = 200) {
 
     echo $json;
 
-    // Fully flush all active output buffers to FastCGI/Nginx socket before completing
+    // Fully flush all active output buffers before exit
     while (ob_get_level() > 0) {
         @ob_end_flush();
     }
     @flush();
-
-    if (function_exists('fastcgi_finish_request')) {
-        @fastcgi_finish_request();
-    }
     exit;
 }
 
@@ -3467,6 +3474,7 @@ function handle_file_chunk() {
         if ($isComplete) {
             json_output([
                 'status' => 'success',
+                'api_version' => UNRAID_API_VERSION,
                 'complete' => true,
                 'message' => '文件已成功写入 Unraid 存储',
                 'path' => $destPath,
@@ -3477,6 +3485,7 @@ function handle_file_chunk() {
         } else {
             json_output([
                 'status' => 'success',
+                'api_version' => UNRAID_API_VERSION,
                 'complete' => false,
                 'chunk_index' => $chunkIndex,
                 'total_chunks' => $totalChunks,
@@ -3488,35 +3497,25 @@ function handle_file_chunk() {
         log_upload_debug("chunk_exception: " . $e->getMessage() . " in " . basename($e->getFile()) . ":" . $e->getLine());
         json_output([
             'status' => 'error',
+            'api_version' => UNRAID_API_VERSION,
             'message' => '分片处理异常: ' . $e->getMessage() . ' (' . basename($e->getFile()) . ':' . $e->getLine() . ')'
         ], 500);
     }
 }
 
 function handle_upload_debug() {
+    $path = get_debug_log_path();
     $logContent = '';
-    $usedPath = '';
-    $candidates = [
-        '/var/local/emhttp/unraid_api_debug.log',
-        '/tmp/unraid_api_debug.log',
-        '/tmp/unraid_upload_debug.log',
-        dirname(__FILE__) . '/unraid_api_debug.log',
-    ];
-    foreach ($candidates as $p) {
-        if (@file_exists($p)) {
-            $raw = @file_get_contents($p);
-            if (!empty($raw)) {
-                $logContent = $raw;
-                $usedPath = $p;
-                break;
-            }
+    $usedPath = $path;
+    if (@file_exists($path)) {
+        $raw = @file_get_contents($path);
+        if (!empty($raw)) {
+            $lines = explode("\n", trim($raw));
+            $logContent = implode("\n", array_slice($lines, -40));
         }
     }
     if (empty($logContent)) {
         $logContent = 'No upload log recorded yet.';
-    } else {
-        $lines = explode("\n", trim($logContent));
-        $logContent = implode("\n", array_slice($lines, -40));
     }
 
     $tmpDir = sys_get_temp_dir();
@@ -3526,6 +3525,8 @@ function handle_upload_debug() {
 
     json_output([
         'status' => 'success',
+        'api_version' => UNRAID_API_VERSION,
+        'version' => UNRAID_API_VERSION,
         'log' => $logContent,
         'log_file' => $usedPath ?: 'none',
         'php_version' => PHP_VERSION,

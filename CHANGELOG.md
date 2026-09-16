@@ -4,6 +4,21 @@
 
 ---
 
+## [v1.3.200] - 2026-09-16
+> **核心主题**：彻底移除 `fastcgi_finish_request` 根治 Nginx Keep-Alive 截断、内置全量离线 API 脚本直推、文件管理无感热同步与双重回验增强
+
+### 🚀 彻底根除 `fastcgi_finish_request()` 造成的 Nginx 0 字节截断
+- **移除有缺陷的 FastCGI 显式终结调用**：在 PHP-FPM 配合 Nginx `fastcgi_keep_conn on` 环境下，`json_output()` 调用 `fastcgi_finish_request()` 会导致 FastCGI 会话 prematurely 结束并丢弃响应体，输出空响应（HTTP 200，0 字节）。现彻底移除该调用，由 PHP 运行时以标准方式清空输出缓冲区后自然退出，根除任何 0 字节丢包可能。
+- **日志路径统一与全权限锁定**：统一调试日志写入与读取路径，首选 `/tmp/unraid_api_debug.log`，彻底杜绝因目录权限不一致导致的读取旧日志文件现象。
+- **所有响应显式附带 `api_version`**：分片成功、分片失败、调试信息接口均显式带回服务端的当前真实版本号，告别“服务端API版本: 未知”。
+
+### ⚡ 离线内置 API 脚本直推（零外部网络依赖）
+- **客户端随包内置最新 `api.php`**：在 App 打包构建时，将最新版本的 `api.php` 完整代码直接编译打包进应用（`utils/bundledApi.js`）。
+- **无感秒级静默直推**：进入【文件】页面或启动文件上传任务前，App 自动核验服务端版本号；若低于内置版本，无需 Unraid 服务器连接 GitHub（解决国内服务器无法访问 raw.githubusercontent.com 的问题），手机直接通过 `action=update_api_file` 将最新 API 代码推送给服务端，50毫秒内静默升级完成！
+- **设置页升级一键直推**：设置页中的【更新后端 API】新增 Engine 0 直推模式，点击即以毫秒级完成升级，再无需等待外部网络拉取。
+
+---
+
 ## [v1.3.199] - 2026-09-15
 > **核心主题**：强制刷新 PHP 4KB 内部缓冲区根治 FastCGI 空响应、分片物理落盘日志二次回验、自动前置热更新与精准排障
 

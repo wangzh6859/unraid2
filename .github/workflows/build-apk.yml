@@ -35,6 +35,9 @@ jobs:
       - name: Patch Native Dependencies
         run: node scripts/patch-background-actions.js
 
+      - name: Sync Bundled API Code
+        run: node scripts/sync-bundled-api.js
+
       - name: Auto Bump Version
         run: |
           node -e "
