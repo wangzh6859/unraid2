@@ -4,6 +4,18 @@
 
 ---
 
+## [v1.3.204] - 2026-09-16
+> **核心主题**：修复 `content://` 流式读取异常（解决 `readAsStringAsync` 不支持 SAF URI 的报错）
+
+### 🔧 修复 `content://` 流式读取报错
+- **问题根源**：上个版本为了根除大文件选择 OOM，禁用了 `DocumentPicker` 的 `copyToCacheDirectory` 机制，直接获取了原生 `content://` URI。但在使用 `expo-file-system` 提供的 `readAsStringAsync` 方法截取分片时，因其无法直接解析 Android 存储访问框架 (SAF) 的 `content://` 协议流而抛出 `Unsupported scheme for location` 错误。
+- **稳健缓冲流机制**：
+  - 在分片上传启动前，对 `content://` 协议的文件进行原生级异步拷贝（`FileSystem.copyAsync`）。该拷贝由底层的流式通道完成，没有内存爆炸隐患。
+  - 将流安全转移到沙盒 `tempSourceUri`，并从安全路径执行 `readAsStringAsync` 分片读取，完成后即刻擦除缓存。
+  - 成功化解 SAF 读权限限制与 OOM 的双重矛盾，打通了最终的完整上传链路。
+
+---
+
 ## [v1.3.203] - 2026-09-16
 > **核心主题**：彻底根治大文件上传 HTTP 200 空响应（RFC 1867 原生 Multipart 表单直传彻底免除 WAF/代理深度包检测拦截）、彻底解决首次选文件闪退（DocumentPicker 禁用缓存硬拷贝、零内存开销 content:// 流式分片）、1MB 高速并发分片引擎
 

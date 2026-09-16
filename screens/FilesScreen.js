@@ -491,10 +491,30 @@ export default function FilesScreen({ navigation }) {
       await backgroundTransferManager.notifyTransferStarted(taskItem);
     } catch (_) {}
 
-    const workingUri = taskItem.uri;
+    const workingUriOriginal = taskItem.uri;
     const tempChunkUri = FileSystem.cacheDirectory + `chunk_${taskId}.tmp`;
+    const tempSourceUri = FileSystem.cacheDirectory + `source_${taskId}.tmp`;
+    let workingUri = workingUriOriginal;
+    let usingTempSource = false;
 
     try {
+      // expo-file-system's readAsStringAsync does not support content:// URIs directly.
+      // We safely buffer it to a local file streamingly (which doesn't cause OOM).
+      if (workingUriOriginal.startsWith('content://')) {
+        setTransfers(prev => prev.map(t => (t.id === taskId ? {
+          ...t,
+          status: 'running',
+          speedDisplay: '正在缓冲流...',
+        } : t)));
+        try {
+          await FileSystem.copyAsync({ from: workingUriOriginal, to: tempSourceUri });
+          workingUri = tempSourceUri;
+          usingTempSource = true;
+        } catch (copyErr) {
+          throw new Error('无法读取系统文件，请检查存储权限或更换选择器: ' + copyErr.message);
+        }
+      }
+
       let totalSize = taskItem.size || 0;
       try {
         const fileInfo = await FileSystem.getInfoAsync(workingUri);
@@ -706,6 +726,11 @@ export default function FilesScreen({ navigation }) {
       try {
         await FileSystem.deleteAsync(tempChunkUri, { idempotent: true });
       } catch (_) {}
+      if (usingTempSource) {
+        try {
+          await FileSystem.deleteAsync(tempSourceUri, { idempotent: true });
+        } catch (_) {}
+      }
 
       if (!finalServerResult || finalServerResult.status !== 'success') {
         throw new Error(finalServerResult?.message || '文件落盘确认失败，请重试');
@@ -750,6 +775,17 @@ export default function FilesScreen({ navigation }) {
 
     } catch (err) {
       delete activeTasksRef.current[taskId];
+
+      // Cleanup temp chunks on error/cancel
+      try {
+        await FileSystem.deleteAsync(tempChunkUri, { idempotent: true });
+      } catch (_) {}
+      if (usingTempSource) {
+        try {
+          await FileSystem.deleteAsync(tempSourceUri, { idempotent: true });
+        } catch (_) {}
+      }
+
       const isCancelled = abortController.signal.aborted || (activeTasksRef.current[taskId]?.cancelled) || err.name === 'AbortError' || (err.message && err.message.includes('abort'));
 
       try {
