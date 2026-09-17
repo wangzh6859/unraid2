@@ -8,22 +8,33 @@
  */
 import * as FileSystem from 'expo-file-system';
 import base64 from 'base-64';
-import { ensureCacheDir, enforceCacheLimit } from './cacheManager';
+import { ensureCacheDir, enforceCacheLimit, saveToCache } from './cacheManager';
 
-/** 下载到预览缓存目录，返回本地 uri（自动执行 LRU 清理） */
+/** 下载到预览缓存目录，返回本地 uri（自动镜像至指定下载目录 temp/ 并执行 LRU 清理） */
 export const downloadToCache = async ({ file, getDirectUrl, authHeaders }) => {
+  const safeName = file.name || 'document_' + Date.now();
   const dir = await ensureCacheDir();
-  const localUri = dir + encodeURIComponent(file.name);
+  const localUri = dir + encodeURIComponent(safeName);
   const targetUrl = getDirectUrl ? getDirectUrl(file.path || file.href) : (file.url || file.href);
   const headers = (typeof authHeaders === 'function' ? authHeaders() : authHeaders) || {};
   const res = await FileSystem.downloadAsync(targetUrl, localUri, { headers });
   if (res.status !== 200 && res.status !== 206) {
+    await FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => {});
     throw new Error(`下载失败 (HTTP ${res.status})`);
   }
   const info = await FileSystem.getInfoAsync(res.uri);
   if (!info.exists || info.size === 0) {
+    await FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => {});
     throw new Error('下载文件为空或不存在');
   }
+
+  // 物理镜像同步至用户指定下载目录下的 temp/ 文件夹中
+  try {
+    await saveToCache({ fileName: safeName, localTempUri: res.uri });
+  } catch (err) {
+    console.warn('[previewUtils] Failed to save copy into designated temp dir:', err);
+  }
+
   await enforceCacheLimit();
   return res.uri;
 };

@@ -52,8 +52,8 @@ export default function CodeTextViewer({ item, serverUrl, apiToken, streamUrl, o
 
     const targetPath = item?.path || item?.href || '';
     const activeEncoding = overrideEncoding !== undefined ? overrideEncoding : encoding;
-    // 2MB chunk by default; if loadFull is true, max_bytes=0 fetches entire file
-    const maxBytes = loadFull ? 0 : 2097152;
+    // 512KB chunk by default (~250,000 Chinese characters / 20,000 lines); if loadFull is true, max_bytes=0 fetches entire file
+    const maxBytes = loadFull ? 0 : 524288;
 
     let url = `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_read&path=${encodeURIComponent(targetPath)}&max_bytes=${maxBytes}&offset=${offset}`;
     if (activeEncoding && activeEncoding !== 'auto') {
@@ -90,7 +90,9 @@ export default function CodeTextViewer({ item, serverUrl, apiToken, streamUrl, o
           setLoadError(json?.message || '读取文件失败');
         }
       } else {
-        setLoadError(`HTTP ${res?.status || 'Error'}`);
+        const errJson = await res?.json().catch(() => null);
+        const errMsg = errJson?.message || (await res?.text().catch(() => '')) || `HTTP ${res?.status || 'Error'}`;
+        setLoadError(errMsg);
       }
     } catch (e) {
       if (e.name !== 'AbortError') {
@@ -224,7 +226,7 @@ export default function CodeTextViewer({ item, serverUrl, apiToken, streamUrl, o
               {loadingMore ? (
                 <ActivityIndicator size="small" color="#ffffff" />
               ) : (
-                <Text style={styles.loadMoreBtnText}>+2MB 下一段</Text>
+                <Text style={styles.loadMoreBtnText}>+512KB 下一段</Text>
               )}
             </TouchableOpacity>
 

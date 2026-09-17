@@ -17,7 +17,7 @@ import {
 } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import {
-  getDownloadDir, setDownloadDir, resetDownloadDir,
+  getDownloadDir, setDownloadDir, resetDownloadDir, getCacheDirPath,
   getCacheSize as getPreviewCacheSize, getCacheLimitBytes, setCacheLimitMB,
   clearCache as clearPreviewCache, formatBytes as fmtBytes,
 } from '../utils/cacheManager';
@@ -119,6 +119,7 @@ export default function SettingsScreen({ navigation }) {
 
   // Download & Cache settings
   const [downloadDir, setDownloadDirState] = useState(null);
+  const [cacheDirPath, setCacheDirPath] = useState('');
   const [cacheLimitMB, setCacheLimitMBState] = useState(500);
   const [cacheSizeBytes, setCacheSizeBytes] = useState(0);
   const [limitVisible, setLimitVisible] = useState(false);
@@ -465,6 +466,9 @@ export default function SettingsScreen({ navigation }) {
       const dir = await getDownloadDir();
       setDownloadDirState(dir);
 
+      const cPath = await getCacheDirPath();
+      setCacheDirPath(cPath);
+
       const limitBytes = await getCacheLimitBytes();
       setCacheLimitMBState(Math.round(limitBytes / 1024 / 1024));
 
@@ -500,9 +504,25 @@ export default function SettingsScreen({ navigation }) {
     try {
       const perm = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
       if (perm.granted && perm.directoryUri) {
-        await setDownloadDir(perm.directoryUri, '已授权目录');
-        setDownloadDirState({ uri: perm.directoryUri, name: '已授权目录', configured: true });
-        showConfirm({ type: 'success', title: '设置成功', message: '已将下载目录指向你授权的系统文件夹。', showCancel: false });
+        let cleanName = '已授权目录';
+        try {
+          const dec = decodeURIComponent(perm.directoryUri);
+          if (dec.includes(':')) {
+            const parts = dec.split(':');
+            const lastPart = parts[parts.length - 1];
+            if (lastPart) cleanName = lastPart;
+          }
+        } catch (_) {}
+        await setDownloadDir(perm.directoryUri, cleanName);
+        setDownloadDirState({ uri: perm.directoryUri, name: cleanName, configured: true });
+        const cPath = await getCacheDirPath();
+        setCacheDirPath(cPath);
+        showConfirm({
+          type: 'success',
+          title: '设置成功',
+          message: `已将下载目录指向【${cleanName}】文件夹，预览缓存将保存在其 temp/ 目录下。`,
+          showCancel: false,
+        });
       } else {
         showConfirm({ type: 'info', title: '已取消', message: '未授权任何文件夹。', showCancel: false });
       }
@@ -515,6 +535,8 @@ export default function SettingsScreen({ navigation }) {
     await resetDownloadDir();
     const dir = await getDownloadDir();
     setDownloadDirState(dir);
+    const cPath = await getCacheDirPath();
+    setCacheDirPath(cPath);
     showConfirm({
       type: 'success',
       title: '已恢复默认',
@@ -529,7 +551,7 @@ export default function SettingsScreen({ navigation }) {
     showConfirm({
       type: 'danger',
       title: '清理预览缓存',
-      message: '确定要清除所有本地预览缓存文件吗？',
+      message: '确定要清除指定下载目录 temp/ 及所有本地预览缓存文件吗？',
       confirmText: '确认清理',
       onConfirm: async () => {
         setIsClearing(true);
@@ -538,6 +560,8 @@ export default function SettingsScreen({ navigation }) {
           const bytes = await getPreviewCacheSize();
           setCacheSizeBytes(bytes);
           setCacheSize(fmtBytes(bytes));
+          const cPath = await getCacheDirPath();
+          setCacheDirPath(cPath);
           showConfirm({
             type: 'success',
             title: '清理完成',
@@ -1229,6 +1253,20 @@ export default function SettingsScreen({ navigation }) {
 
         <View style={styles.divider} />
 
+        <View style={styles.row}>
+          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+            <FolderDown color={colors.accent} size={20} />
+          </View>
+          <View style={styles.infoBox}>
+            <Text style={styles.rowTitle}>缓存落盘目录</Text>
+            <Text style={styles.rowSub} numberOfLines={1}>
+              {cacheDirPath || (downloadDir ? `${downloadDir.name}/temp/` : 'temp/')}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.divider} />
+
         <TouchableOpacity style={styles.row} onPress={openLimitInput}>
           <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}>
             <Info color={colors.amber} size={20} />
@@ -1328,11 +1366,14 @@ export default function SettingsScreen({ navigation }) {
           <View style={styles.infoBox}>
             <Text style={styles.rowTitle}>后端 API 核心版本</Text>
             <Text style={styles.rowSub}>
-              {serverApiVersion ? `当前运行：v${serverApiVersion}` : '点击更新或刷新同步'}
+              {serverApiVersion ? `服务端运行：v${serverApiVersion}` : '点击更新或刷新同步'}
+              {Boolean(serverApiVersion && serverApiVersion < BUNDLED_API_VERSION) && (
+                <Text style={{ color: colors.amber, fontWeight: '700' }}> (有新版 v{BUNDLED_API_VERSION})</Text>
+              )}
             </Text>
           </View>
           <TouchableOpacity
-            style={[styles.updateCheckBtn, { backgroundColor: colors.green }]}
+            style={[styles.updateCheckBtn, { backgroundColor: (serverApiVersion && serverApiVersion < BUNDLED_API_VERSION) ? colors.amber : colors.green }]}
             onPress={handleSelfUpdateApi}
             disabled={isUpdatingApi}
             activeOpacity={0.8}
@@ -1342,7 +1383,9 @@ export default function SettingsScreen({ navigation }) {
             ) : (
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <RotateCw color="#ffffff" size={13} style={{ marginRight: 4 }} />
-                <Text style={styles.updateCheckBtnText}>在线更新 API</Text>
+                <Text style={styles.updateCheckBtnText}>
+                  {(serverApiVersion && serverApiVersion < BUNDLED_API_VERSION) ? '一键升级 API' : '在线更新 API'}
+                </Text>
               </View>
             )}
           </TouchableOpacity>

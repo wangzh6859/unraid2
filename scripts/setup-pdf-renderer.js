@@ -22,6 +22,7 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.pdf.PdfRenderer;
+import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
@@ -36,6 +37,7 @@ import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.WritableMap;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.net.URLDecoder;
 import java.security.MessageDigest;
@@ -78,6 +80,23 @@ public class PdfRendererModule extends ReactContextBaseJavaModule {
         return f;
     }
 
+    private ParcelFileDescriptor openPfd(String rawPath) throws Exception {
+        if (rawPath == null || rawPath.trim().isEmpty()) {
+            throw new FileNotFoundException("PDF 文件路径为空");
+        }
+        if (rawPath.startsWith("content://")) {
+            Uri uri = Uri.parse(rawPath);
+            ParcelFileDescriptor pfd = reactContext.getContentResolver().openFileDescriptor(uri, "r");
+            if (pfd == null) throw new FileNotFoundException("无法打开系统文档内容: " + rawPath);
+            return pfd;
+        }
+        File file = resolveFile(rawPath);
+        if (file == null || !file.exists() || !file.isFile() || file.length() == 0) {
+            throw new FileNotFoundException("PDF 文件不存在或为空: " + rawPath);
+        }
+        return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
+    }
+
     private String getMd5(String input) {
         try {
             MessageDigest md = MessageDigest.getInstance("MD5");
@@ -98,13 +117,7 @@ public class PdfRendererModule extends ReactContextBaseJavaModule {
             ParcelFileDescriptor pfd = null;
             PdfRenderer renderer = null;
             try {
-                File file = resolveFile(filePath);
-                if (file == null || !file.exists() || !file.isFile() || file.length() == 0) {
-                    promise.reject("FILE_NOT_FOUND", "PDF 文件不存在或为空: " + filePath);
-                    return;
-                }
-
-                pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
+                pfd = openPfd(filePath);
                 renderer = new PdfRenderer(pfd);
                 int pageCount = renderer.getPageCount();
                 int width = 0;
@@ -116,11 +129,21 @@ public class PdfRendererModule extends ReactContextBaseJavaModule {
                     page.close();
                 }
 
+                long fileSize = 0;
+                if (filePath.startsWith("content://")) {
+                    try {
+                        fileSize = pfd.getStatSize();
+                    } catch (Exception ignored) {}
+                } else {
+                    File file = resolveFile(filePath);
+                    if (file != null) fileSize = file.length();
+                }
+
                 WritableMap map = Arguments.createMap();
                 map.putInt("pageCount", pageCount);
                 map.putInt("width", width);
                 map.putInt("height", height);
-                map.putDouble("fileSize", (double) file.length());
+                map.putDouble("fileSize", (double) fileSize);
                 promise.resolve(map);
 
             } catch (Exception e) {
@@ -147,19 +170,19 @@ public class PdfRendererModule extends ReactContextBaseJavaModule {
                 Bitmap bitmap = null;
                 FileOutputStream fos = null;
                 try {
-                    File file = resolveFile(filePath);
-                    if (file == null || !file.exists() || !file.isFile()) {
-                        promise.reject("FILE_NOT_FOUND", "PDF 文件不存在: " + filePath);
-                        return;
-                    }
-
                     File cacheDir = new File(reactContext.getCacheDir(), "pdf_rendered");
                     if (!cacheDir.exists()) {
                         cacheDir.mkdirs();
                     }
 
                     int effectiveDpi = (dpi >= 72 && dpi <= 300) ? dpi : 144;
-                    String fileKey = file.getAbsolutePath() + "_" + file.lastModified() + "_" + file.length();
+                    String fileKey = filePath;
+                    if (!filePath.startsWith("content://")) {
+                        File file = resolveFile(filePath);
+                        if (file != null && file.exists()) {
+                            fileKey = file.getAbsolutePath() + "_" + file.lastModified() + "_" + file.length();
+                        }
+                    }
                     String hash = getMd5(fileKey);
                     File cachedFile = new File(cacheDir, hash + "_p" + pageIndex + "_d" + effectiveDpi + ".jpg");
 
@@ -172,7 +195,7 @@ public class PdfRendererModule extends ReactContextBaseJavaModule {
                         return;
                     }
 
-                    pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
+                    pfd = openPfd(filePath);
                     renderer = new PdfRenderer(pfd);
                     int totalPages = renderer.getPageCount();
                     if (pageIndex < 0 || pageIndex >= totalPages) {

@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.17.07
+ * Version: 2026.09.17.08
  * Release: 2026-09-17
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.17.07');
+define('UNRAID_API_VERSION', '2026.09.17.08');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -3213,9 +3213,9 @@ function handle_file_read() {
             json_output(['status' => 'error', 'message' => '文件体积过大（超过 50MB），建议直接下载至手机查看'], 400);
         }
 
-        // Default 2MB (2,097,152 bytes) reads ~1 million Chinese characters / 50,000+ lines in one shot
+        // Default 512KB (524,288 bytes) reads ~250,000 Chinese characters / 20,000+ lines in one shot
         // If max_bytes=0, read until end of file
-        $maxBytes = isset($_GET['max_bytes']) ? intval($_GET['max_bytes']) : 2097152;
+        $maxBytes = isset($_GET['max_bytes']) ? intval($_GET['max_bytes']) : 524288;
         $offset = isset($_GET['offset']) ? max(0, intval($_GET['offset'])) : 0;
 
         $fp = @fopen($filePath, 'rb');
@@ -4275,21 +4275,24 @@ function get_gpu_telemetry() {
 
     $gpustatFallback = null;
 
-    // 1. Check Unraid GPU Statistics plugin (/tmp/gpustat.json)
+    // 1. Check Unraid GPU Statistics plugin (gpustatus.php or /tmp/gpustat.json)
+    $gpustatScripts = [
+        '/usr/local/emhttp/plugins/gpustat/gpustatus.php',
+        '/usr/local/emhttp/plugins/gpustat/gpustatusmulti.php',
+        '/usr/local/emhttp/plugins/gpustat/scripts/gpustat.php',
+    ];
     $gpustatFile = '/tmp/gpustat.json';
+
+    // Proactively trigger gpustatus script if available to get fresh data
+    foreach ($gpustatScripts as $script) {
+        if (file_exists($script)) {
+            @shell_exec("php " . escapeshellarg($script) . " >/dev/null 2>&1");
+            break;
+        }
+    }
+
     if (file_exists($gpustatFile)) {
         clearstatcache(true, $gpustatFile);
-        $fileAge = time() - @filemtime($gpustatFile);
-        if ($fileAge > 3) {
-            // Attempt to trigger gpustat update script if available on Unraid
-            $gpustatScript = '/usr/local/emhttp/plugins/gpustat/scripts/gpustat.php';
-            if (file_exists($gpustatScript)) {
-                @exec("php " . escapeshellarg($gpustatScript) . " >/dev/null 2>&1");
-                clearstatcache(true, $gpustatFile);
-                $fileAge = time() - @filemtime($gpustatFile);
-            }
-        }
-
         $raw = @file_get_contents($gpustatFile);
         if ($raw) {
             $json = @json_decode($raw, true);
@@ -4300,7 +4303,7 @@ function get_gpu_telemetry() {
                     $cand = $gpuData;
                     $cand['name'] = $mName;
                     $cand['vendor'] = !empty($firstGpu['vendor']) ? $firstGpu['vendor'] : (stripos($mName, 'NVIDIA') !== false ? 'NVIDIA' : (stripos($mName, 'Intel') !== false ? 'Intel' : 'AMD'));
-                    $cand['usage'] = isset($firstGpu['util']) ? (float)$firstGpu['util'] : (isset($firstGpu['usage']) ? (float)$firstGpu['usage'] : 0);
+                    $cand['usage'] = isset($firstGpu['util']) ? (float)$firstGpu['util'] : (isset($firstGpu['usage']) ? (float)$firstGpu['usage'] : (isset($firstGpu['gpu']) ? (float)$firstGpu['gpu'] : 0));
                     $cand['temp'] = isset($firstGpu['temp']) ? (int)$firstGpu['temp'] : null;
                     if (isset($firstGpu['memused']) && isset($firstGpu['memtotal'])) {
                         $cand['vram_used'] = (int)$firstGpu['memused'];
@@ -4311,11 +4314,11 @@ function get_gpu_telemetry() {
                     if (isset($firstGpu['clock'])) $cand['clock_mhz'] = (int)$firstGpu['clock'];
                     $cand['driver'] = 'gpustat';
 
-                    // If file was updated within 3 seconds, it's truly live
-                    if ($fileAge <= 3) {
+                    // If file was updated recently, return it
+                    $fileAge = time() - @filemtime($gpustatFile);
+                    if ($fileAge <= 5) {
                         return $cand;
                     } else {
-                        // Keep as fallback in case hardware probes find nothing
                         $gpustatFallback = $cand;
                     }
                 }
@@ -4353,7 +4356,7 @@ function get_gpu_telemetry() {
         }
     }
 
-    // 3. Check Intel iGPU (QuickSync / i915) via sysfs and lspci
+    // 3. Check Intel iGPU (QuickSync / i915) via sysfs, intel_gpu_top and lspci
     $drmCards = glob('/sys/class/drm/card*');
     if ($drmCards) {
         foreach ($drmCards as $card) {
@@ -4411,11 +4414,25 @@ function get_gpu_telemetry() {
                         if (file_exists($ff)) { $minFreq = (int)trim(@file_get_contents($ff)); break; }
                     }
 
+                    // Live engine usage query via intel_gpu_top (JSON sampling mode)
                     $usage = 0;
-                    if ($curFreq > 0 && $maxFreq > $minFreq) {
-                        $usage = round((($curFreq - $minFreq) / ($maxFreq - $minFreq)) * 100, 1);
-                        $usage = max(0, min(100, $usage));
+                    $topOut = @shell_exec('timeout 1s intel_gpu_top -J -s 120 2>/dev/null');
+                    if (!empty($topOut)) {
+                        $topData = @json_decode($topOut, true);
+                        if (is_array($topData) && isset($topData['engines']) && is_array($topData['engines'])) {
+                            $maxEngineBusy = 0;
+                            foreach ($topData['engines'] as $engName => $eng) {
+                                if (isset($eng['busy']) && is_numeric($eng['busy'])) {
+                                    $b = (float)$eng['busy'];
+                                    if ($b > $maxEngineBusy) $maxEngineBusy = $b;
+                                }
+                            }
+                            $usage = round(max(0, min(100, $maxEngineBusy)), 1);
+                        }
                     }
+
+                    // CRITICAL: If no active engine busy was measured, usage is 0 (idle), NEVER 95%!
+                    // Clock frequency is accurately reported in clock_mhz.
 
                     $temp = null;
                     $hwmon = glob("{$card}/device/hwmon/hwmon*/temp1_input");

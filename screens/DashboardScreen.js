@@ -19,6 +19,7 @@ import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import { getWolConfig, sendWakeOnLanPacket, formatMacAddress } from '../utils/wolManager';
 import { resolveDockerWebUrl, getProxyConfig, getDockerAliases } from '../utils/dockerWebUiManager';
+import { BUNDLED_API_VERSION, BUNDLED_API_CODE } from '../utils/bundledApi';
 
 // -------------------------------------------------------------
 // Vector Math Helpers for SVG Gauges & Waves
@@ -207,6 +208,36 @@ export default function DashboardScreen({ navigation }) {
     return n > 1024 ? (n / 1024).toFixed(1) + ' MB/s' : n.toFixed(1) + ' KB/s';
   };
 
+  const lastApiSyncCheckRef = useRef(0);
+  const checkAndSyncServerApi = async (url, token) => {
+    const now = Date.now();
+    if (now - lastApiSyncCheckRef.current < 120000) return; // check at most once every 2 mins
+    lastApiSyncCheckRef.current = now;
+
+    try {
+      const cleanUrl = url.replace(/\/+$/, '');
+      const verRes = await apiFetchJson(`${cleanUrl}/api.php?token=${encodeURIComponent(token)}&action=version&_t=${now}`, {}, 4000, 0).catch(() => null);
+      const srvVer = verRes?.api_version || verRes?.version;
+      if (!srvVer || srvVer < BUNDLED_API_VERSION) {
+        console.log(`[Dashboard AutoSync] Server API (${srvVer || 'none'}) < bundled (${BUNDLED_API_VERSION}), pushing update...`);
+        const pushRes = await apiFetch(`${cleanUrl}/api.php?token=${encodeURIComponent(token)}&action=update_api_file`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'X-API-Token': token,
+          },
+          body: BUNDLED_API_CODE,
+        }, 12000, 0);
+        const pushJson = await pushRes?.json().catch(() => null);
+        if (pushJson && pushJson.status === 'success') {
+          console.log(`[Dashboard AutoSync] Successfully updated server api.php to ${BUNDLED_API_VERSION}`);
+        }
+      }
+    } catch (e) {
+      console.log('[Dashboard AutoSync] Error checking/pushing api:', e);
+    }
+  };
+
   // 核心拉取逻辑
   const fetchServerData = async () => {
     try {
@@ -218,6 +249,9 @@ export default function DashboardScreen({ navigation }) {
         return;
       }
       setIsConfigured(true);
+
+      // Proactive silent auto-sync check of backend api.php
+      checkAndSyncServerApi(savedUrl, savedToken);
 
       const data = await apiFetchJson(`${savedUrl}/api.php?token=${savedToken}&action=status`, {}, 8000, 1);
       setServerStatus('online');
