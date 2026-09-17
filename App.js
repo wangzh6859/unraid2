@@ -19,6 +19,8 @@ import FilesScreen from './screens/FilesScreen';
 
 // 💡 全局主题上下文
 import { ThemeProvider, useTheme } from './ThemeContext';
+// 💡 全局统一现代化弹窗上下文与 Alert 拦截器
+import { DialogProvider } from './DialogContext';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -234,7 +236,9 @@ export default function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
-        <ThemedRoot />
+        <DialogProvider>
+          <ThemedRoot />
+        </DialogProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );

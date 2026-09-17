@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import {
-  StyleSheet, Text, View, TouchableOpacity, Alert, ActivityIndicator,
+  StyleSheet, Text, View, TouchableOpacity, ActivityIndicator,
   ScrollView, Switch, Modal, TextInput, KeyboardAvoidingView, Platform,
   Pressable, Linking,
 } from 'react-native';
@@ -34,6 +34,14 @@ import {
 } from '../utils/dockerWebUiManager';
 
 const APP_RELEASE_CHANGELOGS = {
+  '1.4.0': `【v1.4.0 核心更新与视觉重构】
+✨ 1. 全局统一现代高质感确认与报错弹窗：
+   - 彻底淘汰原生粗糙系统 Alert.alert，全应用所有操作确认、危险删除、关机重启与报错提示全部切换为现代化 Squircle 卡片。
+   - 细致打磨危险（红）、警示（金）、报错（红）、成功（绿）、信息（蓝）全状态微光胶囊徽章。
+   - 错误与堆栈日志支持自适应滚动查看与长按复制，彻底杜绝排版溢出与截断。
+🔄 2. 1 秒高频传输动态心跳与 2MB 黄金分片：
+   - 传输任务中心严格每秒平滑推进实时流速与已传字节，告别长时假死卡顿。
+   - 2MB 高效分片降低 50% 内存与 JNI 桥接序列化开销，服务端中间分片免 stat 极速落盘。`,
   '1.3.1': `【v1.3.1 核心更新与修复】
 🚀 1. 传输引擎颠覆性升级（原生流式直连）：
    - 采用 Native Binary Streaming 原生二进制流式传输，彻底绕过 Base64 与 JS 内存序列化，局域网与 WiFi 下上传速度暴增 10x-50x，轻松跑满 50MB/s~100MB/s 线速。
@@ -488,12 +496,12 @@ export default function SettingsScreen({ navigation }) {
       if (perm.granted && perm.directoryUri) {
         await setDownloadDir(perm.directoryUri, '已授权目录');
         setDownloadDirState({ uri: perm.directoryUri, name: '已授权目录', configured: true });
-        Alert.alert('设置成功', '已将下载目录指向你授权的系统文件夹。');
+        showConfirm({ type: 'success', title: '设置成功', message: '已将下载目录指向你授权的系统文件夹。', showCancel: false });
       } else {
-        Alert.alert('已取消', '未授权任何文件夹。');
+        showConfirm({ type: 'info', title: '已取消', message: '未授权任何文件夹。', showCancel: false });
       }
     } catch (e) {
-      Alert.alert('失败', e.message);
+      showConfirm({ type: 'error', title: '设置失败', message: e.message, showCancel: false });
     }
   };
 
@@ -1275,7 +1283,7 @@ export default function SettingsScreen({ navigation }) {
             activeOpacity={0.7}
             onPress={() => {
               const versionKey = (appVersion || '').replace(/^v/i, '');
-              const log = APP_RELEASE_CHANGELOGS[versionKey] || APP_RELEASE_CHANGELOGS['1.3.1'];
+              const log = APP_RELEASE_CHANGELOGS[versionKey] || APP_RELEASE_CHANGELOGS['1.4.0'] || APP_RELEASE_CHANGELOGS['1.3.1'];
               showConfirm({
                 type: 'info',
                 title: `v${appVersion} 版本更新详情`,

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator,
-  KeyboardAvoidingView, Platform, Alert, ScrollView, Modal, BackHandler,
+  KeyboardAvoidingView, Platform, ScrollView, Modal, BackHandler,
   Pressable, RefreshControl, AppState,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -350,11 +350,11 @@ export default function FilesScreen({ navigation }) {
           loadDirectory(baseUrl, token, '/mnt');
           return;
         }
-        Alert.alert('读取目录失败', data.message || '服务器拒绝访问');
+        showConfirm({ type: 'error', title: '读取目录失败', message: data.message || '服务器拒绝访问', showCancel: false });
       }
     } catch (e) {
       console.log('[FilesScreen] loadDirectory error:', e);
-      Alert.alert('网络异常', '无法连接到 Unraid 服务器文件模块，请检查网络或代理');
+      showConfirm({ type: 'error', title: '网络异常', message: '无法连接到 Unraid 服务器文件模块，请检查网络或代理', showCancel: false });
     } finally {
       setIsLoadingList(false);
       setIsRefreshing(false);
@@ -1173,10 +1173,10 @@ export default function FilesScreen({ navigation }) {
         setNewFolderName('');
         loadDirectory(serverUrl, apiToken, currentPath);
       } else {
-        Alert.alert('创建失败', data.message || '服务器拒绝创建');
+        showConfirm({ type: 'error', title: '创建失败', message: data.message || '服务器拒绝创建', showCancel: false });
       }
     } catch (e) {
-      Alert.alert('异常', e.message);
+      showConfirm({ type: 'error', title: '创建异常', message: e.message, showCancel: false });
     }
   };
 
@@ -1195,10 +1195,10 @@ export default function FilesScreen({ navigation }) {
         setRenameItem(null);
         loadDirectory(serverUrl, apiToken, currentPath);
       } else {
-        Alert.alert('重命名失败', data.message || '服务器拒绝');
+        showConfirm({ type: 'error', title: '重命名失败', message: data.message || '服务器拒绝', showCancel: false });
       }
     } catch (e) {
-      Alert.alert('异常', e.message);
+      showConfirm({ type: 'error', title: '重命名异常', message: e.message, showCancel: false });
     }
   };
 

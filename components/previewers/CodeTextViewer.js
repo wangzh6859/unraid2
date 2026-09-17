@@ -1,17 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, TextInput, TouchableOpacity,
-  ActivityIndicator, Alert, Platform,
+  ActivityIndicator, Platform,
 } from 'react-native';
 import {
   Save, Edit3, BookOpen, ZoomIn, ZoomOut, WrapText,
   Check, RefreshCw,
 } from 'lucide-react-native';
 import { useTheme } from '../../ThemeContext';
+import { useDialog } from '../../DialogContext';
 import { formatBytes } from '../../utils/cacheManager';
 
 export default function CodeTextViewer({ item, serverUrl, apiToken, streamUrl }) {
   const { colors } = useTheme();
+  const { showError, showSuccess } = useDialog();
 
   const [mode, setMode] = useState('reader'); // 'reader' | 'editor'
   const [content, setContent] = useState('');
@@ -96,12 +98,12 @@ export default function CodeTextViewer({ item, serverUrl, apiToken, streamUrl })
       const json = await res.json();
       if (json.status === 'success') {
         setInitialContent(content);
-        Alert.alert('保存成功', '文件已实时写回 Unraid 服务器！');
+        showSuccess('保存成功', '文件已实时写回 Unraid 服务器！');
       } else {
-        Alert.alert('保存失败', json.message || '服务器拒绝写入');
+        showError('保存失败', json.message || '服务器拒绝写入');
       }
     } catch (e) {
-      Alert.alert('网络异常', e.message);
+      showError('网络异常', e.message);
     } finally {
       setSaving(false);
     }

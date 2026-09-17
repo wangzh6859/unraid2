@@ -1,15 +1,15 @@
 import React from 'react';
 import {
-  StyleSheet, Text, View, TouchableOpacity, Modal, Pressable,
+  StyleSheet, Text, View, TouchableOpacity, Modal, Pressable, ScrollView,
 } from 'react-native';
 import {
-  Trash2, AlertTriangle, CheckCircle2, Info, RotateCw, Power,
+  Trash2, AlertTriangle, CheckCircle2, Info, RotateCw, Power, AlertCircle,
 } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 
 /**
  * ModernConfirmDialog
- * Universal modern squircle confirmation & result notice dialog
+ * Universal modern squircle confirmation & alert/error notice dialog
  */
 export default function ModernConfirmDialog({
   visible,
@@ -21,50 +21,62 @@ export default function ModernConfirmDialog({
   showCancel = true,
   onConfirm,
   onCancel,
+  icon = null,
 }) {
   const { colors } = useTheme();
 
   if (!visible) return null;
 
-  let iconElement = <Info color={colors.accent} size={28} />;
-  let badgeBg = 'rgba(59, 130, 246, 0.15)';
+  let iconElement = icon || <Info color={colors.accent} size={28} />;
+  let badgeBg = 'rgba(56, 189, 248, 0.15)';
   let confirmBg = colors.accent;
   let defaultConfirmLabel = '确定';
 
   if (type === 'danger') {
-    iconElement = <Trash2 color={colors.red} size={28} />;
+    iconElement = icon || <Trash2 color={colors.red} size={28} />;
     badgeBg = 'rgba(239, 68, 68, 0.15)';
     confirmBg = colors.red;
     defaultConfirmLabel = '确认删除';
   } else if (type === 'warning') {
-    iconElement = <AlertTriangle color={colors.amber} size={28} />;
+    iconElement = icon || <AlertTriangle color={colors.amber} size={28} />;
     badgeBg = 'rgba(245, 158, 11, 0.15)';
     confirmBg = colors.amber;
     defaultConfirmLabel = '确认执行';
+  } else if (type === 'error') {
+    iconElement = icon || <AlertCircle color={colors.red} size={28} />;
+    badgeBg = 'rgba(239, 68, 68, 0.15)';
+    confirmBg = colors.red;
+    defaultConfirmLabel = '知道了';
   } else if (type === 'power') {
-    iconElement = <Power color={colors.red} size={28} />;
+    iconElement = icon || <Power color={colors.red} size={28} />;
     badgeBg = 'rgba(239, 68, 68, 0.15)';
     confirmBg = colors.red;
     defaultConfirmLabel = '安全关机';
   } else if (type === 'reboot') {
-    iconElement = <RotateCw color={colors.amber} size={28} />;
+    iconElement = icon || <RotateCw color={colors.amber} size={28} />;
     badgeBg = 'rgba(245, 158, 11, 0.15)';
     confirmBg = colors.amber;
     defaultConfirmLabel = '安全重启';
   } else if (type === 'success') {
-    iconElement = <CheckCircle2 color={colors.green} size={28} />;
+    iconElement = icon || <CheckCircle2 color={colors.green} size={28} />;
     badgeBg = 'rgba(16, 185, 129, 0.15)';
     confirmBg = colors.green;
+    defaultConfirmLabel = '知道了';
+  } else if (type === 'info') {
+    iconElement = icon || <Info color={colors.accent} size={28} />;
+    badgeBg = 'rgba(56, 189, 248, 0.15)';
+    confirmBg = colors.accent;
     defaultConfirmLabel = '知道了';
   }
 
   const finalConfirmText = confirmText || defaultConfirmLabel;
+  const handleDismiss = onCancel || onConfirm;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={handleDismiss}>
       <View style={styles.overlay}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onCancel} />
-        <View style={[styles.card, { backgroundColor: colors.card, borderColor: 'rgba(255, 255, 255, 0.08)' }]}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={handleDismiss} />
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder || 'rgba(255, 255, 255, 0.08)' }]}>
           {/* Top Icon Badge */}
           <View style={[styles.iconBadge, { backgroundColor: badgeBg }]}>
             {iconElement}
@@ -73,10 +85,19 @@ export default function ModernConfirmDialog({
           {/* Title */}
           <Text style={[styles.title, { color: colors.textStrong }]}>{title}</Text>
 
-          {/* Message Content */}
+          {/* Message Content (Scrollable for long errors) */}
           {message ? (
-            <Text style={[styles.message, { color: colors.sub }]}>{message}</Text>
-          ) : null}
+            <ScrollView
+              style={styles.messageScroll}
+              contentContainerStyle={styles.messageScrollContent}
+              showsVerticalScrollIndicator={true}
+              nestedScrollEnabled={true}
+            >
+              <Text selectable={true} style={[styles.message, { color: colors.sub }]}>{message}</Text>
+            </ScrollView>
+          ) : (
+            <View style={{ height: 12 }} />
+          )}
 
           {/* Buttons Row */}
           <View style={styles.buttonRow}>
@@ -148,12 +169,19 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 8,
   },
+  messageScroll: {
+    maxHeight: 180,
+    width: '100%',
+    marginBottom: 20,
+  },
+  messageScrollContent: {
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
   message: {
     fontSize: 14,
     lineHeight: 22,
     textAlign: 'center',
-    marginBottom: 24,
-    paddingHorizontal: 6,
   },
   buttonRow: {
     flexDirection: 'row',
