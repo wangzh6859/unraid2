@@ -6,7 +6,7 @@
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.17.01');
+define('UNRAID_API_VERSION', '2026.09.17.02');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -3332,6 +3332,8 @@ function handle_file_upload() {
 
     json_output([
         'status' => 'success',
+        'complete' => true,
+        'api_version' => UNRAID_API_VERSION,
         'message' => '文件已成功上传至 Unraid 存储',
         'path' => $destPath,
         'name' => $cleanDestName,

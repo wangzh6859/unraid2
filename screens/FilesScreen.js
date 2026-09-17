@@ -594,277 +594,369 @@ export default function FilesScreen({ navigation }) {
         speedDisplay: '正在连接传输...',
       } : t)));
 
-      // 2MB High-Throughput Chunk Engine with Full-Pipelined Background Pre-Encoding:
-      // Perfectly balanced for mobile JS bridge memory and zero-delay socket saturation.
-      const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks (faster bridge transfer & frequent 1s updates)
-      const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
-      let startChunk = Number(taskItem.chunkIndex) || 0;
-      if (startChunk >= totalChunks) startChunk = 0;
-
-      let lastTime = Date.now();
-      let lastLoaded = startChunk * CHUNK_SIZE;
-      let smoothedSpeed = 0;
       let finalServerResult = null;
       let savedPath = `${taskItem.targetPath}/${taskItem.name}`;
-
-      // Initialize live tracker ref for real-time 1-second UI refresh
-      transferProgressRef.current[taskId] = {
-        totalBytes: totalSize,
-        confirmedBytes: startChunk * CHUNK_SIZE,
-        currentChunkLen: 0,
-        chunkStartTime: Date.now(),
-        lastSpeed: 0,
-      };
-
       let activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
 
-      // Async pre-fetch helper: reads chunk slice into Base64 memory AND URL-encodes it in the background!
-      const prepareChunkSlice = async (chunkIdx) => {
-        const off = chunkIdx * CHUNK_SIZE;
-        const len = totalSize > 0 ? Math.min(CHUNK_SIZE, totalSize - off) : 0;
-        if (len <= 0) return { base64Data: '', encodedData: '', len: 0 };
+      // =========================================================================
+      // 🚀 智能双模极速传输：模式一【原生流式直传】(用于 <= 32MB 文件或首发直传)
+      // 原生 OkHttp Socket 直推，0% Base64 膨胀，0 CPU 转义，满带宽 30~80MB/s 瞬间完成！
+      // =========================================================================
+      let directStreamSuccess = false;
+      const canDirectStream = (Number(taskItem.chunkIndex) || 0) === 0 && (totalSize > 0 && totalSize <= 32 * 1024 * 1024);
+
+      if (canDirectStream) {
         try {
-          const base64Data = await FileSystem.readAsStringAsync(workingUri, {
-            encoding: FileSystem.EncodingType.Base64,
-            position: off,
-            length: len,
+          setTransfers(prev => prev.map(t => (t.id === taskId ? {
+            ...t,
+            status: 'running',
+            speedDisplay: '正在极速直传...',
+          } : t)));
+
+          const csrfQuery = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
+          const uploadUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_upload&path=${encodeURIComponent(taskItem.targetPath)}&filename=${encodeURIComponent(taskItem.name)}&size=${totalSize}`;
+
+          const formData = new FormData();
+          formData.append('file', {
+            uri: workingUri,
+            name: taskItem.name,
+            type: 'application/octet-stream',
           });
-          const encodedData = encodeURIComponent(base64Data);
-          return { base64Data, encodedData, len };
-        } catch (readErr) {
-          console.log(`[Upload] prepareChunkSlice error at chunk ${chunkIdx}:`, readErr);
-          throw readErr;
-        }
-      };
-
-      // Guarded prefetch promise that never unhandled-rejects
-      let nextChunkPromise = null;
-      const startNextPrefetch = (idx) => {
-        if (idx < totalChunks) {
-          nextChunkPromise = prepareChunkSlice(idx).catch(() => null);
-        } else {
-          nextChunkPromise = null;
-        }
-      };
-
-      startNextPrefetch(startChunk);
-
-      for (let i = startChunk; i < totalChunks; i++) {
-        if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
-          delete transferProgressRef.current[taskId];
-          return;
-        }
-
-        const offset = i * CHUNK_SIZE;
-        const currentChunkLen = totalSize > 0 ? Math.min(CHUNK_SIZE, totalSize - offset) : 0;
-
-        // Retrieve pre-fetched and pre-encoded data with zero JS thread pause
-        let chunkPayload = null;
-        if (currentChunkLen > 0) {
-          if (nextChunkPromise) {
-            chunkPayload = await nextChunkPromise;
+          formData.append('path', taskItem.targetPath);
+          formData.append('filename', taskItem.name);
+          formData.append('size', String(totalSize));
+          if (activeCsrf) {
+            formData.append('csrf_token', activeCsrf);
           }
-          if (!chunkPayload || !chunkPayload.encodedData) {
-            chunkPayload = await prepareChunkSlice(i);
-          }
-        }
 
-        // Start reading and encoding the next chunk in parallel with the upcoming network upload
-        startNextPrefetch(i + 1);
+          let lastTime = Date.now();
+          let lastLoaded = 0;
+          let smoothedSpeed = 0;
 
-        const encodedData = chunkPayload?.encodedData || '';
+          // 初始化 1 秒动态刷新跟踪器
+          transferProgressRef.current[taskId] = {
+            totalBytes: totalSize,
+            confirmedBytes: 0,
+            currentChunkLen: totalSize,
+            chunkStartTime: Date.now(),
+            lastSpeed: 0,
+          };
 
-        // Record chunk start in tracker for real-time in-flight progress estimation
-        if (transferProgressRef.current[taskId]) {
-          transferProgressRef.current[taskId].confirmedBytes = offset;
-          transferProgressRef.current[taskId].currentChunkLen = currentChunkLen;
-          transferProgressRef.current[taskId].chunkStartTime = Date.now();
-        }
+          const xhr = new XMLHttpRequest();
+          activeTasksRef.current[taskId].xhr = xhr;
 
-        let chunkSuccess = false;
-        let serverChunkRes = null;
+          const streamResult = await new Promise((resolve, reject) => {
+            xhr.upload.onprogress = (event) => {
+              if (event.lengthComputable && event.total > 0) {
+                const loaded = event.loaded;
+                const now = Date.now();
+                const dt = (now - lastTime) / 1000;
+                if (dt >= 0.2) {
+                  const bytesDiff = loaded - lastLoaded;
+                  const instSpeed = Math.max(0, bytesDiff / dt);
+                  smoothedSpeed = smoothedSpeed > 0 ? (smoothedSpeed * 0.65 + instSpeed * 0.35) : instSpeed;
+                  lastTime = now;
+                  lastLoaded = loaded;
+                }
 
-        for (let attempt = 0; attempt < 3; attempt++) {
+                if (transferProgressRef.current[taskId]) {
+                  transferProgressRef.current[taskId].confirmedBytes = loaded;
+                  transferProgressRef.current[taskId].lastSpeed = smoothedSpeed;
+                  transferProgressRef.current[taskId].chunkStartTime = now;
+                }
+
+                const pct = Math.min(99, Math.round((loaded / event.total) * 100));
+                setTransfers(prev => prev.map(t => (t.id === taskId ? {
+                  ...t,
+                  status: 'running',
+                  progress: pct,
+                  transferredBytes: loaded,
+                  totalBytes: totalSize,
+                  sizeText: `${formatBytesFixed(loaded)} / ${formatBytesFixed(totalSize)}`,
+                  speedDisplay: smoothedSpeed > 0 ? `${formatBytesFixed(smoothedSpeed)}/s` : '正在传输...',
+                } : t)));
+              }
+            };
+
+            xhr.onload = () => {
+              let resJson = null;
+              try {
+                resJson = JSON.parse(xhr.responseText);
+              } catch (_) {}
+              resolve({
+                status: xhr.status,
+                resJson,
+                responseText: xhr.responseText || '',
+              });
+            };
+
+            xhr.onerror = () => reject(new Error(`网络传输异常 (XHR 状态: ${xhr.status || 0})`));
+            xhr.ontimeout = () => reject(new Error('上传请求超时'));
+            xhr.onabort = () => reject(new Error('Upload aborted by user'));
+
+            xhr.open('POST', uploadUrl);
+            xhr.timeout = 120000;
+            xhr.setRequestHeader('X-API-Token', apiToken);
+            if (activeCsrf) {
+              xhr.setRequestHeader('X-CSRF-Token', activeCsrf);
+            }
+            xhr.send(formData);
+          });
+
           if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
             delete transferProgressRef.current[taskId];
             return;
           }
-          if (attempt > 0) {
-            activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken, true);
+
+          if (streamResult.status === 200 && streamResult.resJson && streamResult.resJson.status === 'success') {
+            const diskSize = Number(streamResult.resJson.size);
+            if (diskSize === totalSize || totalSize === 0) {
+              directStreamSuccess = true;
+              finalServerResult = streamResult.resJson;
+              if (streamResult.resJson.path) savedPath = streamResult.resJson.path;
+            } else {
+              console.log(`[Upload] Direct stream size mismatch (server=${diskSize}, expected=${totalSize}), falling back to chunk engine...`);
+            }
+          } else {
+            console.log(`[Upload] Direct stream returned HTTP ${streamResult.status}, falling back to chunk engine...`);
+          }
+        } catch (streamErr) {
+          if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
+            delete transferProgressRef.current[taskId];
+            return;
+          }
+          console.log('[Upload] Direct stream error:', streamErr.message, ', falling back to chunk engine...');
+        }
+      }
+
+      // =========================================================================
+      // ⚡ 模式二【超高速流水线分片引擎】(用于 > 32MB 文件、断点续传或直传降级)
+      // 4MB 块对齐分片，全异步后台流水线预读，支持任意尺寸大文件安全稳定落盘
+      // =========================================================================
+      if (!directStreamSuccess) {
+        const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB chunks (4096KB 块对齐)
+        const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
+        let startChunk = Number(taskItem.chunkIndex) || 0;
+        if (startChunk >= totalChunks) startChunk = 0;
+
+        let lastTime = Date.now();
+        let lastLoaded = startChunk * CHUNK_SIZE;
+        let smoothedSpeed = 0;
+
+        // 初始化分片进度跟踪器
+        transferProgressRef.current[taskId] = {
+          totalBytes: totalSize,
+          confirmedBytes: startChunk * CHUNK_SIZE,
+          currentChunkLen: 0,
+          chunkStartTime: Date.now(),
+          lastSpeed: 0,
+        };
+
+        // 异步预读切片（后台执行，免除主线程停顿）
+        const prepareChunkSlice = async (chunkIdx) => {
+          const off = chunkIdx * CHUNK_SIZE;
+          const len = totalSize > 0 ? Math.min(CHUNK_SIZE, totalSize - off) : 0;
+          if (len <= 0) return { base64Data: '', encodedData: '', len: 0 };
+          try {
+            const base64Data = await FileSystem.readAsStringAsync(workingUri, {
+              encoding: FileSystem.EncodingType.Base64,
+              position: off,
+              length: len,
+            });
+            const encodedData = encodeURIComponent(base64Data);
+            return { base64Data, encodedData, len };
+          } catch (readErr) {
+            console.log(`[Upload] prepareChunkSlice error at chunk ${chunkIdx}:`, readErr);
+            throw readErr;
+          }
+        };
+
+        let nextChunkPromise = null;
+        const startNextPrefetch = (idx) => {
+          if (idx < totalChunks) {
+            nextChunkPromise = prepareChunkSlice(idx).catch(() => null);
+          } else {
+            nextChunkPromise = null;
+          }
+        };
+
+        startNextPrefetch(startChunk);
+
+        for (let i = startChunk; i < totalChunks; i++) {
+          if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
+            delete transferProgressRef.current[taskId];
+            return;
           }
 
-          const csrfQuery = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
-          const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_chunk`;
+          const offset = i * CHUNK_SIZE;
+          const currentChunkLen = totalSize > 0 ? Math.min(CHUNK_SIZE, totalSize - offset) : 0;
 
-          // Standard application/x-www-form-urlencoded POST body (natively understood by emhttpd, Nginx, PHP $_POST)
-          const formBody = [
-            `action=file_chunk`,
-            activeCsrf ? `csrf_token=${encodeURIComponent(activeCsrf)}` : '',
-            `path=${encodeURIComponent(taskItem.targetPath)}`,
-            `filename=${encodeURIComponent(taskItem.name)}`,
-            `chunk_index=${i}`,
-            `total_chunks=${totalChunks}`,
-            `offset=${offset}`,
-            `total_size=${totalSize}`,
-            `data=${encodedData}`,
-          ].filter(Boolean).join('&');
+          let chunkPayload = null;
+          if (currentChunkLen > 0) {
+            if (nextChunkPromise) {
+              chunkPayload = await nextChunkPromise;
+            }
+            if (!chunkPayload || !chunkPayload.encodedData) {
+              chunkPayload = await prepareChunkSlice(i);
+            }
+          }
 
-          let res = null;
-          try {
-            res = await apiFetch(chunkUrl, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
-                'X-API-Token': apiToken,
-                ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
-              },
-              body: formBody,
-              signal: abortController.signal,
-            }, 60000, 1);
+          startNextPrefetch(i + 1);
 
-            const rawText = (await res.text()).trim();
-            let resJson = null;
-            if (rawText) {
-              try {
-                resJson = JSON.parse(rawText);
-              } catch (_) {
-                const sIdx = rawText.indexOf('{');
-                const eIdx = rawText.lastIndexOf('}');
-                if (sIdx !== -1 && eIdx > sIdx) {
-                  try {
-                    resJson = JSON.parse(rawText.substring(sIdx, eIdx + 1));
-                  } catch (_) {}
+          const encodedData = chunkPayload?.encodedData || '';
+
+          if (transferProgressRef.current[taskId]) {
+            transferProgressRef.current[taskId].confirmedBytes = offset;
+            transferProgressRef.current[taskId].currentChunkLen = currentChunkLen;
+            transferProgressRef.current[taskId].chunkStartTime = Date.now();
+          }
+
+          let chunkSuccess = false;
+          let serverChunkRes = null;
+
+          for (let attempt = 0; attempt < 3; attempt++) {
+            if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
+              delete transferProgressRef.current[taskId];
+              return;
+            }
+            if (attempt > 0) {
+              activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken, true);
+            }
+
+            const csrfQuery = activeCsrf ? `&csrf_token=${encodeURIComponent(activeCsrf)}` : '';
+            const chunkUrl = `${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}${csrfQuery}&action=file_chunk`;
+
+            const formBody = [
+              `action=file_chunk`,
+              activeCsrf ? `csrf_token=${encodeURIComponent(activeCsrf)}` : '',
+              `path=${encodeURIComponent(taskItem.targetPath)}`,
+              `filename=${encodeURIComponent(taskItem.name)}`,
+              `chunk_index=${i}`,
+              `total_chunks=${totalChunks}`,
+              `offset=${offset}`,
+              `total_size=${totalSize}`,
+              `data=${encodedData}`,
+            ].filter(Boolean).join('&');
+
+            let res = null;
+            try {
+              res = await apiFetch(chunkUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
+                  'X-API-Token': apiToken,
+                  ...(activeCsrf ? { 'X-CSRF-Token': activeCsrf } : {}),
+                },
+                body: formBody,
+                signal: abortController.signal,
+              }, 60000, 1);
+
+              const rawText = (await res.text()).trim();
+              let resJson = null;
+              if (rawText) {
+                try {
+                  resJson = JSON.parse(rawText);
+                } catch (_) {
+                  const sIdx = rawText.indexOf('{');
+                  const eIdx = rawText.lastIndexOf('}');
+                  if (sIdx !== -1 && eIdx > sIdx) {
+                    try {
+                      resJson = JSON.parse(rawText.substring(sIdx, eIdx + 1));
+                    } catch (_) {}
+                  }
                 }
               }
-            }
 
-            if (res.status === 200 && resJson && resJson.status === 'success') {
-              chunkSuccess = true;
-              serverChunkRes = resJson;
-              if (resJson.path) savedPath = resJson.path;
-              break;
-            } else {
-              // Fallback log check
-              if (res.status === 200 && (!resJson || resJson.status !== 'success')) {
-                try {
-                  const dbgRes = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=upload_debug&_t=${Date.now()}`, {}, 4000, 0).catch(() => null);
-                  if (dbgRes && dbgRes.log) {
-                    const cleanItemName = (taskItem.name || '').replace(/.*[\/\\]/, '');
-                    const hasOk = dbgRes.log.includes(`chunk=${i}/${totalChunks}`) ||
-                                  dbgRes.log.includes(`chunk_ok: file=${cleanItemName}`);
-                    if (hasOk) {
-                      chunkSuccess = true;
-                      serverChunkRes = { status: 'success', verified_via_debug_log: true };
-                      break;
-                    }
-                  }
-                } catch (_) {}
-              }
-
-              const preview = rawText ? (rawText.length > 120 ? rawText.substring(0, 120) + '...' : rawText) : '空响应 (0字节)';
-              let errorMsg = resJson?.message || preview;
-
-              if (preview.includes('未知操作') || errorMsg.includes('未知操作') || errorMsg.includes('Unknown action')) {
-                await autoSyncServerApi(cleanBaseUrl, apiToken, serverApiVersionRef);
-                errorMsg = '已自动推送最新服务端 API 脚本，正在重试...';
-              }
-
-              if (res?.status === 413) {
-                throw new Error(`分片大小 (2MB) 超出外部反代限制 (HTTP 413 Payload Too Large)，请在反向代理配置中增加 client_max_body_size 10m;`);
-              }
-
-              if (resJson && resJson.status === 'error') {
-                throw new Error(errorMsg || `服务端分片写入失败 (HTTP ${res.status})`);
-              }
-
-              if (attempt === 2) {
-                let diagInfo = '';
-                try {
-                  const dbgRes = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=upload_debug&_t=${Date.now()}`, {}, 4000, 0).catch(() => null);
-                  if (dbgRes) {
-                    const lastLines = (dbgRes.log || '').split('\n').filter(Boolean).slice(-8).join(' | ');
-                    const sVer = dbgRes.api_version || dbgRes.version || serverApiVersionRef.current || '未知';
-                    const nErr = dbgRes.nginx_err ? `\n[Nginx错误: ${dbgRes.nginx_err}]` : '';
-                    const csrfStatus = `\n[CSRF检测: 服务端=${dbgRes.csrf_token_found || '未知'}, 客户端=${activeCsrf ? '已附加' : '无'}]`;
-                    diagInfo = `\n[服务端API版本: ${sVer}]\n[服务端状态: ${lastLines || '无日志'}]${nErr}${csrfStatus}`;
-                  }
-                } catch (_) {}
-
-                let headerSummary = '';
-                try {
-                  if (res && res.headers && typeof res.headers.forEach === 'function') {
-                    const hObj = {};
-                    res.headers.forEach((v, k) => {
-                      if (['server', 'content-type', 'content-length', 'x-powered-by', 'date', 'cf-ray'].includes(k.toLowerCase())) {
-                        hObj[k] = v;
+              if (res.status === 200 && resJson && resJson.status === 'success') {
+                chunkSuccess = true;
+                serverChunkRes = resJson;
+                if (resJson.path) savedPath = resJson.path;
+                break;
+              } else {
+                // Fallback debug log check
+                if (res.status === 200 && (!resJson || resJson.status !== 'success')) {
+                  try {
+                    const dbgRes = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=upload_debug&_t=${Date.now()}`, {}, 4000, 0).catch(() => null);
+                    if (dbgRes && dbgRes.log) {
+                      const cleanItemName = (taskItem.name || '').replace(/.*[\/\\]/, '');
+                      const hasOk = dbgRes.log.includes(`chunk=${i}/${totalChunks}`) ||
+                                    dbgRes.log.includes(`chunk_ok: file=${cleanItemName}`);
+                      if (hasOk) {
+                        chunkSuccess = true;
+                        serverChunkRes = { status: 'success', verified_via_debug_log: true };
+                        break;
                       }
-                    });
-                    if (Object.keys(hObj).length > 0) headerSummary = `\n[响应头: ${JSON.stringify(hObj)}]`;
-                  }
-                } catch (_) {}
+                    }
+                  } catch (_) {}
+                }
 
-                throw new Error(`分片 ${i + 1}/${totalChunks} 写入失败 (HTTP ${res?.status || 'Unknown'}): ${errorMsg}${diagInfo}${headerSummary}`);
+                if (res?.status === 413) {
+                  throw new Error(`分片大小超出外部反代限制 (HTTP 413 Payload Too Large)，请在反向代理配置中增加 client_max_body_size 10m;`);
+                }
+
+                if (resJson && resJson.status === 'error') {
+                  throw new Error(resJson.message || '分片写入失败');
+                }
+                throw new Error(`服务端异常响应 (HTTP ${res?.status || 0})`);
               }
-              await new Promise(r => setTimeout(r, 1200));
+            } catch (err) {
+              if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
+                delete transferProgressRef.current[taskId];
+                return;
+              }
+              if (err.message && err.message.includes('413')) throw err;
+              if (attempt === 2) throw err;
+              await new Promise(r => setTimeout(r, 600 * (attempt + 1)));
             }
-          } catch (chunkErr) {
+          }
+
+          if (!chunkSuccess) {
             if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
               return;
             }
-            if (attempt === 2) {
-              throw chunkErr;
+            throw new Error(`分片 ${i + 1}/${totalChunks} 上传失败，请检查网络连接`);
+          }
+
+          finalServerResult = serverChunkRes;
+
+          const now = Date.now();
+          const dt = (now - lastTime) / 1000;
+          const currentTransferred = Math.min(totalSize, offset + currentChunkLen);
+          if (dt >= 0.25) {
+            const bytesDiff = currentTransferred - lastLoaded;
+            const instSpeed = Math.max(0, bytesDiff / dt);
+            smoothedSpeed = smoothedSpeed > 0 ? (smoothedSpeed * 0.65 + instSpeed * 0.35) : instSpeed;
+            lastTime = now;
+            lastLoaded = currentTransferred;
+          }
+
+          if (transferProgressRef.current[taskId]) {
+            transferProgressRef.current[taskId].confirmedBytes = currentTransferred;
+            transferProgressRef.current[taskId].currentChunkLen = 0;
+            transferProgressRef.current[taskId].chunkStartTime = now;
+            transferProgressRef.current[taskId].lastSpeed = smoothedSpeed;
+          }
+
+          const isLastChunk = (i + 1 >= totalChunks);
+          const pct = isLastChunk ? 100 : Math.min(99, Math.round((currentTransferred / Math.max(1, totalSize)) * 100));
+
+          setTransfers(prev => {
+            const next = prev.map(t => (t.id === taskId ? {
+              ...t,
+              status: isLastChunk ? 'success' : 'running',
+              progress: pct,
+              transferredBytes: isLastChunk ? totalSize : currentTransferred,
+              totalBytes: totalSize,
+              sizeText: `${formatBytesFixed(isLastChunk ? totalSize : currentTransferred)} / ${formatBytesFixed(totalSize)}`,
+              speedDisplay: isLastChunk ? '已完成' : (smoothedSpeed > 0 ? `${formatBytesFixed(smoothedSpeed)}/s` : '正在传输...'),
+              chunkIndex: isLastChunk ? 0 : (i + 1),
+            } : t));
+            if (isLastChunk || i % 5 === 0) {
+              saveTransfersQueue(next);
             }
-            await new Promise(r => setTimeout(r, 1200));
-          }
+            return next;
+          });
         }
-
-        if (!chunkSuccess) {
-          if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
-            return;
-          }
-          throw new Error(`分片 ${i + 1}/${totalChunks} 上传失败，请检查网络连接`);
-        }
-
-        finalServerResult = serverChunkRes;
-
-        const now = Date.now();
-        const dt = (now - lastTime) / 1000;
-        const currentTransferred = Math.min(totalSize, offset + currentChunkLen);
-        if (dt >= 0.25) {
-          const bytesDiff = currentTransferred - lastLoaded;
-          const instSpeed = Math.max(0, bytesDiff / dt);
-          smoothedSpeed = smoothedSpeed > 0 ? (smoothedSpeed * 0.65 + instSpeed * 0.35) : instSpeed;
-          lastTime = now;
-          lastLoaded = currentTransferred;
-        }
-
-        // Update confirmed progress and calibrated speed in tracker ref
-        if (transferProgressRef.current[taskId]) {
-          transferProgressRef.current[taskId].confirmedBytes = currentTransferred;
-          transferProgressRef.current[taskId].currentChunkLen = 0;
-          transferProgressRef.current[taskId].chunkStartTime = now;
-          transferProgressRef.current[taskId].lastSpeed = smoothedSpeed;
-        }
-
-        const isLastChunk = (i + 1 >= totalChunks);
-        const pct = isLastChunk ? 100 : Math.min(99, Math.round((currentTransferred / Math.max(1, totalSize)) * 100));
-
-        setTransfers(prev => {
-          const next = prev.map(t => (t.id === taskId ? {
-            ...t,
-            status: isLastChunk ? 'success' : 'running',
-            progress: pct,
-            transferredBytes: isLastChunk ? totalSize : currentTransferred,
-            totalBytes: totalSize,
-            sizeText: `${formatBytesFixed(isLastChunk ? totalSize : currentTransferred)} / ${formatBytesFixed(totalSize)}`,
-            speedDisplay: isLastChunk ? '已完成' : (smoothedSpeed > 0 ? `${formatBytesFixed(smoothedSpeed)}/s` : '正在传输...'),
-            chunkIndex: isLastChunk ? 0 : (i + 1),
-          } : t));
-          if (isLastChunk || i % 5 === 0) {
-            saveTransfersQueue(next);
-          }
-          return next;
-        });
       }
 
       // Cleanup temp chunk file
@@ -987,6 +1079,11 @@ export default function FilesScreen({ navigation }) {
         if (task.uploadTask && typeof task.uploadTask.cancelAsync === 'function') {
           try {
             task.uploadTask.cancelAsync();
+          } catch (_) {}
+        }
+        if (task.xhr && typeof task.xhr.abort === 'function') {
+          try {
+            task.xhr.abort();
           } catch (_) {}
         }
       }
