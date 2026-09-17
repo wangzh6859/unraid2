@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.15.06
- * Release: 2026-09-15
+ * Version: 2026.09.17.07
+ * Release: 2026-09-17
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.17.06');
+define('UNRAID_API_VERSION', '2026.09.17.07');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -447,6 +447,7 @@ switch ($action) {
         handle_file_list();
         break;
 
+    case 'download':
     case 'file_stream':
         handle_file_stream();
         break;
@@ -576,16 +577,31 @@ function json_output($data, $code = 200) {
         @ob_end_clean();
     }
 
-    // Recursively guarantee all string values are valid UTF-8
-    if (function_exists('mb_check_encoding') && function_exists('mb_convert_encoding')) {
-        array_walk_recursive($data, function(&$val) {
-            if (is_string($val)) {
+    // Recursively guarantee all string values are valid UTF-8 without throwing ValueError in PHP 8
+    array_walk_recursive($data, function(&$val) {
+        if (is_string($val)) {
+            if (function_exists('mb_check_encoding') && !mb_check_encoding($val, 'UTF-8')) {
+                if (function_exists('mb_scrub')) {
+                    $scrubbed = @mb_scrub($val, 'UTF-8');
+                    if ($scrubbed !== false && is_string($scrubbed)) {
+                        $val = $scrubbed;
+                    }
+                }
                 if (!mb_check_encoding($val, 'UTF-8')) {
-                    $val = @mb_convert_encoding($val, 'UTF-8', 'UTF-8, GB18030, GBK, BIG5, ISO-8859-1');
+                    $converted = false;
+                    if (function_exists('mb_convert_encoding')) {
+                        // In PHP 8+, argument 3 must be an array of encodings, never comma-separated string!
+                        $converted = @mb_convert_encoding($val, 'UTF-8', ['GB18030', 'GBK', 'BIG5', 'CP936', 'ISO-8859-1', 'UTF-8']);
+                    }
+                    if ($converted !== false && strlen($converted) > 0) {
+                        $val = $converted;
+                    } elseif (function_exists('iconv')) {
+                        $val = @iconv('UTF-8', 'UTF-8//IGNORE', $val);
+                    }
                 }
             }
-        });
-    }
+        }
+    });
 
     $flags = JSON_UNESCAPED_UNICODE;
     if (defined('JSON_PARTIAL_OUTPUT_ON_ERROR')) {
@@ -3183,123 +3199,146 @@ function handle_file_stream() {
 }
 
 function handle_file_read() {
-    $rawPath = isset($_GET['path']) ? $_GET['path'] : '';
-    $filePath = sanitize_path($rawPath);
+    try {
+        $rawPath = isset($_GET['path']) ? $_GET['path'] : '';
+        $filePath = sanitize_path($rawPath);
 
-    clearstatcache(true, $filePath);
-    if (!file_exists($filePath) || is_dir($filePath)) {
-        json_output(['status' => 'error', 'message' => 'File not found: ' . $filePath], 404);
-    }
-
-    $size = (float)filesize($filePath);
-    if ($size > 50 * 1024 * 1024) { // 50MB safety ceiling
-        json_output(['status' => 'error', 'message' => '文件体积过大（超过 50MB），建议直接下载至手机查看'], 400);
-    }
-
-    // Default 2MB (2,097,152 bytes) reads ~1 million Chinese characters / 50,000+ lines in one shot
-    // If max_bytes=0, read until end of file
-    $maxBytes = isset($_GET['max_bytes']) ? intval($_GET['max_bytes']) : 2097152;
-    $offset = isset($_GET['offset']) ? max(0, intval($_GET['offset'])) : 0;
-
-    $fp = @fopen($filePath, 'rb');
-    if ($fp === false) {
-        json_output(['status' => 'error', 'message' => '读取文件内容失败: 无法打开文件'], 500);
-    }
-
-    if ($offset > 0) {
-        @fseek($fp, $offset);
-    }
-
-    $bytesRemaining = max(0, $size - $offset);
-    $readLen = ($maxBytes > 0) ? min($maxBytes, $bytesRemaining) : $bytesRemaining;
-
-    $content = '';
-    if ($readLen > 0) {
-        $readResult = @fread($fp, (int)$readLen);
-        if ($readResult !== false) {
-            $content = $readResult;
+        clearstatcache(true, $filePath);
+        if (!file_exists($filePath) || is_dir($filePath)) {
+            json_output(['status' => 'error', 'message' => 'File not found: ' . $filePath], 404);
         }
-    }
-    @fclose($fp);
 
-    $isTruncated = ($maxBytes > 0 && ($offset + strlen($content)) < $size);
+        $size = (float)filesize($filePath);
+        if ($size > 50 * 1024 * 1024) { // 50MB safety ceiling
+            json_output(['status' => 'error', 'message' => '文件体积过大（超过 50MB），建议直接下载至手机查看'], 400);
+        }
 
-    // Client requested encoding override (e.g. ?encoding=gbk or ?encoding=utf-8)
-    $requestedEncoding = isset($_GET['encoding']) ? strtolower(trim($_GET['encoding'])) : '';
-    $detectedEncoding = 'UTF-8';
+        // Default 2MB (2,097,152 bytes) reads ~1 million Chinese characters / 50,000+ lines in one shot
+        // If max_bytes=0, read until end of file
+        $maxBytes = isset($_GET['max_bytes']) ? intval($_GET['max_bytes']) : 2097152;
+        $offset = isset($_GET['offset']) ? max(0, intval($_GET['offset'])) : 0;
 
-    if ($requestedEncoding === 'gbk' || $requestedEncoding === 'gb2312' || $requestedEncoding === 'gb18030') {
-        $converted = @iconv('GB18030//IGNORE', 'UTF-8', $content);
-        if ($converted !== false && strlen($converted) > 0) {
-            $content = $converted;
-            $detectedEncoding = 'GB18030';
+        $fp = @fopen($filePath, 'rb');
+        if ($fp === false) {
+            json_output(['status' => 'error', 'message' => '读取文件内容失败: 无法打开文件'], 500);
         }
-    } elseif ($requestedEncoding === 'big5') {
-        $converted = @iconv('BIG5//IGNORE', 'UTF-8', $content);
-        if ($converted !== false && strlen($converted) > 0) {
-            $content = $converted;
-            $detectedEncoding = 'BIG5';
+
+        if ($offset > 0) {
+            @fseek($fp, $offset);
         }
-    } elseif ($requestedEncoding === 'utf-8') {
-        if (substr($content, 0, 3) === "\xEF\xBB\xBF") {
-            $content = substr($content, 3);
+
+        $bytesRemaining = max(0, $size - $offset);
+        $readLen = ($maxBytes > 0) ? min($maxBytes, $bytesRemaining) : $bytesRemaining;
+
+        $content = '';
+        if ($readLen > 0) {
+            $readResult = @fread($fp, (int)$readLen);
+            if ($readResult !== false) {
+                $content = $readResult;
+            }
         }
+        @fclose($fp);
+
+        $isTruncated = ($maxBytes > 0 && ($offset + strlen($content)) < $size);
+
+        // Client requested encoding override (e.g. ?encoding=gbk or ?encoding=utf-8)
+        $requestedEncoding = isset($_GET['encoding']) ? strtolower(trim($_GET['encoding'])) : '';
         $detectedEncoding = 'UTF-8';
-    } else {
-        // Automatic intelligent encoding detection:
-        if (substr($content, 0, 3) === "\xEF\xBB\xBF") {
-            $content = substr($content, 3);
-            $detectedEncoding = 'UTF-8 (BOM)';
-        } elseif (substr($content, 0, 2) === "\xFF\xFE") {
-            $content = @mb_convert_encoding(substr($content, 2), 'UTF-8', 'UTF-16LE');
-            $detectedEncoding = 'UTF-16LE';
-        } elseif (substr($content, 0, 2) === "\xFE\xFF") {
-            $content = @mb_convert_encoding(substr($content, 2), 'UTF-8', 'UTF-16BE');
-            $detectedEncoding = 'UTF-16BE';
-        } else {
-            // Check if string is clean UTF-8.
-            // Safety: if string was truncated, the very last 1~3 bytes might be a sliced multibyte code,
-            // so we test a sub-slice omitting the last 4 bytes to avoid false negatives.
-            $probe = strlen($content) > 10 ? substr($content, 0, -4) : $content;
-            $isUtf8 = function_exists('mb_check_encoding') ? mb_check_encoding($probe, 'UTF-8') : (preg_match('//u', $probe) === 1);
 
-            if (!$isUtf8) {
-                // Not UTF-8! Detect among Chinese encodings
-                $detected = false;
-                if (function_exists('mb_detect_encoding')) {
-                    $detected = @mb_detect_encoding($probe, ['CP936', 'GB18030', 'GBK', 'BIG5', 'EUC-CN'], true);
+        if ($requestedEncoding === 'gbk' || $requestedEncoding === 'gb2312' || $requestedEncoding === 'gb18030') {
+            $converted = @iconv('GB18030//IGNORE', 'UTF-8', $content);
+            if ($converted !== false && strlen($converted) > 0) {
+                $content = $converted;
+                $detectedEncoding = 'GB18030';
+            } else {
+                $converted = @mb_convert_encoding($content, 'UTF-8', ['GB18030', 'GBK', 'CP936']);
+                if ($converted !== false && strlen($converted) > 0) {
+                    $content = $converted;
+                    $detectedEncoding = 'GBK';
                 }
-                if ($detected) {
-                    $converted = @mb_convert_encoding($content, 'UTF-8', $detected);
-                    if ($converted !== false && strlen($converted) > 0) {
-                        $content = $converted;
-                        $detectedEncoding = $detected;
-                    }
-                } else {
-                    // Fallback to iconv GB18030
+            }
+        } elseif ($requestedEncoding === 'big5') {
+            $converted = @iconv('BIG5//IGNORE', 'UTF-8', $content);
+            if ($converted !== false && strlen($converted) > 0) {
+                $content = $converted;
+                $detectedEncoding = 'BIG5';
+            }
+        } elseif ($requestedEncoding === 'utf-8') {
+            if (substr($content, 0, 3) === "\xEF\xBB\xBF") {
+                $content = substr($content, 3);
+            }
+            $detectedEncoding = 'UTF-8';
+        } else {
+            // Automatic intelligent encoding detection:
+            if (substr($content, 0, 3) === "\xEF\xBB\xBF") {
+                $content = substr($content, 3);
+                $detectedEncoding = 'UTF-8 (BOM)';
+            } elseif (substr($content, 0, 2) === "\xFF\xFE") {
+                $content = @mb_convert_encoding(substr($content, 2), 'UTF-8', 'UTF-16LE');
+                $detectedEncoding = 'UTF-16LE';
+            } elseif (substr($content, 0, 2) === "\xFE\xFF") {
+                $content = @mb_convert_encoding(substr($content, 2), 'UTF-8', 'UTF-16BE');
+                $detectedEncoding = 'UTF-16BE';
+            } else {
+                // Safety: if string was truncated, test a sub-slice omitting the last 4 bytes to avoid false negatives
+                $probe = strlen($content) > 10 ? substr($content, 0, -4) : $content;
+                $isUtf8 = function_exists('mb_check_encoding') ? @mb_check_encoding($probe, 'UTF-8') : (preg_match('//u', $probe) === 1);
+
+                if (!$isUtf8) {
+                    // Not UTF-8! Try GB18030 / GBK / BIG5
                     $converted = @iconv('GB18030//IGNORE', 'UTF-8', $content);
                     if ($converted !== false && strlen($converted) > 0) {
                         $content = $converted;
                         $detectedEncoding = 'GB18030';
+                    } else {
+                        $detected = function_exists('mb_detect_encoding') ? @mb_detect_encoding($probe, ['CP936', 'GB18030', 'GBK', 'BIG5', 'EUC-CN'], true) : false;
+                        if ($detected) {
+                            $converted = @mb_convert_encoding($content, 'UTF-8', $detected);
+                            if ($converted !== false && strlen($converted) > 0) {
+                                $content = $converted;
+                                $detectedEncoding = $detected;
+                            }
+                        }
                     }
+                } else {
+                    $detectedEncoding = 'UTF-8';
                 }
-            } else {
-                $detectedEncoding = 'UTF-8';
             }
         }
-    }
 
-    json_output([
-        'status' => 'success',
-        'path' => $filePath,
-        'name' => safe_basename($filePath),
-        'size' => $size,
-        'offset' => $offset,
-        'truncated' => $isTruncated,
-        'preview_size' => strlen($content),
-        'encoding' => $detectedEncoding,
-        'content' => $content
-    ]);
+        // If string was truncated, remove dangling broken multibyte sequences at the tail
+        if ($isTruncated && strlen($content) > 4) {
+            for ($i = 0; $i < 4; $i++) {
+                $slice = ($i === 0) ? $content : substr($content, 0, -$i);
+                if (function_exists('mb_check_encoding') && @mb_check_encoding($slice, 'UTF-8')) {
+                    $content = $slice;
+                    break;
+                }
+            }
+        }
+
+        // Final scrubbing to guarantee UTF-8 validity
+        if (function_exists('mb_scrub')) {
+            $content = @mb_scrub($content, 'UTF-8');
+        } elseif (function_exists('iconv')) {
+            $content = @iconv('UTF-8', 'UTF-8//IGNORE', $content);
+        }
+
+        json_output([
+            'status' => 'success',
+            'path' => $filePath,
+            'name' => safe_basename($filePath),
+            'size' => $size,
+            'offset' => $offset,
+            'truncated' => $isTruncated,
+            'preview_size' => strlen($content),
+            'encoding' => $detectedEncoding,
+            'content' => $content
+        ]);
+    } catch (Throwable $t) {
+        log_upload_debug("handle_file_read error: " . $t->getMessage());
+        json_output(['status' => 'error', 'message' => '读取文本异常: ' . $t->getMessage()], 500);
+    }
 }
 
 function handle_pdf_preview() {
@@ -4234,34 +4273,57 @@ function get_gpu_telemetry() {
         'driver' => 'N/A'
     ];
 
-    // 1. Check Unraid GPU Statistics plugin cached JSON (/tmp/gpustat.json)
-    if (file_exists('/tmp/gpustat.json')) {
-        $raw = @file_get_contents('/tmp/gpustat.json');
+    $gpustatFallback = null;
+
+    // 1. Check Unraid GPU Statistics plugin (/tmp/gpustat.json)
+    $gpustatFile = '/tmp/gpustat.json';
+    if (file_exists($gpustatFile)) {
+        clearstatcache(true, $gpustatFile);
+        $fileAge = time() - @filemtime($gpustatFile);
+        if ($fileAge > 3) {
+            // Attempt to trigger gpustat update script if available on Unraid
+            $gpustatScript = '/usr/local/emhttp/plugins/gpustat/scripts/gpustat.php';
+            if (file_exists($gpustatScript)) {
+                @exec("php " . escapeshellarg($gpustatScript) . " >/dev/null 2>&1");
+                clearstatcache(true, $gpustatFile);
+                $fileAge = time() - @filemtime($gpustatFile);
+            }
+        }
+
+        $raw = @file_get_contents($gpustatFile);
         if ($raw) {
             $json = @json_decode($raw, true);
             if (is_array($json) && !empty($json)) {
                 $firstGpu = isset($json[0]) ? $json[0] : (isset($json['gpus'][0]) ? $json['gpus'][0] : $json);
                 if (!empty($firstGpu['model']) || !empty($firstGpu['name'])) {
                     $mName = !empty($firstGpu['model']) ? $firstGpu['model'] : $firstGpu['name'];
-                    $gpuData['name'] = $mName;
-                    $gpuData['vendor'] = !empty($firstGpu['vendor']) ? $firstGpu['vendor'] : (stripos($mName, 'NVIDIA') !== false ? 'NVIDIA' : (stripos($mName, 'Intel') !== false ? 'Intel' : 'AMD'));
-                    $gpuData['usage'] = isset($firstGpu['util']) ? (float)$firstGpu['util'] : (isset($firstGpu['usage']) ? (float)$firstGpu['usage'] : 0);
-                    $gpuData['temp'] = isset($firstGpu['temp']) ? (int)$firstGpu['temp'] : null;
+                    $cand = $gpuData;
+                    $cand['name'] = $mName;
+                    $cand['vendor'] = !empty($firstGpu['vendor']) ? $firstGpu['vendor'] : (stripos($mName, 'NVIDIA') !== false ? 'NVIDIA' : (stripos($mName, 'Intel') !== false ? 'Intel' : 'AMD'));
+                    $cand['usage'] = isset($firstGpu['util']) ? (float)$firstGpu['util'] : (isset($firstGpu['usage']) ? (float)$firstGpu['usage'] : 0);
+                    $cand['temp'] = isset($firstGpu['temp']) ? (int)$firstGpu['temp'] : null;
                     if (isset($firstGpu['memused']) && isset($firstGpu['memtotal'])) {
-                        $gpuData['vram_used'] = (int)$firstGpu['memused'];
-                        $gpuData['vram_total'] = (int)$firstGpu['memtotal'];
-                        $gpuData['vram_pct'] = $gpuData['vram_total'] > 0 ? round(($gpuData['vram_used'] / $gpuData['vram_total']) * 100, 1) : 0;
+                        $cand['vram_used'] = (int)$firstGpu['memused'];
+                        $cand['vram_total'] = (int)$firstGpu['memtotal'];
+                        $cand['vram_pct'] = $cand['vram_total'] > 0 ? round(($cand['vram_used'] / $cand['vram_total']) * 100, 1) : 0;
                     }
-                    if (isset($firstGpu['power'])) $gpuData['power_w'] = (float)$firstGpu['power'];
-                    if (isset($firstGpu['clock'])) $gpuData['clock_mhz'] = (int)$firstGpu['clock'];
-                    $gpuData['driver'] = 'gpustat';
-                    return $gpuData;
+                    if (isset($firstGpu['power'])) $cand['power_w'] = (float)$firstGpu['power'];
+                    if (isset($firstGpu['clock'])) $cand['clock_mhz'] = (int)$firstGpu['clock'];
+                    $cand['driver'] = 'gpustat';
+
+                    // If file was updated within 3 seconds, it's truly live
+                    if ($fileAge <= 3) {
+                        return $cand;
+                    } else {
+                        // Keep as fallback in case hardware probes find nothing
+                        $gpustatFallback = $cand;
+                    }
                 }
             }
         }
     }
 
-    // 2. Check NVIDIA GPU via nvidia-smi
+    // 2. Check NVIDIA GPU via nvidia-smi (live query)
     $nvidiaOut = @shell_exec('nvidia-smi --query-gpu=name,utilization.gpu,temperature.gpu,memory.used,memory.total,power.draw,clocks.current.graphics,clocks.max.graphics --format=csv,noheader,nounits 2>/dev/null');
     if (empty($nvidiaOut)) {
         $nvidiaOut = @shell_exec('/usr/local/bin/nvidia-smi --query-gpu=name,utilization.gpu,temperature.gpu,memory.used,memory.total,power.draw,clocks.current.graphics,clocks.max.graphics --format=csv,noheader,nounits 2>/dev/null');
@@ -4318,16 +4380,21 @@ function get_gpu_telemetry() {
                     if (!$intelName) $intelName = 'Intel® 核芯显卡 (iGPU)';
                     $gpuData['clean_name'] = $intelName;
 
-                    // Read frequency
+                    // Read dynamic frequency (gt_act_freq_mhz is the live operating frequency)
                     $curFreq = 0;
                     $maxFreq = 0;
                     $minFreq = 0;
                     $freqFiles = [
+                        "{$card}/gt_act_freq_mhz",
                         "{$card}/gt_cur_freq_mhz",
+                        "{$card}/device/drm/{$card}/gt_act_freq_mhz",
                         "{$card}/device/drm/{$card}/gt_cur_freq_mhz",
                     ];
                     foreach ($freqFiles as $ff) {
-                        if (file_exists($ff)) { $curFreq = (int)trim(@file_get_contents($ff)); break; }
+                        if (file_exists($ff)) {
+                            $v = (int)trim(@file_get_contents($ff));
+                            if ($v > 0) { $curFreq = $v; break; }
+                        }
                     }
                     $maxFreqFiles = [
                         "{$card}/gt_max_freq_mhz",
@@ -4420,7 +4487,12 @@ function get_gpu_telemetry() {
         }
     }
 
-    // 5. Generic display fallback via lspci
+    // 5. If hardware direct probes found nothing but gpustat was present, return cached gpustat
+    if ($gpustatFallback !== null) {
+        return $gpustatFallback;
+    }
+
+    // 6. Generic display fallback via lspci
     $genLspci = @shell_exec("lspci 2>/dev/null | grep -iE 'vga compatible controller|3d controller|display controller'");
     if ($genLspci && trim($genLspci) !== '') {
         $firstLine = explode("\n", trim($genLspci))[0];

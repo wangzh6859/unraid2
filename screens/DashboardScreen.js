@@ -932,6 +932,14 @@ export default function DashboardScreen({ navigation }) {
                 {(gpu.usage || 0).toFixed(0)}%
               </Text>
             </View>
+            {Boolean(gpu.vram_pct && gpu.vram_pct > 0) && (
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Text style={{ fontSize: 11, color: colors.sub, marginRight: 4 }}>显存</Text>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: colors.accent, fontFamily: 'monospace' }}>
+                  {(gpu.vram_pct).toFixed(0)}%
+                </Text>
+              </View>
+            )}
             {gpu.temp !== null && gpu.temp !== undefined ? (
               <Text style={{ fontSize: 11, fontWeight: '600', color: gpu.temp > 75 ? colors.tempWarm : colors.sub, fontFamily: 'monospace' }}>
                 {gpu.temp}°C

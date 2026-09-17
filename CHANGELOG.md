@@ -4,6 +4,50 @@
 
 ---
 
+## [v1.4.222] - 2026-09-17
+> **核心主题**：GPU 硬件遥测与 CPU/内存同步实时更新（破解 gpustat 静态文件卡死）、彻底消除 Android 翻页/双击缩放 `zoomToRect is not implemented` 红屏崩溃、修复原生 PDF 缓存下载路由与免服务端完全独立渲染、超大 TXT (9.3MB) 中文分块截断与 PHP 8 `mb_convert_encoding` 500 根治
+
+### ⚡ GPU 硬件监控实时动态刷新（与 CPU/内存同步联动）
+- **问题溯源**：
+  - 用户反馈「GPU 的刷新不对，现在卡住了，一直是一个数；GPU 占用信息要和 CPU 内存等一同更新」。
+  - 经深入排查，Unraid 安装的 GPU Statistics 插件生成的 `/tmp/gpustat.json` 仅在电脑浏览器打开 WebGUI 仪表盘时才被其前端定时 AJAX 驱动更新。当用户仅使用手机 App 时，该文件处于完全静止状态（时间戳可能为数小时或数天前）。此前 `api.php` 只要探测到 `/tmp/gpustat.json` 存在便直接返回，导致数据永远定格。
+- **治理与实时刷新**：
+  - 增加 `/tmp/gpustat.json` 3 秒新鲜度校验；超过 3 秒主动调用 `/usr/local/emhttp/plugins/gpustat/scripts/gpustat.php` 触发刷新。
+  - 若 `gpustat` 仍未产出最新数据，则自动穿透进入**硬件原生直读**通道：
+    - **NVIDIA**：执行 `nvidia-smi` 实时提取 GPU 负载、核心温度、显存使用量、功率及实时核心频率。
+    - **Intel iGPU**：通过内核 sysfs 实时读取 `gt_act_freq_mhz`（GPU 动态实际频率，而非定值目标频率）、`hwmon` 核心温度，计算真实负载。
+    - **AMD GPU**：通过 sysfs 读取 `gpu_busy_percent`、显存已用与温度。
+  - 手机 App 仪表盘每 2.5 秒与 CPU、内存、网络、存储 IO 同频更新，且新增显存使用百分比指示，告别数值死锁。
+
+### 🛡️ 彻底根治 Android 翻页与缩放 `zoomToRect is not implemented` 崩溃红屏
+- **崩溃根因**：
+  - 用户在 PDF 界面点击「下一页」后触发红屏报错：`Invariant Violation: zoomToRect is not implemented`。
+  - React Native Android 宿主平台的 `ScrollView` 原生组件并未实现 iOS 独有的 `scrollResponderZoomTo` 原生接口，一旦调用便无条件抛出致命 Invariant Violation 异常导致崩溃。
+- **架构级修复**：
+  - 在 `PdfViewer.js` 与 `ImageViewer.js` 的所有重置视口与缩放逻辑中，严密包裹 `Platform.OS === 'ios'` 平台保护。
+  - 在 Android 平台中，翻页重置统一采用通用的 `scrollRef.current?.scrollTo({ x: 0, y: 0, animated: false })`，杜绝任何崩溃风险。
+  - Android 端双击与放大镜缩放联动应用底层容器矩阵变换 `transform: [{ scale: zoomLevel }]`，缩放丝滑稳定。
+
+### 📄 修复 PDF 内部原生渲染与下载路由匹配
+- **400 失败链路排查**：
+  - 用户打开《第01卷.pdf》报「页面光栅化渲染失败：服务器未配置光栅化引擎（poppler/ghostscript）」。
+  - 根因：App 内置了 Android 原生 `PdfRendererModule`，在下载至手机临时沙盒时请求了 `action=download`，但 `api.php` 此前仅响应 `action=file_stream`，因此返回 400 Bad Request。这导致本地渲染下载失败并降级至服务端光栅化，而在未装 poppler 的 Unraid 上服务端自然报错。
+- **修复方案**：
+  - `api.php` 路由中新增 `case 'download':` 别名直通 RFC 7233 高性能文件流；
+  - `FilePreviewer.js` 补齐 `getDirectUrl` 属性传递至 `PdfViewer`，本地原生渲染 100% 独立于服务端环境顺畅运行。
+
+### 📚 修复超大 TXT 文件（9.3MB）分块截断与 PHP 8 `mb_convert_encoding` HTTP 500
+- **500 根因分析**：
+  - 用户打开 9.3 MB 的《乱欲利姆庄.txt》报「文本读取未响应 HTTP 500」。
+  - 在读取首块 2MB 内容时，切断位置恰好落在多字节中文字符中间。在进入 `json_output()` 时，因尾部有残缺字节导致 `mb_check_encoding` 失败。
+  - 随后调用的 `@mb_convert_encoding($val, 'UTF-8', 'UTF-8, GB18030, GBK, BIG5, ISO-8859-1')` 中，第 3 个参数在 PHP 8.0+ 必须为数组或单个编码字符串，传入逗号分隔字符串会直接抛出未捕获的 `ValueError`（`@` 无法压制此类致命错误），触发全局异常处理器输出 HTTP 500。
+- **修复措施**：
+  - `handle_file_read()` 分块末尾增加多字节字符边界回退扫描，安全剥离尾部残缺编码字节；
+  - `json_output()` 中改用数组规范传递编码选项 `['GB18030', 'GBK', 'BIG5', 'CP936', 'ISO-8859-1', 'UTF-8']`，并引入 `mb_scrub` 与 `iconv` 多重容错；
+  - 全流程包裹 `try...catch(Throwable)`，彻底杜绝 500 报错。
+
+---
+
 ## [v1.4.220] - 2026-09-17
 > **核心主题**：彻底修复 TXT 文本读取 HTTP 500 报错、集成 Android 原生内部 PdfRenderer 渲染引擎（免服务端任何依赖）、修复 PDF 重试转圈假死与增加纯 PHP 降级流
 

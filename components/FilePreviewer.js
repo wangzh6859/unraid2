@@ -103,7 +103,7 @@ export default function FilePreviewer({
       case 'archive':
         return <ArchiveViewer item={item} getDirectUrl={getDirectUrl} authHeaders={authHeaders} onClose={onClose} onDownload={onDownload} />;
       case 'pdf':
-        return <PdfViewer item={item} serverUrl={serverUrl} apiToken={apiToken} streamUrl={streamUrl} onClose={onClose} onDownload={onDownload} />;
+        return <PdfViewer item={item} serverUrl={serverUrl} apiToken={apiToken} streamUrl={streamUrl} getDirectUrl={getDirectUrl} onClose={onClose} onDownload={onDownload} />;
       default:
         return (
           <View style={styles.fallbackContainer}>

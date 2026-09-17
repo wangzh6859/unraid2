@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import {
   StyleSheet, Text, View, Image, ScrollView, TouchableOpacity,
-  ActivityIndicator, Dimensions,
+  ActivityIndicator, Dimensions, Platform,
 } from 'react-native';
 import { AlertCircle, Download } from 'lucide-react-native';
 import { useTheme } from '../../ThemeContext';
@@ -22,10 +22,16 @@ export default function ImageViewer({ item, streamUrl, onDownload }) {
     const now = Date.now();
     if (lastTapRef.current && now - lastTapRef.current < 300) {
       if (isZoomed) {
-        scrollRef.current?.scrollResponderZoomTo({ x: 0, y: 0, width: SCREEN_WIDTH, height: SCREEN_HEIGHT, animated: true });
+        if (Platform.OS === 'ios') {
+          scrollRef.current?.scrollResponderZoomTo({ x: 0, y: 0, width: SCREEN_WIDTH, height: SCREEN_HEIGHT, animated: true });
+        } else {
+          scrollRef.current?.scrollTo({ x: 0, y: 0, animated: true });
+        }
         setIsZoomed(false);
       } else {
-        scrollRef.current?.scrollResponderZoomTo({ x: SCREEN_WIDTH / 4, y: SCREEN_HEIGHT / 4, width: SCREEN_WIDTH / 2, height: SCREEN_HEIGHT / 2, animated: true });
+        if (Platform.OS === 'ios') {
+          scrollRef.current?.scrollResponderZoomTo({ x: SCREEN_WIDTH / 4, y: SCREEN_HEIGHT / 4, width: SCREEN_WIDTH / 2, height: SCREEN_HEIGHT / 2, animated: true });
+        }
         setIsZoomed(true);
       }
       lastTapRef.current = null;
@@ -93,7 +99,7 @@ export default function ImageViewer({ item, streamUrl, onDownload }) {
         <TouchableOpacity activeOpacity={1} onPress={handleDoubleTap} style={styles.touchArea}>
           <Image
             source={{ uri: streamUrl }}
-            style={styles.image}
+            style={[styles.image, isZoomed && Platform.OS === 'android' && { transform: [{ scale: 2 }] }]}
             resizeMode="contain"
             onLoad={onImageLoad}
             onError={() => {

@@ -16,7 +16,7 @@ import { downloadToCache } from '../../utils/previewUtils';
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const { PdfRenderer } = NativeModules;
 
-export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClose, onDownload }) {
+export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, getDirectUrl, onClose, onDownload }) {
   const { colors, isDark } = useTheme();
 
   const [loading, setLoading] = useState(true);
@@ -77,7 +77,7 @@ export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClos
           
           const localUri = await downloadToCache({
             file: item,
-            getDirectUrl: (p) => `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=download&path=${encodeURIComponent(p)}`,
+            getDirectUrl: getDirectUrl || ((p) => streamUrl || `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_stream&path=${encodeURIComponent(p)}`),
             authHeaders: { 'X-API-Token': apiToken },
           });
 
@@ -213,8 +213,13 @@ export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClos
     }
 
     if (scrollRef.current) {
-      scrollRef.current.scrollResponderZoomTo({ x: 0, y: 0, width: SCREEN_WIDTH, height: SCREEN_HEIGHT, animated: false });
+      if (Platform.OS === 'ios') {
+        scrollRef.current.scrollResponderZoomTo({ x: 0, y: 0, width: SCREEN_WIDTH, height: SCREEN_HEIGHT, animated: false });
+      } else {
+        scrollRef.current.scrollTo({ x: 0, y: 0, animated: false });
+      }
     }
+    setZoomLevel(1);
   }, [currentPage, meta.isNative, meta.localUri]);
 
   // Page navigation handlers
@@ -247,10 +252,16 @@ export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClos
     const now = Date.now();
     if (lastTapRef.current && now - lastTapRef.current < 300) {
       if (zoomLevel > 1) {
-        scrollRef.current?.scrollResponderZoomTo({ x: 0, y: 0, width: SCREEN_WIDTH, height: SCREEN_HEIGHT, animated: true });
+        if (Platform.OS === 'ios') {
+          scrollRef.current?.scrollResponderZoomTo({ x: 0, y: 0, width: SCREEN_WIDTH, height: SCREEN_HEIGHT, animated: true });
+        } else {
+          scrollRef.current?.scrollTo({ x: 0, y: 0, animated: true });
+        }
         setZoomLevel(1);
       } else {
-        scrollRef.current?.scrollResponderZoomTo({ x: SCREEN_WIDTH / 4, y: SCREEN_HEIGHT / 4, width: SCREEN_WIDTH / 2, height: SCREEN_HEIGHT / 2, animated: true });
+        if (Platform.OS === 'ios') {
+          scrollRef.current?.scrollResponderZoomTo({ x: SCREEN_WIDTH / 4, y: SCREEN_HEIGHT / 4, width: SCREEN_WIDTH / 2, height: SCREEN_HEIGHT / 2, animated: true });
+        }
         setZoomLevel(2);
       }
       lastTapRef.current = null;
@@ -338,7 +349,11 @@ export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClos
             <TouchableOpacity
               style={styles.zoomBtn}
               onPress={() => {
-                scrollRef.current?.scrollResponderZoomTo({ x: 0, y: 0, width: SCREEN_WIDTH, height: SCREEN_HEIGHT, animated: true });
+                if (Platform.OS === 'ios') {
+                  scrollRef.current?.scrollResponderZoomTo({ x: 0, y: 0, width: SCREEN_WIDTH, height: SCREEN_HEIGHT, animated: true });
+                } else {
+                  scrollRef.current?.scrollTo({ x: 0, y: 0, animated: true });
+                }
                 setZoomLevel(1);
               }}
             >
@@ -348,8 +363,15 @@ export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClos
             <TouchableOpacity
               style={styles.zoomBtn}
               onPress={() => {
-                scrollRef.current?.scrollResponderZoomTo({ x: SCREEN_WIDTH / 4, y: SCREEN_HEIGHT / 4, width: SCREEN_WIDTH / 2, height: SCREEN_HEIGHT / 2, animated: true });
-                setZoomLevel(2);
+                const nextZoom = zoomLevel >= 2 ? 1 : zoomLevel + 0.5;
+                if (Platform.OS === 'ios') {
+                  if (nextZoom > 1) {
+                    scrollRef.current?.scrollResponderZoomTo({ x: SCREEN_WIDTH / 4, y: SCREEN_HEIGHT / 4, width: SCREEN_WIDTH / 2, height: SCREEN_HEIGHT / 2, animated: true });
+                  } else {
+                    scrollRef.current?.scrollResponderZoomTo({ x: 0, y: 0, width: SCREEN_WIDTH, height: SCREEN_HEIGHT, animated: true });
+                  }
+                }
+                setZoomLevel(nextZoom);
               }}
             >
               <ZoomIn color={colors.sub} size={15} />
@@ -381,7 +403,7 @@ export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClos
                 <Image
                   key={`pdf_page_${currentPage}_${retryNonce}`}
                   source={activeImageSource}
-                  style={styles.pageImage}
+                  style={[styles.pageImage, zoomLevel !== 1 && Platform.OS === 'android' && { transform: [{ scale: zoomLevel }] }]}
                   resizeMode="contain"
                   onLoadStart={() => setPageLoading(true)}
                   onLoadEnd={() => {
