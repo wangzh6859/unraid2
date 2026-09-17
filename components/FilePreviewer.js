@@ -5,17 +5,17 @@
  * - video:   VideoPlayer (HTTP 206 流式播放、手势进度条、缩放模式、防误触)
  * - audio:   AudioPlayer (黑胶唱片旋转动画、高保真流、倍速控制、单曲循环)
  * - image:   ImageViewer (多点触控平移缩放、双击放大、分辨率指示)
- * - text:    CodeTextViewer (行号高亮、阅读模式与实时写回服务器编辑模式)
+ * - text:    CodeTextViewer (超高渲染性能单节点渲染、行号高亮、阅读与实时写回编辑)
  * - docx:    DocxViewer (JSZip 解析 XML 提取段落纯文本)
  * - sheet:   XlsxViewer (SheetJS 解析 Excel 多工作表网格)
  * - ebook:   EpubViewer (电子书目录与章节分页阅读)
  * - archive: ArchiveViewer (ZIP / TAR 压缩包内嵌目录浏览与直接预览)
- * - pdf:     PdfViewer (PDF 元数据提示与快速本地下载通道)
+ * - pdf:     PdfViewer (高保真本地阅读器调起与服务端 Poppler 文本速读抽取)
  */
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect } from 'react';
 import {
   StyleSheet, Text, View, TouchableOpacity,
-  Modal, Platform,
+  Modal, Platform, BackHandler,
 } from 'react-native';
 import { X, DownloadCloud, File, Download } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
@@ -41,15 +41,28 @@ export default function FilePreviewer({
   onClose,
   onDownload,
 }) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
+
+  // Ensure Android hardware back button always exits previewer
+  useEffect(() => {
+    const onBackPress = () => {
+      if (onClose) {
+        onClose();
+        return true;
+      }
+      return false;
+    };
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => backHandler.remove();
+  }, [onClose]);
 
   if (!item) return null;
 
   const targetPath = item.path || item.href || '';
   const streamUrl = getDirectUrl
     ? getDirectUrl(targetPath)
-    : `${serverUrl}/api.php?token=${apiToken}&action=file_stream&path=${encodeURIComponent(targetPath)}`;
+    : `${serverUrl}/api.php?token=${encodeURIComponent(apiToken || '')}&action=file_stream&path=${encodeURIComponent(targetPath)}`;
 
   const kind = getFileKind(item.name);
 
@@ -73,11 +86,11 @@ export default function FilePreviewer({
       case 'archive':
         return <ArchiveViewer item={item} getDirectUrl={getDirectUrl} authHeaders={authHeaders} onDownload={onDownload} />;
       case 'pdf':
-        return <PdfViewer item={item} onDownload={onDownload} />;
+        return <PdfViewer item={item} serverUrl={serverUrl} apiToken={apiToken} streamUrl={streamUrl} onDownload={onDownload} />;
       default:
         return (
           <View style={styles.fallbackContainer}>
-            <File color="#4b5563" size={72} style={{ marginBottom: 18 }} />
+            <File color={colors.sub} size={72} style={{ marginBottom: 18 }} />
             <Text style={styles.fallbackTitle}>{item.name}</Text>
             <Text style={styles.fallbackMeta}>{formatBytes(item.size)}</Text>
             <Text style={styles.fallbackHint}>
@@ -99,8 +112,8 @@ export default function FilePreviewer({
       <View style={styles.container}>
         {/* Top Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={onClose} style={styles.headerBtn}>
-            <X color="#ffffff" size={24} />
+          <TouchableOpacity onPress={onClose} style={styles.headerBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <X color={colors.textStrong} size={22} />
           </TouchableOpacity>
 
           <View style={styles.titleBox}>
@@ -113,8 +126,8 @@ export default function FilePreviewer({
             </View>
           </View>
 
-          <TouchableOpacity onPress={() => onDownload(item)} style={styles.headerBtn}>
-            <DownloadCloud color="#3b82f6" size={24} />
+          <TouchableOpacity onPress={() => onDownload(item)} style={styles.headerBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <DownloadCloud color={colors.accent} size={22} />
           </TouchableOpacity>
         </View>
 
@@ -125,10 +138,10 @@ export default function FilePreviewer({
   );
 }
 
-const createStyles = (colors) => StyleSheet.create({
+const createStyles = (colors, isDark) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0a0a0c',
+    backgroundColor: colors.bg,
   },
   header: {
     flexDirection: 'row',
@@ -137,15 +150,15 @@ const createStyles = (colors) => StyleSheet.create({
     paddingTop: Platform.OS === 'ios' ? 56 : 16,
     paddingHorizontal: 16,
     paddingBottom: 12,
-    backgroundColor: 'rgba(15, 17, 23, 0.96)',
+    backgroundColor: colors.bar,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
+    borderBottomColor: colors.divider,
   },
   headerBtn: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: colors.cardSecondary,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -155,7 +168,7 @@ const createStyles = (colors) => StyleSheet.create({
     paddingHorizontal: 12,
   },
   titleText: {
-    color: '#ffffff',
+    color: colors.textStrong,
     fontSize: 15,
     fontWeight: 'bold',
     textAlign: 'center',
@@ -167,44 +180,46 @@ const createStyles = (colors) => StyleSheet.create({
     gap: 8,
   },
   extBadge: {
-    backgroundColor: 'rgba(59, 130, 246, 0.2)',
+    backgroundColor: isDark ? 'rgba(56, 189, 248, 0.15)' : 'rgba(2, 132, 199, 0.12)',
     paddingHorizontal: 6,
     paddingVertical: 1,
     borderRadius: 4,
   },
   extBadgeText: {
-    color: '#60a5fa',
+    color: colors.accent,
     fontSize: 10,
     fontWeight: 'bold',
   },
   sizeText: {
-    color: '#9ca3af',
+    color: colors.sub,
     fontSize: 11,
   },
   body: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: colors.bg,
   },
   fallbackContainer: {
     alignItems: 'center',
     padding: 36,
     width: '100%',
+    backgroundColor: colors.bg,
   },
   fallbackTitle: {
-    color: '#ffffff',
+    color: colors.textStrong,
     fontSize: 18,
     fontWeight: 'bold',
     textAlign: 'center',
     marginBottom: 8,
   },
   fallbackMeta: {
-    color: '#9ca3af',
+    color: colors.sub,
     fontSize: 14,
     marginBottom: 16,
   },
   fallbackHint: {
-    color: '#9ca3af',
+    color: colors.muted,
     fontSize: 14,
     textAlign: 'center',
     lineHeight: 22,
@@ -213,7 +228,7 @@ const createStyles = (colors) => StyleSheet.create({
   fallbackDownloadBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#3b82f6',
+    backgroundColor: colors.accent,
     paddingHorizontal: 24,
     paddingVertical: 14,
     borderRadius: 28,

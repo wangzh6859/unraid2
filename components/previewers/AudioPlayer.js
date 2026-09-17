@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   StyleSheet, Text, View, TouchableOpacity, ActivityIndicator,
   Animated, Easing, Platform,
@@ -20,7 +20,7 @@ function formatTime(millis) {
 }
 
 export default function AudioPlayer({ item, streamUrl }) {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const soundRef = useRef(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
@@ -148,6 +148,8 @@ export default function AudioPlayer({ item, streamUrl }) {
     ? Math.min(100, Math.max(0, (positionMillis / durationMillis) * 100))
     : 0;
 
+  const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
+
   return (
     <View style={styles.container}>
       {/* Vinyl Record Visualizer */}
@@ -156,7 +158,7 @@ export default function AudioPlayer({ item, streamUrl }) {
           <View style={styles.vinylGroove1}>
             <View style={styles.vinylGroove2}>
               <View style={styles.vinylLabel}>
-                <Disc color="#3b82f6" size={32} />
+                <Disc color={colors.accent} size={32} />
               </View>
             </View>
           </View>
@@ -206,7 +208,7 @@ export default function AudioPlayer({ item, streamUrl }) {
 
           {/* Rewind 10s */}
           <TouchableOpacity style={styles.seekBtn} onPress={() => handleSeekDelta(-10)}>
-            <RotateCcw color="#ffffff" size={24} />
+            <RotateCcw color={colors.textStrong} size={24} />
             <Text style={styles.seekLabel}>-10s</Text>
           </TouchableOpacity>
 
@@ -227,13 +229,13 @@ export default function AudioPlayer({ item, streamUrl }) {
 
           {/* Forward 10s */}
           <TouchableOpacity style={styles.seekBtn} onPress={() => handleSeekDelta(10)}>
-            <RotateCw color="#ffffff" size={24} />
+            <RotateCw color={colors.textStrong} size={24} />
             <Text style={styles.seekLabel}>+10s</Text>
           </TouchableOpacity>
 
           {/* Loop Toggle */}
           <TouchableOpacity style={styles.secondaryBtn} onPress={toggleLoop}>
-            {isLooping ? <Repeat1 color="#3b82f6" size={20} /> : <Repeat color="#9ca3af" size={20} />}
+            {isLooping ? <Repeat1 color={colors.accent} size={20} /> : <Repeat color={colors.muted} size={20} />}
           </TouchableOpacity>
         </View>
       </View>
@@ -241,26 +243,26 @@ export default function AudioPlayer({ item, streamUrl }) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors, isDark) => StyleSheet.create({
   container: {
     flex: 1,
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
-    backgroundColor: '#0a0a0c',
+    backgroundColor: colors.bg,
   },
   turntableContainer: {
     width: 220,
     height: 220,
     borderRadius: 110,
-    backgroundColor: '#121318',
+    backgroundColor: isDark ? '#121318' : '#e2e8f0',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 32,
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.6,
+    shadowOpacity: isDark ? 0.6 : 0.15,
     shadowRadius: 16,
     elevation: 10,
   },
@@ -268,18 +270,18 @@ const styles = StyleSheet.create({
     width: 200,
     height: 200,
     borderRadius: 100,
-    backgroundColor: '#1c1e24',
+    backgroundColor: isDark ? '#1c1e24' : '#334155',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
-    borderColor: '#2d3139',
+    borderColor: isDark ? '#2d3139' : '#475569',
   },
   vinylGroove1: {
     width: 150,
     height: 150,
     borderRadius: 75,
     borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.06)',
+    borderColor: 'rgba(255,255,255,0.08)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -288,7 +290,7 @@ const styles = StyleSheet.create({
     height: 100,
     borderRadius: 50,
     borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: 'rgba(255,255,255,0.1)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -296,20 +298,25 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#0f172a',
+    backgroundColor: isDark ? '#0f172a' : '#1e293b',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
-    borderColor: '#3b82f6',
+    borderColor: colors.accent,
   },
   trackCard: {
     width: '100%',
     maxWidth: 340,
-    backgroundColor: '#13151b',
+    backgroundColor: colors.card,
     borderRadius: 20,
     padding: 20,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: colors.cardBorder,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: isDark ? 0.3 : 0.08,
+    shadowRadius: 10,
+    elevation: 4,
   },
   badgeRow: {
     flexDirection: 'row',
@@ -318,24 +325,24 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   formatBadge: {
-    backgroundColor: 'rgba(59, 130, 246, 0.18)',
+    backgroundColor: isDark ? 'rgba(56, 189, 248, 0.18)' : 'rgba(2, 132, 199, 0.12)',
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.4)',
+    borderColor: isDark ? 'rgba(56, 189, 248, 0.4)' : 'rgba(2, 132, 199, 0.3)',
   },
   formatBadgeText: {
-    color: '#60a5fa',
+    color: colors.accent,
     fontSize: 11,
     fontWeight: 'bold',
   },
   fileSizeText: {
-    color: '#9ca3af',
+    color: colors.sub,
     fontSize: 12,
   },
   trackTitle: {
-    color: '#ffffff',
+    color: colors.textStrong,
     fontSize: 16,
     fontWeight: 'bold',
     marginBottom: 16,
@@ -347,13 +354,13 @@ const styles = StyleSheet.create({
   },
   progressBarTrack: {
     height: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)',
     borderRadius: 2,
     position: 'relative',
   },
   progressBarFilled: {
     height: '100%',
-    backgroundColor: '#3b82f6',
+    backgroundColor: colors.accent,
     borderRadius: 2,
   },
   progressThumb: {
@@ -362,7 +369,7 @@ const styles = StyleSheet.create({
     width: 12,
     height: 12,
     borderRadius: 6,
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.accent,
     marginLeft: -6,
   },
   timeRow: {
@@ -372,13 +379,13 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   timeText: {
-    color: '#e2e8f0',
+    color: colors.text,
     fontSize: 12,
     fontWeight: '600',
     fontVariant: ['tabular-nums'],
   },
   timeDurationText: {
-    color: '#64748b',
+    color: colors.muted,
     fontSize: 12,
     fontVariant: ['tabular-nums'],
   },
@@ -393,7 +400,7 @@ const styles = StyleSheet.create({
     padding: 6,
   },
   seekLabel: {
-    color: '#94a3b8',
+    color: colors.sub,
     fontSize: 10,
     fontWeight: 'bold',
     marginTop: 2,
@@ -402,10 +409,10 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#3b82f6',
+    backgroundColor: colors.accent,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#3b82f6',
+    shadowColor: colors.accent,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.4,
     shadowRadius: 8,
@@ -415,12 +422,12 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: colors.cardSecondary,
     justifyContent: 'center',
     alignItems: 'center',
   },
   secondaryBtnText: {
-    color: '#e2e8f0',
+    color: colors.text,
     fontSize: 12,
     fontWeight: 'bold',
   },

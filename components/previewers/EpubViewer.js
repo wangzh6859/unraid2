@@ -12,7 +12,7 @@ import { useTheme } from '../../ThemeContext';
 import { downloadToCache, readFileAsBase64, base64ToUint8, stripHtml } from '../../utils/previewUtils';
 
 export default function EpubViewer({ item, getDirectUrl, authHeaders, onDownload }) {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const [state, setState] = useState({ loading: true, error: '', chapters: [], names: [], active: 0 });
 
   useEffect(() => {
@@ -108,18 +108,18 @@ export default function EpubViewer({ item, getDirectUrl, authHeaders, onDownload
 
   if (state.loading) {
     return (
-      <View style={styles.center}>
+      <View style={[styles.center, { backgroundColor: colors.bg }]}>
         <ActivityIndicator size="large" color={colors.accent} />
-        <Text style={styles.hint}>正在解析电子书…</Text>
+        <Text style={[styles.hint, { color: colors.sub }]}>正在解析电子书…</Text>
       </View>
     );
   }
   if (state.error) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.title}>{item.name}</Text>
+      <View style={[styles.center, { backgroundColor: colors.bg }]}>
+        <Text style={[styles.title, { color: colors.textStrong }]}>{item.name}</Text>
         <Text style={styles.error}>{state.error}</Text>
-        <Text style={styles.hint}>扫描版/图片型电子书暂不支持在线阅读，请下载后查看。</Text>
+        <Text style={[styles.hint, { color: colors.sub }]}>扫描版/图片型电子书暂不支持在线阅读，请下载后查看。</Text>
         <TouchableOpacity style={[styles.downloadBtn, { backgroundColor: colors.accent }]} onPress={() => onDownload(item)}>
           <Download color="#ffffff" size={18} />
           <Text style={styles.downloadText}>下载到手机查看</Text>
@@ -131,31 +131,31 @@ export default function EpubViewer({ item, getDirectUrl, authHeaders, onDownload
   const cur = state.chapters[state.active];
   const meta = state.names[0];
   return (
-    <View style={styles.flex}>
-      <View style={styles.topBar}>
-        <Text style={styles.metaText} numberOfLines={1}>{meta || item.name}</Text>
+    <View style={[styles.flex, { backgroundColor: colors.bg }]}>
+      <View style={[styles.topBar, { backgroundColor: colors.card, borderBottomColor: colors.divider }]}>
+        <Text style={[styles.metaText, { color: colors.sub }]} numberOfLines={1}>{meta || item.name}</Text>
       </View>
       <ScrollView style={styles.flex} contentContainerStyle={styles.content}>
-        <Text style={styles.chapterTitle}>第 {state.active + 1} / {state.chapters.length} 章</Text>
-        <Text style={styles.body}>{cur ? cur.text : ''}</Text>
+        <Text style={[styles.chapterTitle, { color: colors.accent }]}>第 {state.active + 1} / {state.chapters.length} 章</Text>
+        <Text style={[styles.body, { color: colors.text }]}>{cur ? cur.text : ''}</Text>
       </ScrollView>
-      <View style={styles.navBar}>
+      <View style={[styles.navBar, { backgroundColor: colors.bar, borderTopColor: colors.divider }]}>
         <TouchableOpacity
           style={[styles.navBtn, state.active === 0 && styles.navBtnDisabled]}
           disabled={state.active === 0}
           onPress={() => setState(prev => ({ ...prev, active: Math.max(0, prev.active - 1) }))}
         >
-          <ChevronLeft color={state.active === 0 ? '#4b5563' : '#ffffff'} size={18} />
-          <Text style={[styles.navText, state.active === 0 && { color: '#4b5563' }]}>上一章</Text>
+          <ChevronLeft color={state.active === 0 ? colors.muted : colors.textStrong} size={18} />
+          <Text style={[styles.navText, { color: state.active === 0 ? colors.muted : colors.textStrong }]}>上一章</Text>
         </TouchableOpacity>
-        <Text style={styles.navCount}>{state.active + 1} / {state.chapters.length}</Text>
+        <Text style={[styles.navCount, { color: colors.sub }]}>{state.active + 1} / {state.chapters.length}</Text>
         <TouchableOpacity
           style={[styles.navBtn, state.active >= state.chapters.length - 1 && styles.navBtnDisabled]}
           disabled={state.active >= state.chapters.length - 1}
           onPress={() => setState(prev => ({ ...prev, active: Math.min(state.chapters.length - 1, prev.active + 1) }))}
         >
-          <Text style={[styles.navText, state.active >= state.chapters.length - 1 && { color: '#4b5563' }]}>下一章</Text>
-          <ChevronRight color={state.active >= state.chapters.length - 1 ? '#4b5563' : '#ffffff'} size={18} />
+          <Text style={[styles.navText, { color: state.active >= state.chapters.length - 1 ? colors.muted : colors.textStrong }]}>下一章</Text>
+          <ChevronRight color={state.active >= state.chapters.length - 1 ? colors.muted : colors.textStrong} size={18} />
         </TouchableOpacity>
       </View>
     </View>
@@ -165,19 +165,19 @@ export default function EpubViewer({ item, getDirectUrl, authHeaders, onDownload
 const styles = StyleSheet.create({
   flex: { flex: 1, width: '100%' },
   center: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  title: { color: '#ffffff', fontSize: 17, fontWeight: 'bold', textAlign: 'center', marginBottom: 12 },
-  hint: { color: '#9ca3af', fontSize: 14, marginTop: 14, textAlign: 'center' },
-  error: { color: '#f87171', fontSize: 15, textAlign: 'center', marginBottom: 8 },
+  title: { fontSize: 17, fontWeight: 'bold', textAlign: 'center', marginBottom: 12 },
+  hint: { fontSize: 14, marginTop: 14, textAlign: 'center' },
+  error: { color: '#ef4444', fontSize: 15, textAlign: 'center', marginBottom: 8 },
   downloadBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 24, marginTop: 8 },
   downloadText: { color: '#ffffff', fontSize: 15, fontWeight: 'bold', marginLeft: 8 },
-  topBar: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#374151' },
-  metaText: { color: '#9ca3af', fontSize: 13 },
+  topBar: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1 },
+  metaText: { fontSize: 13 },
   content: { padding: 18, paddingBottom: 90 },
-  chapterTitle: { color: '#60a5fa', fontSize: 13, marginBottom: 10 },
-  body: { color: '#e5e7eb', fontSize: 16, lineHeight: 26 },
-  navBar: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(17,24,39,0.98)', paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#374151' },
+  chapterTitle: { fontSize: 13, marginBottom: 10, fontWeight: 'bold' },
+  body: { fontSize: 16, lineHeight: 26 },
+  navBar: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1 },
   navBtn: { flexDirection: 'row', alignItems: 'center', padding: 6 },
   navBtnDisabled: { opacity: 0.5 },
-  navText: { color: '#ffffff', fontSize: 14, marginHorizontal: 4 },
-  navCount: { color: '#9ca3af', fontSize: 13 },
+  navText: { fontSize: 14, marginHorizontal: 4, fontWeight: '500' },
+  navCount: { fontSize: 13 },
 });

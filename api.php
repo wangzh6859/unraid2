@@ -6,7 +6,7 @@
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.17.03');
+define('UNRAID_API_VERSION', '2026.09.17.04');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -504,6 +504,10 @@ switch ($action) {
 
     case 'file_compress':
         handle_file_compress();
+        break;
+
+    case 'pdf_preview':
+        handle_pdf_preview();
         break;
 
     case 'version':
@@ -3183,12 +3187,24 @@ function handle_file_read() {
         json_output(['status' => 'error', 'message' => 'File not found: ' . $filePath], 404);
     }
 
-    $size = filesize($filePath);
+    $size = (float)filesize($filePath);
     if ($size > 10 * 1024 * 1024) { // 10MB limit for text reader
-        json_output(['status' => 'error', 'message' => 'File too large to open as text (max 10MB)'], 400);
+        json_output(['status' => 'error', 'message' => '文件体积过大（超过 10MB），建议直接下载至手机查看'], 400);
     }
 
-    $content = file_get_contents($filePath);
+    $maxBytes = isset($_GET['max_bytes']) ? intval($_GET['max_bytes']) : 524288; // Default preview chunk 512KB
+    $isTruncated = false;
+    if ($maxBytes > 0 && $size > $maxBytes) {
+        $content = @file_get_contents($filePath, false, null, 0, $maxBytes);
+        $isTruncated = true;
+    } else {
+        $content = @file_get_contents($filePath);
+    }
+
+    if ($content === false) {
+        json_output(['status' => 'error', 'message' => '读取文件内容失败'], 500);
+    }
+
     // Convert to UTF-8 if encoded in GBK/GB2312/CP936/etc.
     if (function_exists('mb_check_encoding') && !mb_check_encoding($content, 'UTF-8')) {
         if (function_exists('mb_convert_encoding')) {
@@ -3202,8 +3218,57 @@ function handle_file_read() {
     json_output([
         'status' => 'success',
         'path' => $filePath,
+        'name' => safe_basename($filePath),
         'size' => $size,
+        'truncated' => $isTruncated,
+        'preview_size' => strlen($content),
         'content' => $content
+    ]);
+}
+
+function handle_pdf_preview() {
+    $rawPath = isset($_GET['path']) ? $_GET['path'] : '';
+    $filePath = sanitize_path($rawPath);
+
+    clearstatcache(true, $filePath);
+    if (!file_exists($filePath) || is_dir($filePath)) {
+        json_output(['status' => 'error', 'message' => 'PDF 文件不存在: ' . $filePath], 404);
+    }
+
+    $ext = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+    if ($ext !== 'pdf') {
+        json_output(['status' => 'error', 'message' => '目标文件不是 PDF 格式'], 400);
+    }
+
+    $hasPdftotext = (trim((string)@shell_exec('which pdftotext 2>/dev/null')) !== '');
+    $extractedText = '';
+    $pageCount = 0;
+
+    if ($hasPdftotext) {
+        $escaped = escapeshellarg($filePath);
+        $cmd = "pdftotext -f 1 -l 30 -enc UTF-8 {$escaped} - 2>/dev/null";
+        $extractedText = (string)@shell_exec($cmd);
+
+        $pdfinfo = @shell_exec("pdfinfo {$escaped} 2>/dev/null");
+        if ($pdfinfo && preg_match('/Pages:\s+(\d+)/i', $pdfinfo, $m)) {
+            $pageCount = (int)$m[1];
+        }
+    }
+
+    $cleanText = trim($extractedText);
+    if (function_exists('mb_check_encoding') && !mb_check_encoding($cleanText, 'UTF-8')) {
+        $cleanText = @mb_convert_encoding($cleanText, 'UTF-8', 'UTF-8, GB18030, GBK, BIG5, ISO-8859-1');
+    }
+
+    json_output([
+        'status' => 'success',
+        'has_text' => (!empty($cleanText)),
+        'text' => $cleanText,
+        'page_count' => $pageCount,
+        'has_engine' => $hasPdftotext,
+        'size' => (float)filesize($filePath),
+        'name' => safe_basename($filePath),
+        'path' => $filePath
     ]);
 }
 

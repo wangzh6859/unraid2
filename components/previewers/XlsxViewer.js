@@ -14,7 +14,7 @@ const MAX_ROWS = 500;
 const MAX_COLS = 40;
 
 export default function XlsxViewer({ item, getDirectUrl, authHeaders, onDownload }) {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const [state, setState] = useState({ loading: true, error: '', sheets: [], names: [], active: 0 });
 
   useEffect(() => {
@@ -40,18 +40,18 @@ export default function XlsxViewer({ item, getDirectUrl, authHeaders, onDownload
 
   if (state.loading) {
     return (
-      <View style={styles.center}>
+      <View style={[styles.center, { backgroundColor: colors.bg }]}>
         <ActivityIndicator size="large" color={colors.accent} />
-        <Text style={styles.hint}>正在解析表格…</Text>
+        <Text style={[styles.hint, { color: colors.sub }]}>正在解析表格…</Text>
       </View>
     );
   }
   if (state.error) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.title}>{item.name}</Text>
+      <View style={[styles.center, { backgroundColor: colors.bg }]}>
+        <Text style={[styles.title, { color: colors.textStrong }]}>{item.name}</Text>
         <Text style={styles.error}>{state.error}</Text>
-        <Text style={styles.hint}>该文件可能已加密/损坏，或为非标准表格格式，请下载后用办公软件打开。</Text>
+        <Text style={[styles.hint, { color: colors.sub }]}>该文件可能已加密/损坏，或为非标准表格格式，请下载后用办公软件打开。</Text>
         <TouchableOpacity style={[styles.downloadBtn, { backgroundColor: colors.accent }]} onPress={() => onDownload(item)}>
           <Download color="#ffffff" size={18} />
           <Text style={styles.downloadText}>下载到手机查看</Text>
@@ -62,37 +62,76 @@ export default function XlsxViewer({ item, getDirectUrl, authHeaders, onDownload
 
   const rows = state.sheets[state.active] || [];
   return (
-    <View style={styles.flex}>
+    <View style={[styles.flex, { backgroundColor: colors.bg }]}>
       {state.names.length > 1 && (
-        <ScrollView horizontal style={styles.sheetBar} contentContainerStyle={styles.sheetBarContent}>
-          {state.names.map((name, i) => (
-            <TouchableOpacity
-              key={name + i}
-              style={[styles.sheetChip, i === state.active && { backgroundColor: 'rgba(59,130,246,0.35)', borderColor: colors.accent }]}
-              onPress={() => setState(prev => ({ ...prev, active: i }))}
-            >
-              <Text style={[styles.sheetChipText, i === state.active && { color: '#ffffff' }]} numberOfLines={1}>{name}</Text>
-            </TouchableOpacity>
-          ))}
+        <ScrollView horizontal style={[styles.sheetBar, { borderBottomColor: colors.divider }]} contentContainerStyle={styles.sheetBarContent}>
+          {state.names.map((name, i) => {
+            const isActive = i === state.active;
+            return (
+              <TouchableOpacity
+                key={name + i}
+                style={[
+                  styles.sheetChip,
+                  {
+                    backgroundColor: isActive ? (isDark ? 'rgba(56, 189, 248, 0.2)' : 'rgba(2, 132, 199, 0.12)') : colors.cardSecondary,
+                    borderColor: isActive ? colors.accent : colors.cardBorder,
+                  }
+                ]}
+                onPress={() => setState(prev => ({ ...prev, active: i }))}
+              >
+                <Text
+                  style={[
+                    styles.sheetChipText,
+                    { color: isActive ? colors.accent : colors.sub, fontWeight: isActive ? 'bold' : 'normal' }
+                  ]}
+                  numberOfLines={1}
+                >
+                  {name}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
       )}
       <ScrollView style={styles.flex}>
         <ScrollView horizontal>
           <View style={styles.table}>
             {rows.length === 0 ? (
-              <Text style={styles.empty}>（该工作表为空）</Text>
+              <Text style={[styles.empty, { color: colors.sub }]}>（该工作表为空）</Text>
             ) : rows.map((row, ri) => (
-              <View key={ri} style={[styles.row, ri === 0 && styles.headerRow]}>
+              <View key={ri} style={styles.row}>
                 {row.map((cell, ci) => (
-                  <View key={ci} style={[styles.cell, { minWidth: 90, maxWidth: 320 }, ri === 0 && { backgroundColor: 'rgba(59,130,246,0.18)' }]}>
-                    <Text style={[styles.cellText, ri === 0 && styles.headerText]} numberOfLines={1}>{cell === '' ? '' : cell}</Text>
+                  <View
+                    key={ci}
+                    style={[
+                      styles.cell,
+                      {
+                        minWidth: 90,
+                        maxWidth: 320,
+                        borderColor: colors.divider,
+                        backgroundColor: ri === 0 ? colors.cardSecondary : 'transparent',
+                      }
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.cellText,
+                        {
+                          color: ri === 0 ? colors.textStrong : colors.text,
+                          fontWeight: ri === 0 ? 'bold' : 'normal',
+                        }
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {cell === '' ? '' : cell}
+                    </Text>
                   </View>
                 ))}
               </View>
             ))}
           </View>
         </ScrollView>
-        <Text style={styles.meta}>
+        <Text style={[styles.meta, { color: colors.sub }]}>
           {item.name} · {state.names.length} 个工作表 · 展示前 {rows.length} 行
         </Text>
       </ScrollView>
@@ -103,21 +142,19 @@ export default function XlsxViewer({ item, getDirectUrl, authHeaders, onDownload
 const styles = StyleSheet.create({
   flex: { flex: 1, width: '100%' },
   center: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  title: { color: '#ffffff', fontSize: 17, fontWeight: 'bold', textAlign: 'center', marginBottom: 12 },
-  hint: { color: '#9ca3af', fontSize: 14, marginTop: 14, textAlign: 'center' },
-  error: { color: '#f87171', fontSize: 15, textAlign: 'center', marginBottom: 8 },
+  title: { fontSize: 17, fontWeight: 'bold', textAlign: 'center', marginBottom: 12 },
+  hint: { fontSize: 14, marginTop: 14, textAlign: 'center' },
+  error: { color: '#ef4444', fontSize: 15, textAlign: 'center', marginBottom: 8 },
   downloadBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 24, marginTop: 8 },
   downloadText: { color: '#ffffff', fontSize: 15, fontWeight: 'bold', marginLeft: 8 },
-  sheetBar: { maxHeight: 44, borderBottomWidth: 1, borderBottomColor: '#374151' },
+  sheetBar: { maxHeight: 44, borderBottomWidth: 1 },
   sheetBarContent: { alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6 },
-  sheetChip: { borderWidth: 1, borderColor: '#4b5563', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 5, marginRight: 8 },
-  sheetChipText: { color: '#9ca3af', fontSize: 13 },
+  sheetChip: { borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 5, marginRight: 8 },
+  sheetChipText: { fontSize: 13 },
   table: { padding: 8 },
   row: { flexDirection: 'row' },
-  headerRow: {},
-  cell: { borderWidth: StyleSheet.hairlineWidth, borderColor: '#374151', paddingHorizontal: 8, paddingVertical: 6, justifyContent: 'center' },
-  cellText: { color: '#e5e7eb', fontSize: 13 },
-  headerText: { color: '#ffffff', fontWeight: 'bold' },
-  meta: { color: '#9ca3af', fontSize: 12, padding: 12 },
-  empty: { color: '#9ca3af', padding: 20 },
+  cell: { borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 8, paddingVertical: 6, justifyContent: 'center' },
+  cellText: { fontSize: 13 },
+  meta: { fontSize: 12, padding: 12 },
+  empty: { padding: 20 },
 });

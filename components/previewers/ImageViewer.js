@@ -3,12 +3,14 @@ import {
   StyleSheet, Text, View, Image, ScrollView, TouchableOpacity,
   ActivityIndicator, Dimensions,
 } from 'react-native';
-import { RotateCw, ZoomIn, ZoomOut, AlertCircle, Download } from 'lucide-react-native';
+import { AlertCircle, Download } from 'lucide-react-native';
+import { useTheme } from '../../ThemeContext';
 import { formatBytes } from '../../utils/cacheManager';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export default function ImageViewer({ item, streamUrl, onDownload }) {
+  const { colors, isDark } = useTheme();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [imageSize, setImageSize] = useState(null);
@@ -19,7 +21,6 @@ export default function ImageViewer({ item, streamUrl, onDownload }) {
   const handleDoubleTap = () => {
     const now = Date.now();
     if (lastTapRef.current && now - lastTapRef.current < 300) {
-      // Double tap triggered
       if (isZoomed) {
         scrollRef.current?.scrollResponderZoomTo({ x: 0, y: 0, width: SCREEN_WIDTH, height: SCREEN_HEIGHT, animated: true });
         setIsZoomed(false);
@@ -43,14 +44,14 @@ export default function ImageViewer({ item, streamUrl, onDownload }) {
 
   if (error) {
     return (
-      <View style={styles.errorContainer}>
+      <View style={[styles.errorContainer, { backgroundColor: colors.bg }]}>
         <AlertCircle color="#ef4444" size={64} style={{ marginBottom: 16 }} />
-        <Text style={styles.errorTitle}>图片解码失败</Text>
-        <Text style={styles.errorSub}>
+        <Text style={[styles.errorTitle, { color: colors.textStrong }]}>图片解码失败</Text>
+        <Text style={[styles.errorSub, { color: colors.sub }]}>
           当前系统暂不支持该图片格式（如特定 RAW、HEIC 或超大尺寸 PSD）的直接预览。
         </Text>
-        <Text style={styles.errorSize}>{item?.name} ({formatBytes(item?.size)})</Text>
-        <TouchableOpacity style={styles.downloadBtn} onPress={() => onDownload(item)}>
+        <Text style={[styles.errorSize, { color: colors.muted }]}>{item?.name} ({formatBytes(item?.size)})</Text>
+        <TouchableOpacity style={[styles.downloadBtn, { backgroundColor: colors.accent }]} onPress={() => onDownload(item)}>
           <Download color="#ffffff" size={20} />
           <Text style={styles.downloadBtnText}>下载到本地相册查看</Text>
         </TouchableOpacity>
@@ -59,15 +60,21 @@ export default function ImageViewer({ item, streamUrl, onDownload }) {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.bg }]}>
       {/* Top Floating Badge */}
-      <View style={styles.floatingBadge}>
+      <View style={[
+        styles.floatingBadge,
+        {
+          backgroundColor: isDark ? 'rgba(0,0,0,0.65)' : 'rgba(255,255,255,0.85)',
+          borderColor: colors.cardBorder,
+        }
+      ]}>
         {imageSize && (
-          <Text style={styles.badgeText}>
+          <Text style={[styles.badgeText, { color: colors.accent }]}>
             {imageSize.width} × {imageSize.height}
           </Text>
         )}
-        <Text style={[styles.badgeText, { color: '#94a3b8', marginLeft: 8 }]}>
+        <Text style={[styles.badgeText, { color: colors.sub, marginLeft: 8 }]}>
           {formatBytes(item?.size)}
         </Text>
       </View>
@@ -98,15 +105,21 @@ export default function ImageViewer({ item, streamUrl, onDownload }) {
       </ScrollView>
 
       {loading && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color="#3b82f6" />
-          <Text style={styles.loadingText}>正在加载高保真图像...</Text>
+        <View style={[
+          styles.loadingOverlay,
+          { backgroundColor: isDark ? 'rgba(11, 15, 25, 0.75)' : 'rgba(248, 250, 252, 0.75)' }
+        ]}>
+          <ActivityIndicator size="large" color={colors.accent} />
+          <Text style={[styles.loadingText, { color: colors.sub }]}>正在加载高保真图像...</Text>
         </View>
       )}
 
       {/* Bottom Hint */}
-      <View style={styles.bottomHintBar}>
-        <Text style={styles.hintText}>双击缩放 · 双指缩放平移</Text>
+      <View style={[
+        styles.bottomHintBar,
+        { backgroundColor: isDark ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.75)' }
+      ]}>
+        <Text style={[styles.hintText, { color: colors.muted }]}>双击缩放 · 双指缩放平移</Text>
       </View>
     </View>
   );
@@ -116,7 +129,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     width: '100%',
-    backgroundColor: '#0a0a0c',
     position: 'relative',
   },
   floatingBadge: {
@@ -125,15 +137,12 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     zIndex: 10,
     flexDirection: 'row',
-    backgroundColor: 'rgba(0,0,0,0.65)',
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
   },
   badgeText: {
-    color: '#60a5fa',
     fontSize: 12,
     fontWeight: 'bold',
   },
@@ -159,10 +168,8 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(10, 10, 12, 0.7)',
   },
   loadingText: {
-    color: '#94a3b8',
     fontSize: 13,
     marginTop: 10,
   },
@@ -170,13 +177,11 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 16,
     alignSelf: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
     paddingHorizontal: 14,
     paddingVertical: 4,
     borderRadius: 12,
   },
   hintText: {
-    color: '#64748b',
     fontSize: 11,
   },
   errorContainer: {
@@ -184,30 +189,25 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 32,
-    backgroundColor: '#0a0a0c',
   },
   errorTitle: {
-    color: '#ffffff',
     fontSize: 18,
     fontWeight: 'bold',
     marginBottom: 8,
   },
   errorSub: {
-    color: '#9ca3af',
     fontSize: 13,
     textAlign: 'center',
     lineHeight: 20,
     marginBottom: 12,
   },
   errorSize: {
-    color: '#6b7280',
     fontSize: 12,
     marginBottom: 24,
   },
   downloadBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#3b82f6',
     paddingHorizontal: 20,
     paddingVertical: 12,
     borderRadius: 24,

@@ -63,18 +63,18 @@ export default function DocxViewer({ item, getDirectUrl, authHeaders, onDownload
 
   if (state.loading) {
     return (
-      <View style={styles.center}>
+      <View style={[styles.center, { backgroundColor: colors.bg }]}>
         <ActivityIndicator size="large" color={colors.accent} />
-        <Text style={styles.hint}>正在解析 Word 文档…</Text>
+        <Text style={[styles.hint, { color: colors.sub }]}>正在解析 Word 文档…</Text>
       </View>
     );
   }
   if (state.error) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.title}>{item.name}</Text>
+      <View style={[styles.center, { backgroundColor: colors.bg }]}>
+        <Text style={[styles.title, { color: colors.textStrong }]}>{item.name}</Text>
         <Text style={styles.error}>{state.error}</Text>
-        <Text style={styles.hint}>当前为纯文本级预览，复杂版式（图片/表格样式）请下载后查看。</Text>
+        <Text style={[styles.hint, { color: colors.sub }]}>当前为纯文本级预览，复杂版式（图片/表格样式）请下载后查看。</Text>
         <TouchableOpacity style={[styles.downloadBtn, { backgroundColor: colors.accent }]} onPress={() => onDownload(item)}>
           <Download color="#ffffff" size={18} />
           <Text style={styles.downloadText}>下载到手机查看</Text>
@@ -83,9 +83,9 @@ export default function DocxViewer({ item, getDirectUrl, authHeaders, onDownload
     );
   }
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-      <Text style={styles.meta}>{item.name} · {formatBytes(item.size)}</Text>
-      <Text style={styles.body}>{state.text}</Text>
+    <ScrollView style={[styles.scroll, { backgroundColor: colors.bg }]} contentContainerStyle={styles.content}>
+      <Text style={[styles.meta, { color: colors.sub }]}>{item.name} · {formatBytes(item.size)}</Text>
+      <Text style={[styles.body, { color: colors.text }]}>{state.text}</Text>
     </ScrollView>
   );
 }
@@ -94,11 +94,11 @@ const styles = StyleSheet.create({
   center: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', padding: 24 },
   scroll: { flex: 1, width: '100%' },
   content: { padding: 20, paddingBottom: 60 },
-  meta: { color: '#9ca3af', fontSize: 13, marginBottom: 12 },
-  title: { color: '#ffffff', fontSize: 17, fontWeight: 'bold', textAlign: 'center', marginBottom: 12 },
-  body: { color: '#e5e7eb', fontSize: 15, lineHeight: 24 },
-  error: { color: '#f87171', fontSize: 15, textAlign: 'center', marginBottom: 8 },
-  hint: { color: '#9ca3af', fontSize: 14, textAlign: 'center', marginBottom: 16, lineHeight: 20 },
-  downloadBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 24 },
+  meta: { fontSize: 13, marginBottom: 12 },
+  title: { fontSize: 17, fontWeight: 'bold', textAlign: 'center', marginBottom: 12 },
+  body: { fontSize: 15, lineHeight: 24 },
+  hint: { fontSize: 14, marginTop: 14, textAlign: 'center' },
+  error: { color: '#ef4444', fontSize: 15, textAlign: 'center', marginBottom: 8 },
+  downloadBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 24, marginTop: 14 },
   downloadText: { color: '#ffffff', fontSize: 15, fontWeight: 'bold', marginLeft: 8 },
 });

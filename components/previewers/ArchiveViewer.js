@@ -45,7 +45,7 @@ const bytesToB64 = (bytes) => {
 };
 
 export default function ArchiveViewer({ item, getDirectUrl, authHeaders, onDownload }) {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const [state, setState] = useState({
     loading: true, error: '', entries: [], total: 0,
     open: null, openKind: null, openText: '', openImage: '', openSize: 0,
@@ -102,18 +102,18 @@ export default function ArchiveViewer({ item, getDirectUrl, authHeaders, onDownl
 
   if (state.loading && !state.entries.length) {
     return (
-      <View style={styles.center}>
+      <View style={[styles.center, { backgroundColor: colors.bg }]}>
         <ActivityIndicator size="large" color={colors.accent} />
-        <Text style={styles.hint}>正在解析压缩包…</Text>
+        <Text style={[styles.hint, { color: colors.sub }]}>正在解析压缩包…</Text>
       </View>
     );
   }
   if (state.error && !state.entries.length) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.title}>{item.name}</Text>
+      <View style={[styles.center, { backgroundColor: colors.bg }]}>
+        <Text style={[styles.title, { color: colors.textStrong }]}>{item.name}</Text>
         <Text style={styles.error}>{state.error}</Text>
-        <Text style={styles.hint}>rar / 7z / tar.gz 等格式暂不支持在线浏览，请下载后处理。</Text>
+        <Text style={[styles.hint, { color: colors.sub }]}>rar / 7z / tar.gz 等格式暂不支持在线浏览，请下载后处理。</Text>
         <TouchableOpacity style={[styles.downloadBtn, { backgroundColor: colors.accent }]} onPress={() => onDownload(item)}>
           <Download color="#ffffff" size={18} />
           <Text style={styles.downloadText}>下载到手机查看</Text>
@@ -125,26 +125,26 @@ export default function ArchiveViewer({ item, getDirectUrl, authHeaders, onDownl
   // 条目内容查看态
   if (state.open) {
     return (
-      <View style={styles.flex}>
-        <View style={styles.topBar}>
+      <View style={[styles.flex, { backgroundColor: colors.bg }]}>
+        <View style={[styles.topBar, { backgroundColor: colors.card, borderBottomColor: colors.divider }]}>
           <TouchableOpacity style={styles.backBtn} onPress={() => setState((prev) => ({ ...prev, open: null, openText: '', openImage: '', openKind: null }))}>
-            <ChevronLeft color="#ffffff" size={20} />
-            <Text style={styles.backText}>返回列表</Text>
+            <ChevronLeft color={colors.accent} size={20} />
+            <Text style={[styles.backText, { color: colors.accent }]}>返回列表</Text>
           </TouchableOpacity>
-          <Text style={styles.topName} numberOfLines={1}>{state.open}</Text>
+          <Text style={[styles.topName, { color: colors.textStrong }]} numberOfLines={1}>{state.open}</Text>
         </View>
         {state.loading ? (
-          <View style={styles.center}>
+          <View style={[styles.center, { backgroundColor: colors.bg }]}>
             <ActivityIndicator size="large" color={colors.accent} />
-            <Text style={styles.hint}>正在读取条目…</Text>
+            <Text style={[styles.hint, { color: colors.sub }]}>正在读取条目…</Text>
           </View>
         ) : state.openImage ? (
-          <ScrollView style={styles.flex} contentContainerStyle={styles.imgWrap}>
+          <ScrollView style={[styles.flex, { backgroundColor: colors.bg }]} contentContainerStyle={styles.imgWrap}>
             <Image source={{ uri: state.openImage }} style={styles.image} resizeMode="contain" />
           </ScrollView>
         ) : (
-          <ScrollView style={styles.flex} contentContainerStyle={styles.content}>
-            <Text style={styles.entryBody}>{state.openText || '（空内容）'}</Text>
+          <ScrollView style={[styles.flex, { backgroundColor: colors.bg }]} contentContainerStyle={styles.content}>
+            <Text style={[styles.entryBody, { color: colors.text }]}>{state.openText || '（空内容）'}</Text>
           </ScrollView>
         )}
       </View>
@@ -152,29 +152,29 @@ export default function ArchiveViewer({ item, getDirectUrl, authHeaders, onDownl
   }
 
   return (
-    <View style={styles.flex}>
-      <View style={styles.topBar}>
-        <FolderArchive color="#60a5fa" size={16} />
-        <Text style={styles.metaText} numberOfLines={1}>
+    <View style={[styles.flex, { backgroundColor: colors.bg }]}>
+      <View style={[styles.topBar, { backgroundColor: colors.card, borderBottomColor: colors.divider }]}>
+        <FolderArchive color={colors.accent} size={18} />
+        <Text style={[styles.metaText, { color: colors.sub }]} numberOfLines={1}>
           {item.name} · 共 {state.total} 个条目（点击文本/图片条目可预览）
         </Text>
       </View>
       <ScrollView style={styles.flex} contentContainerStyle={styles.listContent}>
         {state.entries.length === 0 ? (
-          <Text style={styles.empty}>（压缩包内没有文件）</Text>
+          <Text style={[styles.empty, { color: colors.sub }]}>（压缩包内没有文件）</Text>
         ) : state.entries.map((entry) => {
           const kind = getFileKind(entry.name);
           const previewable = kind === 'text' || kind === 'image';
           return (
             <TouchableOpacity
               key={entry.name}
-              style={styles.entryRow}
+              style={[styles.entryRow, { borderBottomColor: colors.divider }]}
               onPress={() => (previewable ? openEntry(entry) : null)}
               disabled={!previewable}
             >
-              <FileText color={previewable ? '#e5e7eb' : '#6b7280'} size={16} />
-              <Text style={[styles.entryName, !previewable && { color: '#6b7280' }]} numberOfLines={1}>{entry.name}</Text>
-              {!previewable && <Text style={styles.entryTag}>仅列表</Text>}
+              <FileText color={previewable ? colors.accent : colors.muted} size={16} />
+              <Text style={[styles.entryName, { color: previewable ? colors.textStrong : colors.muted }]} numberOfLines={1}>{entry.name}</Text>
+              {!previewable && <Text style={[styles.entryTag, { color: colors.muted }]}>仅列表</Text>}
             </TouchableOpacity>
           );
         })}
@@ -186,23 +186,23 @@ export default function ArchiveViewer({ item, getDirectUrl, authHeaders, onDownl
 const styles = StyleSheet.create({
   flex: { flex: 1, width: '100%' },
   center: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  title: { color: '#ffffff', fontSize: 17, fontWeight: 'bold', textAlign: 'center', marginBottom: 12 },
-  hint: { color: '#9ca3af', fontSize: 14, marginTop: 14, textAlign: 'center' },
-  error: { color: '#f87171', fontSize: 15, textAlign: 'center', marginBottom: 8 },
+  title: { fontSize: 17, fontWeight: 'bold', textAlign: 'center', marginBottom: 12 },
+  hint: { fontSize: 14, marginTop: 14, textAlign: 'center' },
+  error: { color: '#ef4444', fontSize: 15, textAlign: 'center', marginBottom: 8 },
   downloadBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 24, marginTop: 8 },
   downloadText: { color: '#ffffff', fontSize: 15, fontWeight: 'bold', marginLeft: 8 },
-  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#374151' },
+  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
   backBtn: { flexDirection: 'row', alignItems: 'center', marginRight: 10 },
-  backText: { color: '#ffffff', fontSize: 14, marginLeft: 2 },
-  topName: { color: '#9ca3af', fontSize: 13, flex: 1 },
-  metaText: { color: '#9ca3af', fontSize: 13, marginLeft: 8, flex: 1 },
+  backText: { fontSize: 14, marginLeft: 2, fontWeight: 'bold' },
+  topName: { fontSize: 13, flex: 1, fontWeight: '500' },
+  metaText: { fontSize: 13, marginLeft: 8, flex: 1 },
   listContent: { padding: 8, paddingBottom: 40 },
-  entryRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 9, paddingHorizontal: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#2b3444' },
-  entryName: { color: '#e5e7eb', fontSize: 14, marginLeft: 10, flex: 1 },
-  entryTag: { color: '#6b7280', fontSize: 11 },
-  empty: { color: '#9ca3af', padding: 20, textAlign: 'center' },
+  entryRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  entryName: { fontSize: 14, marginLeft: 10, flex: 1 },
+  entryTag: { fontSize: 11 },
+  empty: { padding: 20, textAlign: 'center' },
   content: { padding: 16, paddingBottom: 60 },
-  entryBody: { color: '#e5e7eb', fontSize: 14, lineHeight: 22 },
+  entryBody: { fontSize: 14, lineHeight: 22 },
   imgWrap: { alignItems: 'center', justifyContent: 'center', padding: 10 },
   image: { width: '100%', height: undefined, aspectRatio: 1, maxHeight: '100%' },
 });

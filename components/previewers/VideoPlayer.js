@@ -131,14 +131,14 @@ export default function VideoPlayer({ item, streamUrl, onDownload }) {
 
   if (hasError) {
     return (
-      <View style={styles.errorContainer}>
+      <View style={[styles.errorContainer, { backgroundColor: colors.bg }]}>
         <AlertCircle color="#ef4444" size={64} style={{ marginBottom: 16 }} />
-        <Text style={styles.errorTitle}>视频解码失败</Text>
-        <Text style={styles.errorSub}>
+        <Text style={[styles.errorTitle, { color: colors.textStrong }]}>视频解码失败</Text>
+        <Text style={[styles.errorSub, { color: colors.sub }]}>
           {errorMessage || '当前设备系统硬件解码器不支持该视频编码格式（例如部分 10-bit HEVC / AV1）。'}
         </Text>
-        <Text style={styles.errorSize}>{item?.name} ({formatBytes(item?.size)})</Text>
-        <TouchableOpacity style={styles.downloadBtn} onPress={() => onDownload(item)}>
+        <Text style={[styles.errorSize, { color: colors.muted }]}>{item?.name} ({formatBytes(item?.size)})</Text>
+        <TouchableOpacity style={[styles.downloadBtn, { backgroundColor: colors.accent }]} onPress={() => onDownload(item)}>
           <Download color="#ffffff" size={20} />
           <Text style={styles.downloadBtnText}>下载到本地使用专用播放器查看</Text>
         </TouchableOpacity>
