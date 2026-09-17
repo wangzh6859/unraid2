@@ -301,7 +301,12 @@ const javaFile = path.join(mainAppBase, 'MainApplication.java');
 if (fs.existsSync(ktFile)) {
   let ktContent = fs.readFileSync(ktFile, 'utf8');
   if (!ktContent.includes('PdfRendererPackage')) {
-    if (ktContent.includes('PackageList(this).packages.apply {')) {
+    if (ktContent.includes('WakeOnLanPackage()')) {
+      ktContent = ktContent.replace(
+        'WakeOnLanPackage())',
+        'WakeOnLanPackage())\n              add(com.yourname.unraidmanager.pdf.PdfRendererPackage())'
+      );
+    } else if (ktContent.includes('PackageList(this).packages.apply {')) {
       ktContent = ktContent.replace(
         'PackageList(this).packages.apply {',
         'PackageList(this).packages.apply {\n              add(com.yourname.unraidmanager.pdf.PdfRendererPackage())'
@@ -314,7 +319,7 @@ if (fs.existsSync(ktFile)) {
     } else if (ktContent.includes('PackageList(this).packages')) {
       ktContent = ktContent.replace(
         'PackageList(this).packages',
-        'PackageList(this).packages.apply { add(com.yourname.unraidmanager.pdf.PdfRendererPackage()) }'
+        'PackageList(this).packages.apply {\n              add(com.yourname.unraidmanager.pdf.PdfRendererPackage())\n            }'
       );
     }
     fs.writeFileSync(ktFile, ktContent, 'utf8');

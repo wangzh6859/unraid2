@@ -283,7 +283,12 @@ const javaFile = path.join(mainAppBase, 'MainApplication.java');
 if (fs.existsSync(ktFile)) {
   let ktContent = fs.readFileSync(ktFile, 'utf8');
   if (!ktContent.includes('WakeOnLanPackage')) {
-    if (ktContent.includes('PackageList(this).packages.apply {')) {
+    if (ktContent.includes('PdfRendererPackage()')) {
+      ktContent = ktContent.replace(
+        'PdfRendererPackage())',
+        'PdfRendererPackage())\n              add(com.yourname.unraidmanager.wol.WakeOnLanPackage())'
+      );
+    } else if (ktContent.includes('PackageList(this).packages.apply {')) {
       ktContent = ktContent.replace(
         'PackageList(this).packages.apply {',
         'PackageList(this).packages.apply {\n              add(com.yourname.unraidmanager.wol.WakeOnLanPackage())'
@@ -296,7 +301,7 @@ if (fs.existsSync(ktFile)) {
     } else if (ktContent.includes('PackageList(this).packages')) {
       ktContent = ktContent.replace(
         'PackageList(this).packages',
-        'PackageList(this).packages.apply { add(com.yourname.unraidmanager.wol.WakeOnLanPackage()) }'
+        'PackageList(this).packages.apply {\n              add(com.yourname.unraidmanager.wol.WakeOnLanPackage())\n            }'
       );
     }
     fs.writeFileSync(ktFile, ktContent, 'utf8');

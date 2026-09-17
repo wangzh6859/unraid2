@@ -58,6 +58,11 @@ jobs:
       - name: Setup PDF Renderer Native Module
         run: node scripts/setup-pdf-renderer.js
 
+      - name: Verify MainApplication.kt
+        run: |
+          echo "=== MainApplication.kt getPackages ==="
+          grep -n -C 5 "PackageList" android/app/src/main/java/com/yourname/unraidmanager/MainApplication.kt || true
+
       - name: Configure APK Signing
         run: |
           echo "KEY_ALIAS=${{ secrets.ANDROID_ALIAS }}" >> $GITHUB_ENV
