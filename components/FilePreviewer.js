@@ -10,12 +10,12 @@
  * - sheet:   XlsxViewer (SheetJS 解析 Excel 多工作表网格)
  * - ebook:   EpubViewer (电子书目录与章节分页阅读)
  * - archive: ArchiveViewer (ZIP / TAR 压缩包内嵌目录浏览与直接预览)
- * - pdf:     PdfViewer (高保真本地阅读器调起与服务端 Poppler 文本速读抽取)
+ * - pdf:     PdfViewer (纯内置高保真多页原生阅读器与文本速读)
  */
-import React, { useMemo, useEffect } from 'react';
+import React, { useMemo, useEffect, useRef } from 'react';
 import {
   StyleSheet, Text, View, TouchableOpacity,
-  Modal, Platform, BackHandler,
+  Modal, Platform, BackHandler, PanResponder,
 } from 'react-native';
 import { X, DownloadCloud, File, Download } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
@@ -44,8 +44,10 @@ export default function FilePreviewer({
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
-  // Ensure Android hardware back button always exits previewer
+  // CRITICAL FIX: Only register back press when an item is actually opened!
   useEffect(() => {
+    if (!item) return;
+
     const onBackPress = () => {
       if (onClose) {
         onClose();
@@ -53,9 +55,24 @@ export default function FilePreviewer({
       }
       return false;
     };
+
     const backHandler = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => backHandler.remove();
-  }, [onClose]);
+  }, [item, onClose]);
+
+  // Swipe-to-dismiss gesture: swiping right from the left screen edge closes the preview
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        return gestureState.dx > 25 && Math.abs(gestureState.dy) < 30 && gestureState.x0 < 60;
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dx > 60 && onClose) {
+          onClose();
+        }
+      },
+    })
+  ).current;
 
   if (!item) return null;
 
@@ -69,24 +86,24 @@ export default function FilePreviewer({
   const renderContent = () => {
     switch (kind) {
       case 'video':
-        return <VideoPlayer item={item} streamUrl={streamUrl} onDownload={onDownload} />;
+        return <VideoPlayer item={item} streamUrl={streamUrl} onClose={onClose} onDownload={onDownload} />;
       case 'audio':
-        return <AudioPlayer item={item} streamUrl={streamUrl} onDownload={onDownload} />;
+        return <AudioPlayer item={item} streamUrl={streamUrl} onClose={onClose} onDownload={onDownload} />;
       case 'image':
-        return <ImageViewer item={item} streamUrl={streamUrl} onDownload={onDownload} />;
+        return <ImageViewer item={item} streamUrl={streamUrl} onClose={onClose} onDownload={onDownload} />;
       case 'text':
-        return <CodeTextViewer item={item} serverUrl={serverUrl} apiToken={apiToken} streamUrl={streamUrl} />;
+        return <CodeTextViewer item={item} serverUrl={serverUrl} apiToken={apiToken} streamUrl={streamUrl} onClose={onClose} />;
       case 'docx':
       case 'doc':
-        return <DocxViewer item={item} getDirectUrl={getDirectUrl} authHeaders={authHeaders} onDownload={onDownload} />;
+        return <DocxViewer item={item} getDirectUrl={getDirectUrl} authHeaders={authHeaders} onClose={onClose} onDownload={onDownload} />;
       case 'sheet':
-        return <XlsxViewer item={item} getDirectUrl={getDirectUrl} authHeaders={authHeaders} onDownload={onDownload} />;
+        return <XlsxViewer item={item} getDirectUrl={getDirectUrl} authHeaders={authHeaders} onClose={onClose} onDownload={onDownload} />;
       case 'ebook':
-        return <EpubViewer item={item} getDirectUrl={getDirectUrl} authHeaders={authHeaders} onDownload={onDownload} />;
+        return <EpubViewer item={item} getDirectUrl={getDirectUrl} authHeaders={authHeaders} onClose={onClose} onDownload={onDownload} />;
       case 'archive':
-        return <ArchiveViewer item={item} getDirectUrl={getDirectUrl} authHeaders={authHeaders} onDownload={onDownload} />;
+        return <ArchiveViewer item={item} getDirectUrl={getDirectUrl} authHeaders={authHeaders} onClose={onClose} onDownload={onDownload} />;
       case 'pdf':
-        return <PdfViewer item={item} serverUrl={serverUrl} apiToken={apiToken} streamUrl={streamUrl} onDownload={onDownload} />;
+        return <PdfViewer item={item} serverUrl={serverUrl} apiToken={apiToken} streamUrl={streamUrl} onClose={onClose} onDownload={onDownload} />;
       default:
         return (
           <View style={styles.fallbackContainer}>
@@ -109,10 +126,10 @@ export default function FilePreviewer({
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.container}>
+      <View style={styles.container} {...panResponder.panHandlers}>
         {/* Top Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={onClose} style={styles.headerBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <TouchableOpacity onPress={onClose} style={styles.headerBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
             <X color={colors.textStrong} size={22} />
           </TouchableOpacity>
 
@@ -126,7 +143,7 @@ export default function FilePreviewer({
             </View>
           </View>
 
-          <TouchableOpacity onPress={() => onDownload(item)} style={styles.headerBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <TouchableOpacity onPress={() => onDownload(item)} style={styles.headerBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
             <DownloadCloud color={colors.accent} size={22} />
           </TouchableOpacity>
         </View>

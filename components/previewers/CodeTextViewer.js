@@ -1,17 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, TextInput, TouchableOpacity,
   ActivityIndicator, Platform,
 } from 'react-native';
 import {
   Save, Edit3, BookOpen, WrapText, RefreshCw, AlertTriangle, AlertCircle,
+  Globe, ChevronDown,
 } from 'lucide-react-native';
 import { useTheme } from '../../ThemeContext';
 import { useDialog } from '../../DialogContext';
 import { formatBytes } from '../../utils/cacheManager';
 import { apiFetch } from '../../utils/apiClient';
 
-export default function CodeTextViewer({ item, serverUrl, apiToken, streamUrl }) {
+export default function CodeTextViewer({ item, serverUrl, apiToken, streamUrl, onClose }) {
   const { colors, isDark } = useTheme();
   const { showError, showSuccess } = useDialog();
 
@@ -19,77 +20,97 @@ export default function CodeTextViewer({ item, serverUrl, apiToken, streamUrl })
   const [content, setContent] = useState('');
   const [initialContent, setInitialContent] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [fontSize, setFontSize] = useState(13);
   const [wordWrap, setWordWrap] = useState(true);
   const [isTruncated, setIsTruncated] = useState(false);
 
-  // Fetch text content with timeout-protected dual-strategy
-  const loadContent = async () => {
-    setLoading(true);
-    setLoadError(null);
-    setIsTruncated(false);
-    const targetPath = item?.path || item?.href || '';
-    let loadedText = null;
-    let lastError = '';
+  // Encoding states
+  const [encoding, setEncoding] = useState('auto'); // 'auto' | 'utf-8' | 'gbk' | 'big5'
+  const [detectedEncoding, setDetectedEncoding] = useState('UTF-8');
+  const [totalSize, setTotalSize] = useState(0);
+  const [loadedBytes, setLoadedBytes] = useState(0);
 
-    // Strategy 1: action=file_read with 512KB preview limit
+  const abortControllerRef = useRef(null);
+
+  // Fetch text content with dynamic chunk streaming & encoding support
+  const loadContent = async (overrideEncoding, offset = 0, isAppend = false, loadFull = false) => {
+    if (!isAppend) {
+      setLoading(true);
+      setLoadError(null);
+      setIsTruncated(false);
+    } else {
+      setLoadingMore(true);
+    }
+
+    if (abortControllerRef.current) {
+      try { abortControllerRef.current.abort(); } catch (_) {}
+    }
+    abortControllerRef.current = new AbortController();
+
+    const targetPath = item?.path || item?.href || '';
+    const activeEncoding = overrideEncoding !== undefined ? overrideEncoding : encoding;
+    // 2MB chunk by default; if loadFull is true, max_bytes=0 fetches entire file
+    const maxBytes = loadFull ? 0 : 2097152;
+
+    let url = `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_read&path=${encodeURIComponent(targetPath)}&max_bytes=${maxBytes}&offset=${offset}`;
+    if (activeEncoding && activeEncoding !== 'auto') {
+      url += `&encoding=${encodeURIComponent(activeEncoding)}`;
+    }
+
     try {
-      const url = `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_read&path=${encodeURIComponent(targetPath)}&max_bytes=524288`;
-      const res = await apiFetch(url, { method: 'GET' }, 7000, 1);
+      const res = await apiFetch(url, {
+        method: 'GET',
+        signal: abortControllerRef.current.signal,
+      }, 15000, 1);
+
       if (res && res.ok) {
         const json = await res.json().catch(() => null);
         if (json && json.status === 'success' && typeof json.content === 'string') {
-          loadedText = json.content;
-          if (json.truncated) setIsTruncated(true);
-        } else if (json && json.message) {
-          lastError = json.message;
+          if (json.encoding) setDetectedEncoding(json.encoding);
+          if (json.size) setTotalSize(json.size);
+
+          const bytesGot = json.preview_size !== undefined ? json.preview_size : json.content.length;
+          const currentOffset = offset || 0;
+          const newTotalLoaded = currentOffset + bytesGot;
+          setLoadedBytes(newTotalLoaded);
+          setIsTruncated(Boolean(json.truncated));
+
+          if (isAppend) {
+            setContent(prev => prev + json.content);
+            setInitialContent(prev => prev + json.content);
+          } else {
+            // Full content without artificial 3000-line truncation!
+            setContent(json.content);
+            setInitialContent(json.content);
+          }
+        } else {
+          setLoadError(json?.message || '读取文件失败');
         }
-      } else if (res) {
-        const errTxt = await res.text().catch(() => '');
-        lastError = `HTTP ${res.status}: ${errTxt.slice(0, 100)}`;
+      } else {
+        setLoadError(`HTTP ${res?.status || 'Error'}`);
       }
     } catch (e) {
-      lastError = e.message;
-    }
-
-    // Strategy 2: fallback to raw stream
-    if (loadedText === null) {
-      try {
-        const directUrl = streamUrl || `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=file_stream&path=${encodeURIComponent(targetPath)}`;
-        const streamRes = await apiFetch(directUrl, { method: 'GET' }, 7000, 1);
-        if (streamRes && streamRes.ok) {
-          loadedText = await streamRes.text().catch(() => null);
-        } else if (streamRes) {
-          lastError = lastError || `HTTP ${streamRes.status}`;
-        }
-      } catch (e) {
-        lastError = lastError || e.message;
+      if (e.name !== 'AbortError') {
+        setLoadError(e.message || '网络连接超时');
       }
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
     }
-
-    if (loadedText !== null) {
-      const allLines = loadedText.split('\n');
-      if (allLines.length > 3000) {
-        setIsTruncated(true);
-        const sliced = allLines.slice(0, 3000).join('\n');
-        setContent(sliced);
-        setInitialContent(sliced);
-      } else {
-        setContent(loadedText);
-        setInitialContent(loadedText);
-      }
-    } else {
-      setLoadError(lastError || '无法读取文件内容');
-    }
-    setLoading(false);
   };
 
   useEffect(() => {
     if (item && serverUrl) {
-      loadContent();
+      loadContent('auto', 0, false, false);
     }
+    return () => {
+      if (abortControllerRef.current) {
+        try { abortControllerRef.current.abort(); } catch (_) {}
+      }
+    };
   }, [item?.path || item?.href, serverUrl]);
 
   // Save changes to server
@@ -145,6 +166,19 @@ export default function CodeTextViewer({ item, serverUrl, apiToken, streamUrl })
       <View style={styles.centerContainer}>
         <ActivityIndicator size="large" color={colors.accent} />
         <Text style={styles.loadingText}>正在加载文本内容...</Text>
+        {onClose && (
+          <TouchableOpacity
+            style={styles.cancelLoadingBtn}
+            onPress={() => {
+              if (abortControllerRef.current) {
+                try { abortControllerRef.current.abort(); } catch (_) {}
+              }
+              onClose();
+            }}
+          >
+            <Text style={styles.cancelLoadingText}>取消加载并返回</Text>
+          </TouchableOpacity>
+        )}
       </View>
     );
   }
@@ -155,23 +189,53 @@ export default function CodeTextViewer({ item, serverUrl, apiToken, streamUrl })
         <AlertCircle color={colors.red} size={48} style={{ marginBottom: 16 }} />
         <Text style={styles.errorTitle}>文本读取未响应</Text>
         <Text style={styles.errorMsg}>{loadError}</Text>
-        <TouchableOpacity style={styles.retryBtn} onPress={loadContent}>
-          <RefreshCw color="#ffffff" size={16} />
-          <Text style={styles.retryBtnText}>重新读取</Text>
-        </TouchableOpacity>
+        <View style={styles.errorBtnRow}>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => loadContent(encoding, 0, false, false)}>
+            <RefreshCw color="#ffffff" size={16} />
+            <Text style={styles.retryBtnText}>重新读取</Text>
+          </TouchableOpacity>
+          {onClose && (
+            <TouchableOpacity style={styles.errorCloseBtn} onPress={onClose}>
+              <Text style={styles.errorCloseBtnText}>返回列表</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
-      {/* Truncation Warning Banner for Large Files */}
+      {/* Truncation Warning Banner with Dynamic Chunk Loading */}
       {isTruncated && (
         <View style={styles.truncBanner}>
-          <AlertTriangle color={isDark ? '#FBBF24' : '#D97706'} size={15} />
-          <Text style={styles.truncBannerText}>
-            文件较大（{formatBytes(item?.size)}），已自动载入前 {lineCount} 行极速速读。如需完整查看可下载至手机。
-          </Text>
+          <View style={styles.truncBannerLeft}>
+            <AlertTriangle color={isDark ? '#FBBF24' : '#D97706'} size={15} />
+            <Text style={styles.truncBannerText}>
+              已载入 {formatBytes(loadedBytes)} / 共 {formatBytes(totalSize || item?.size)} ({lineCount} 行)
+            </Text>
+          </View>
+          <View style={styles.truncBannerActions}>
+            <TouchableOpacity
+              style={styles.loadMoreBtn}
+              onPress={() => loadContent(encoding, loadedBytes, true, false)}
+              disabled={loadingMore}
+            >
+              {loadingMore ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <Text style={styles.loadMoreBtnText}>+2MB 下一段</Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.loadAllBtn}
+              onPress={() => loadContent(encoding, 0, false, true)}
+              disabled={loadingMore}
+            >
+              <Text style={styles.loadAllBtnText}>加载全部</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       )}
 
@@ -194,6 +258,23 @@ export default function CodeTextViewer({ item, serverUrl, apiToken, streamUrl })
             <Text style={[styles.tabBtnText, mode === 'editor' && styles.tabBtnTextActive]}>编辑</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Encoding Switcher Chip */}
+        <TouchableOpacity
+          style={styles.encodingChip}
+          onPress={() => {
+            const encList = ['auto', 'utf-8', 'gbk', 'big5'];
+            const curIdx = encList.indexOf(encoding);
+            const nextEnc = encList[(curIdx + 1) % encList.length];
+            setEncoding(nextEnc);
+            loadContent(nextEnc, 0, false, false);
+          }}
+        >
+          <Globe color={colors.accent} size={13} style={{ marginRight: 4 }} />
+          <Text style={styles.encodingChipText}>
+            {encoding === 'auto' ? detectedEncoding : encoding.toUpperCase()}
+          </Text>
+        </TouchableOpacity>
 
         {/* Action icons */}
         <View style={styles.toolActions}>
@@ -278,17 +359,19 @@ export default function CodeTextViewer({ item, serverUrl, apiToken, streamUrl })
             <TextInput
               style={[
                 styles.textInput,
-                { fontSize, lineHeight: fontSize * 1.5, color: colors.text, backgroundColor: colors.bg },
-                !wordWrap && { minWidth: 800 },
+                {
+                  fontSize,
+                  lineHeight: fontSize * 1.5,
+                  color: colors.text,
+                  backgroundColor: colors.bg,
+                },
               ]}
               multiline
               value={content}
               onChangeText={setContent}
-              textAlignVertical="top"
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder="在此输入文本..."
-              placeholderTextColor={colors.muted}
+              textAlignVertical="top"
             />
           </ScrollView>
         )}
@@ -296,12 +379,14 @@ export default function CodeTextViewer({ item, serverUrl, apiToken, streamUrl })
 
       {/* Bottom Status Bar */}
       <View style={styles.statusBar}>
-        <Text style={styles.statusInfoText}>
-          {lineCount} 行 · {content.length} 字符 · {formatBytes(item?.size)}
+        <Text style={styles.statusText}>
+          {lineCount} 行 · {formatBytes(content.length)} · 编码: {detectedEncoding}
         </Text>
-        <Text style={[styles.statusModeBadge, isDirty && { color: colors.amber }]}>
-          {isDirty ? '● 未保存修改' : '● 已同步'}
-        </Text>
+        {isDirty && (
+          <View style={styles.dirtyPill}>
+            <Text style={styles.dirtyPillText}>未保存修改</Text>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -317,62 +402,124 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 32,
     backgroundColor: colors.bg,
-    padding: 24,
   },
   loadingText: {
     color: colors.sub,
     fontSize: 14,
-    marginTop: 12,
+    marginTop: 14,
+  },
+  cancelLoadingBtn: {
+    marginTop: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: colors.cardSecondary,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  cancelLoadingText: {
+    color: colors.textStrong,
+    fontSize: 13,
+    fontWeight: '600',
   },
   errorTitle: {
     color: colors.textStrong,
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: 'bold',
-    marginBottom: 6,
+    marginBottom: 8,
   },
   errorMsg: {
-    color: colors.sub,
+    color: colors.red,
     fontSize: 13,
     textAlign: 'center',
-    lineHeight: 18,
     marginBottom: 20,
-    maxWidth: 280,
+    lineHeight: 18,
+  },
+  errorBtnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
   retryBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
     backgroundColor: colors.accent,
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 20,
+    gap: 6,
   },
   retryBtnText: {
     color: '#ffffff',
     fontSize: 14,
     fontWeight: 'bold',
   },
+  errorCloseBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: colors.cardSecondary,
+  },
+  errorCloseBtnText: {
+    color: colors.sub,
+    fontSize: 14,
+  },
   truncBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: isDark ? 'rgba(245, 158, 11, 0.12)' : '#FEF3C7',
-    borderBottomWidth: 1,
-    borderBottomColor: isDark ? 'rgba(245, 158, 11, 0.25)' : '#FDE68A',
+    justifyContent: 'space-between',
+    backgroundColor: isDark ? 'rgba(245, 158, 11, 0.15)' : 'rgba(245, 158, 11, 0.12)',
     paddingHorizontal: 12,
     paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: isDark ? 'rgba(245, 158, 11, 0.3)' : 'rgba(245, 158, 11, 0.25)',
+  },
+  truncBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
   },
   truncBannerText: {
-    color: isDark ? '#FCD34D' : '#92400E',
+    color: isDark ? '#FBBF24' : '#B45309',
     fontSize: 12,
-    flex: 1,
-    lineHeight: 16,
+    fontWeight: '600',
+  },
+  truncBannerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  loadMoreBtn: {
+    backgroundColor: colors.accent,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+  },
+  loadMoreBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  loadAllBtn: {
+    backgroundColor: colors.cardSecondary,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+  },
+  loadAllBtnText: {
+    color: colors.textStrong,
+    fontSize: 11,
+    fontWeight: '600',
   },
   toolbar: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 12,
     paddingVertical: 8,
     backgroundColor: colors.card,
@@ -397,12 +544,26 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     backgroundColor: colors.accent,
   },
   tabBtnText: {
-    color: colors.sub,
     fontSize: 12,
-    fontWeight: '500',
+    color: colors.sub,
+    fontWeight: '600',
   },
   tabBtnTextActive: {
     color: '#ffffff',
+  },
+  encodingChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: colors.cardSecondary,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  encodingChipText: {
+    fontSize: 11,
+    color: colors.accent,
     fontWeight: 'bold',
   },
   toolActions: {
@@ -419,26 +580,24 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     alignItems: 'center',
   },
   toolIconBtnActive: {
-    backgroundColor: isDark ? 'rgba(56, 189, 248, 0.15)' : 'rgba(2, 132, 199, 0.15)',
-    borderWidth: 1,
-    borderColor: colors.accent,
+    backgroundColor: isDark ? 'rgba(56, 189, 248, 0.2)' : 'rgba(2, 132, 199, 0.15)',
   },
   toolLabelText: {
-    color: colors.text,
+    color: colors.textStrong,
     fontSize: 12,
     fontWeight: 'bold',
   },
   saveBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.green,
-    paddingHorizontal: 10,
+    backgroundColor: colors.cardSecondary,
+    paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 6,
     gap: 4,
   },
   saveBtnDirty: {
-    backgroundColor: colors.amber,
+    backgroundColor: colors.green,
   },
   saveBtnText: {
     color: '#ffffff',
@@ -453,28 +612,26 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     flex: 1,
   },
   readerScrollContent: {
-    paddingBottom: 40,
+    paddingVertical: 8,
   },
   gutterAndCodeRow: {
     flexDirection: 'row',
-    minHeight: '100%',
   },
   gutter: {
-    width: 44,
-    paddingVertical: 12,
-    paddingRight: 8,
+    paddingRight: 10,
+    paddingLeft: 12,
+    alignItems: 'flex-end',
     borderRightWidth: 1,
     borderRightColor: colors.divider,
-    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.02)' : 'rgba(0, 0, 0, 0.02)',
   },
   gutterLine: {
-    textAlign: 'right',
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    textAlign: 'right',
   },
   codeWrap: {
     flex: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
+    paddingLeft: 12,
+    paddingRight: 16,
   },
   codeLine: {
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
@@ -484,26 +641,32 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   },
   textInput: {
     flex: 1,
-    padding: 12,
+    padding: 14,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   statusBar: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
     backgroundColor: colors.card,
     borderTopWidth: 1,
     borderTopColor: colors.divider,
   },
-  statusInfoText: {
-    color: colors.muted,
+  statusText: {
+    color: colors.sub,
     fontSize: 11,
   },
-  statusModeBadge: {
-    color: colors.green,
-    fontSize: 11,
-    fontWeight: '500',
+  dirtyPill: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  dirtyPillText: {
+    color: colors.red,
+    fontSize: 10,
+    fontWeight: 'bold',
   },
 });

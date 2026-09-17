@@ -6,7 +6,7 @@
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.17.04');
+define('UNRAID_API_VERSION', '2026.09.17.05');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -508,6 +508,10 @@ switch ($action) {
 
     case 'pdf_preview':
         handle_pdf_preview();
+        break;
+
+    case 'pdf_page':
+        handle_pdf_page();
         break;
 
     case 'version':
@@ -3188,29 +3192,87 @@ function handle_file_read() {
     }
 
     $size = (float)filesize($filePath);
-    if ($size > 10 * 1024 * 1024) { // 10MB limit for text reader
-        json_output(['status' => 'error', 'message' => '文件体积过大（超过 10MB），建议直接下载至手机查看'], 400);
+    if ($size > 50 * 1024 * 1024) { // 50MB safety ceiling
+        json_output(['status' => 'error', 'message' => '文件体积过大（超过 50MB），建议直接下载至手机查看'], 400);
     }
 
-    $maxBytes = isset($_GET['max_bytes']) ? intval($_GET['max_bytes']) : 524288; // Default preview chunk 512KB
+    // Default 2MB (2,097,152 bytes) reads ~1 million Chinese characters / 50,000+ lines in one shot
+    $maxBytes = isset($_GET['max_bytes']) ? intval($_GET['max_bytes']) : 2097152;
+    $offset = isset($_GET['offset']) ? max(0, intval($_GET['offset'])) : 0;
     $isTruncated = false;
-    if ($maxBytes > 0 && $size > $maxBytes) {
-        $content = @file_get_contents($filePath, false, null, 0, $maxBytes);
+
+    if ($maxBytes > 0 && ($size - $offset) > $maxBytes) {
+        $content = @file_get_contents($filePath, false, null, $offset, $maxBytes);
         $isTruncated = true;
     } else {
-        $content = @file_get_contents($filePath);
+        $content = @file_get_contents($filePath, false, null, $offset);
     }
 
     if ($content === false) {
         json_output(['status' => 'error', 'message' => '读取文件内容失败'], 500);
     }
 
-    // Convert to UTF-8 if encoded in GBK/GB2312/CP936/etc.
-    if (function_exists('mb_check_encoding') && !mb_check_encoding($content, 'UTF-8')) {
-        if (function_exists('mb_convert_encoding')) {
-            $converted = @mb_convert_encoding($content, 'UTF-8', 'GB18030, GBK, BIG5, ISO-8859-1, ASCII');
-            if ($converted !== false) {
-                $content = $converted;
+    // Client requested encoding override (e.g. ?encoding=gbk or ?encoding=utf-8)
+    $requestedEncoding = isset($_GET['encoding']) ? strtolower(trim($_GET['encoding'])) : '';
+    $detectedEncoding = 'UTF-8';
+
+    if ($requestedEncoding === 'gbk' || $requestedEncoding === 'gb2312' || $requestedEncoding === 'gb18030') {
+        $converted = @iconv('GB18030//IGNORE', 'UTF-8', $content);
+        if ($converted !== false && strlen($converted) > 0) {
+            $content = $converted;
+            $detectedEncoding = 'GB18030';
+        }
+    } elseif ($requestedEncoding === 'big5') {
+        $converted = @iconv('BIG5//IGNORE', 'UTF-8', $content);
+        if ($converted !== false && strlen($converted) > 0) {
+            $content = $converted;
+            $detectedEncoding = 'BIG5';
+        }
+    } elseif ($requestedEncoding === 'utf-8') {
+        if (substr($content, 0, 3) === "\xEF\xBB\xBF") {
+            $content = substr($content, 3);
+        }
+        $detectedEncoding = 'UTF-8';
+    } else {
+        // Automatic intelligent encoding detection:
+        if (substr($content, 0, 3) === "\xEF\xBB\xBF") {
+            $content = substr($content, 3);
+            $detectedEncoding = 'UTF-8 (BOM)';
+        } elseif (substr($content, 0, 2) === "\xFF\xFE") {
+            $content = @mb_convert_encoding(substr($content, 2), 'UTF-8', 'UTF-16LE');
+            $detectedEncoding = 'UTF-16LE';
+        } elseif (substr($content, 0, 2) === "\xFE\xFF") {
+            $content = @mb_convert_encoding(substr($content, 2), 'UTF-8', 'UTF-16BE');
+            $detectedEncoding = 'UTF-16BE';
+        } else {
+            // Check if string is clean UTF-8.
+            // Safety: if string was truncated, the very last 1~3 bytes might be a sliced multibyte code,
+            // so we test a sub-slice omitting the last 4 bytes to avoid false negatives.
+            $probe = strlen($content) > 10 ? substr($content, 0, -4) : $content;
+            $isUtf8 = function_exists('mb_check_encoding') ? mb_check_encoding($probe, 'UTF-8') : (preg_match('//u', $probe) === 1);
+
+            if (!$isUtf8) {
+                // Not UTF-8! Detect among Chinese encodings
+                $detected = false;
+                if (function_exists('mb_detect_encoding')) {
+                    $detected = @mb_detect_encoding($probe, ['CP936', 'GB18030', 'GBK', 'BIG5', 'EUC-CN'], true);
+                }
+                if ($detected) {
+                    $converted = @mb_convert_encoding($content, 'UTF-8', $detected);
+                    if ($converted !== false && strlen($converted) > 0) {
+                        $content = $converted;
+                        $detectedEncoding = $detected;
+                    }
+                } else {
+                    // Fallback to iconv GB18030
+                    $converted = @iconv('GB18030//IGNORE', 'UTF-8', $content);
+                    if ($converted !== false && strlen($converted) > 0) {
+                        $content = $converted;
+                        $detectedEncoding = 'GB18030';
+                    }
+                }
+            } else {
+                $detectedEncoding = 'UTF-8';
             }
         }
     }
@@ -3220,8 +3282,10 @@ function handle_file_read() {
         'path' => $filePath,
         'name' => safe_basename($filePath),
         'size' => $size,
+        'offset' => $offset,
         'truncated' => $isTruncated,
         'preview_size' => strlen($content),
+        'encoding' => $detectedEncoding,
         'content' => $content
     ]);
 }
@@ -3240,36 +3304,129 @@ function handle_pdf_preview() {
         json_output(['status' => 'error', 'message' => '目标文件不是 PDF 格式'], 400);
     }
 
+    $hasPdftoppm = (trim((string)@shell_exec('which pdftoppm 2>/dev/null')) !== '');
+    $hasGs = (trim((string)@shell_exec('which gs 2>/dev/null')) !== '');
+    $hasConvert = (trim((string)@shell_exec('which convert 2>/dev/null')) !== '');
     $hasPdftotext = (trim((string)@shell_exec('which pdftotext 2>/dev/null')) !== '');
-    $extractedText = '';
+
+    $escaped = escapeshellarg($filePath);
     $pageCount = 0;
 
+    // Detect page count via pdfinfo or pdftotext or gs
+    $pdfinfo = @shell_exec("pdfinfo {$escaped} 2>/dev/null");
+    if ($pdfinfo && preg_match('/Pages:\s+(\d+)/i', $pdfinfo, $m)) {
+        $pageCount = (int)$m[1];
+    } elseif ($hasGs) {
+        $gsCount = @shell_exec("gs -q -dNODISPLAY -c \"({$escaped}) (r) file runpdfbegin pdfpagecount = quit\" 2>/dev/null");
+        if ($gsCount && is_numeric(trim($gsCount))) {
+            $pageCount = (int)trim($gsCount);
+        }
+    }
+
+    $extractedText = '';
     if ($hasPdftotext) {
-        $escaped = escapeshellarg($filePath);
         $cmd = "pdftotext -f 1 -l 30 -enc UTF-8 {$escaped} - 2>/dev/null";
         $extractedText = (string)@shell_exec($cmd);
-
-        $pdfinfo = @shell_exec("pdfinfo {$escaped} 2>/dev/null");
-        if ($pdfinfo && preg_match('/Pages:\s+(\d+)/i', $pdfinfo, $m)) {
-            $pageCount = (int)$m[1];
-        }
     }
 
     $cleanText = trim($extractedText);
     if (function_exists('mb_check_encoding') && !mb_check_encoding($cleanText, 'UTF-8')) {
-        $cleanText = @mb_convert_encoding($cleanText, 'UTF-8', 'UTF-8, GB18030, GBK, BIG5, ISO-8859-1');
+        $cleanText = @mb_convert_encoding($cleanText, 'UTF-8', 'CP936, GB18030, GBK, BIG5');
     }
 
     json_output([
         'status' => 'success',
+        'has_render_engine' => ($hasPdftoppm || $hasGs || $hasConvert),
+        'render_engine' => $hasPdftoppm ? 'pdftoppm' : ($hasGs ? 'ghostscript' : ($hasConvert ? 'imagemagick' : 'none')),
         'has_text' => (!empty($cleanText)),
         'text' => $cleanText,
-        'page_count' => $pageCount,
-        'has_engine' => $hasPdftotext,
+        'page_count' => max(1, $pageCount),
         'size' => (float)filesize($filePath),
         'name' => safe_basename($filePath),
         'path' => $filePath
     ]);
+}
+
+function handle_pdf_page() {
+    $rawPath = isset($_GET['path']) ? $_GET['path'] : '';
+    $filePath = sanitize_path($rawPath);
+    $page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
+    $dpi = isset($_GET['dpi']) ? min(300, max(72, intval($_GET['dpi']))) : 144;
+
+    clearstatcache(true, $filePath);
+    if (!file_exists($filePath) || is_dir($filePath)) {
+        header("HTTP/1.1 404 Not Found");
+        echo "File not found";
+        exit;
+    }
+
+    $cacheDir = '/tmp/unraid_pdf_cache';
+    if (!is_dir($cacheDir)) {
+        @mkdir($cacheDir, 0777, true);
+    }
+
+    $mtime = filemtime($filePath);
+    $fsize = filesize($filePath);
+    $hash = md5("{$filePath}_{$mtime}_{$fsize}_{$dpi}");
+    $cacheFile = "{$cacheDir}/{$hash}_{$page}.jpg";
+
+    if (file_exists($cacheFile) && filesize($cacheFile) > 0) {
+        header('Content-Type: image/jpeg');
+        header('Content-Length: ' . filesize($cacheFile));
+        header('Cache-Control: public, max-age=86400');
+        @readfile($cacheFile);
+        exit;
+    }
+
+    $escaped = escapeshellarg($filePath);
+    $tmpPrefix = "{$cacheDir}/tmp_{$hash}_{$page}";
+
+    // Method 1: pdftoppm (Fastest & standard on Unraid/Slackware poppler)
+    $hasPdftoppm = (trim((string)@shell_exec('which pdftoppm 2>/dev/null')) !== '');
+    if ($hasPdftoppm) {
+        @shell_exec("pdftoppm -jpeg -r {$dpi} -f {$page} -l {$page} {$escaped} {$tmpPrefix} 2>/dev/null");
+        $matches = glob("{$tmpPrefix}*.jpg");
+        if (!empty($matches) && file_exists($matches[0]) && filesize($matches[0]) > 0) {
+            @rename($matches[0], $cacheFile);
+            foreach ($matches as $m) { if (file_exists($m)) @unlink($m); }
+            header('Content-Type: image/jpeg');
+            header('Content-Length: ' . filesize($cacheFile));
+            header('Cache-Control: public, max-age=86400');
+            @readfile($cacheFile);
+            exit;
+        }
+    }
+
+    // Method 2: Ghostscript (gs)
+    $hasGs = (trim((string)@shell_exec('which gs 2>/dev/null')) !== '');
+    if ($hasGs) {
+        @shell_exec("gs -dNOPAUSE -dBATCH -sDEVICE=jpeg -r{$dpi} -dFirstPage={$page} -dLastPage={$page} -sOutputFile={$cacheFile} {$escaped} 2>/dev/null");
+        if (file_exists($cacheFile) && filesize($cacheFile) > 0) {
+            header('Content-Type: image/jpeg');
+            header('Content-Length: ' . filesize($cacheFile));
+            header('Cache-Control: public, max-age=86400');
+            @readfile($cacheFile);
+            exit;
+        }
+    }
+
+    // Method 3: ImageMagick (convert / magick)
+    $hasConvert = (trim((string)@shell_exec('which convert 2>/dev/null')) !== '');
+    if ($hasConvert) {
+        $frame = $page - 1;
+        @shell_exec("convert -density {$dpi} {$escaped}[{$frame}] -quality 85 {$cacheFile} 2>/dev/null");
+        if (file_exists($cacheFile) && filesize($cacheFile) > 0) {
+            header('Content-Type: image/jpeg');
+            header('Content-Length: ' . filesize($cacheFile));
+            header('Cache-Control: public, max-age=86400');
+            @readfile($cacheFile);
+            exit;
+        }
+    }
+
+    header("HTTP/1.1 500 Internal Server Error");
+    echo "Server does not have a PDF rasterization engine (pdftoppm, gs, convert)";
+    exit;
 }
 
 function handle_file_write() {

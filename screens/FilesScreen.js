@@ -1951,14 +1951,16 @@ export default function FilesScreen({ navigation }) {
       )}
 
       {/* Modernized File Previewer */}
-      <FilePreviewer
-        item={previewItem}
-        serverUrl={serverUrl}
-        apiToken={apiToken}
-        getDirectUrl={getDirectUrl}
-        onClose={() => setPreviewItem(null)}
-        onDownload={handleDownload}
-      />
+      {previewItem && (
+        <FilePreviewer
+          item={previewItem}
+          serverUrl={serverUrl}
+          apiToken={apiToken}
+          getDirectUrl={getDirectUrl}
+          onClose={() => setPreviewItem(null)}
+          onDownload={handleDownload}
+        />
+      )}
 
       {/* Dropdown Menu (Top-Right Plus) - rendered as in-screen overlay to avoid Dialog WindowManager crash */}
       {isMenuVisible && (

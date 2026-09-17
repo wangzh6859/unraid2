@@ -33,7 +33,10 @@ function HomeStack() {
       screenOptions={{
         headerStyle: { backgroundColor: colors.bar },
         headerTintColor: colors.textStrong,
-        contentStyle: { backgroundColor: colors.bg }
+        contentStyle: { backgroundColor: colors.bg },
+        gestureEnabled: true,
+        fullScreenGestureEnabled: true,
+        animation: 'slide_from_right',
       }}
     >
       <Stack.Screen name="仪表盘" component={DashboardScreen} options={{ headerShown: false }} />
