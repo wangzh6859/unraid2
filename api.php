@@ -6,7 +6,7 @@
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.17.02');
+define('UNRAID_API_VERSION', '2026.09.17.03');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -507,11 +507,32 @@ switch ($action) {
         break;
 
     case 'version':
+        $parseIniBytes = function($val) {
+            $val = trim((string)$val);
+            if (empty($val)) return 0;
+            $last = strtolower($val[strlen($val) - 1]);
+            $num = floatval($val);
+            switch ($last) {
+                case 'g': $num *= 1024 * 1024 * 1024; break;
+                case 'm': $num *= 1024 * 1024; break;
+                case 'k': $num *= 1024; break;
+            }
+            return (int)$num;
+        };
+
+        $upMax = $parseIniBytes(ini_get('upload_max_filesize'));
+        $postMax = $parseIniBytes(ini_get('post_max_size'));
+        $singleLimit = ($upMax > 0 && $postMax > 0) ? min($upMax, $postMax) : ($upMax > 0 ? $upMax : ($postMax > 0 ? $postMax : 16777216));
+        $safeDirectLimit = max(0, $singleLimit - 524288); // 512KB margin for multipart boundary and headers
+
         json_output([
             'status' => 'success',
             'api_version' => UNRAID_API_VERSION,
             'version' => UNRAID_API_VERSION,
-            'features' => ['docker_recreate', 'token_file', 'self_update', 'exact_update_sync'],
+            'max_upload_size' => $safeDirectLimit,
+            'php_upload_max' => ini_get('upload_max_filesize'),
+            'php_post_max' => ini_get('post_max_size'),
+            'features' => ['docker_recreate', 'token_file', 'self_update', 'exact_update_sync', 'dynamic_upload_limit'],
             'file' => __FILE__
         ]);
         break;
@@ -2094,6 +2115,9 @@ function handle_update_api_file() {
     }
     @unlink($backupFile);
 
+    // Attempt to write .user.ini in api directory for PHP-FPM upload limit expansion
+    @file_put_contents(dirname($currentFile) . '/.user.ini', "upload_max_filesize = 128M\npost_max_size = 128M\nmemory_limit = 512M\n");
+
     $version = 'latest';
     if (preg_match("/define\('UNRAID_API_VERSION',\s*'([^']+)'\)/", $content, $m)) {
         $version = $m[1];
@@ -3035,6 +3059,23 @@ function handle_file_list() {
     $isRoot = ($targetDir === ALLOWED_ROOT);
     $parentPath = $isRoot ? ALLOWED_ROOT : dirname($targetDir);
 
+    $parseIniBytes = function($val) {
+        $val = trim((string)$val);
+        if (empty($val)) return 0;
+        $last = strtolower($val[strlen($val) - 1]);
+        $num = floatval($val);
+        switch ($last) {
+            case 'g': $num *= 1024 * 1024 * 1024; break;
+            case 'm': $num *= 1024 * 1024; break;
+            case 'k': $num *= 1024; break;
+        }
+        return (int)$num;
+    };
+    $upMax = $parseIniBytes(ini_get('upload_max_filesize'));
+    $postMax = $parseIniBytes(ini_get('post_max_size'));
+    $singleLimit = ($upMax > 0 && $postMax > 0) ? min($upMax, $postMax) : ($upMax > 0 ? $upMax : ($postMax > 0 ? $postMax : 16777216));
+    $safeDirectLimit = max(0, $singleLimit - 524288);
+
     json_output([
         'status' => 'success',
         'api_version' => UNRAID_API_VERSION,
@@ -3042,6 +3083,7 @@ function handle_file_list() {
         'parent_path' => $parentPath,
         'is_root' => $isRoot,
         'csrf_token' => get_system_csrf_token(),
+        'max_upload_size' => $safeDirectLimit,
         'items' => array_merge($folders, $files)
     ]);
 }

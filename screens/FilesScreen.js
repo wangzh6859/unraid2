@@ -23,7 +23,7 @@ import { apiFetch, apiFetchJson, resetNetworkPool } from '../utils/apiClient';
 import { BUNDLED_API_VERSION, BUNDLED_API_CODE } from '../utils/bundledApi';
 
 // Proactively and silently pushes bundled api.php to Unraid server if outdated
-async function autoSyncServerApi(cleanBaseUrl, apiToken, serverApiVersionRef) {
+async function autoSyncServerApi(cleanBaseUrl, apiToken, serverApiVersionRef, serverMaxUploadSizeRef) {
   try {
     let srvVer = serverApiVersionRef?.current;
     if (!srvVer) {
@@ -31,6 +31,9 @@ async function autoSyncServerApi(cleanBaseUrl, apiToken, serverApiVersionRef) {
       if (vData && (vData.api_version || vData.version)) {
         srvVer = vData.api_version || vData.version;
         if (serverApiVersionRef) serverApiVersionRef.current = srvVer;
+        if (vData.max_upload_size && serverMaxUploadSizeRef) {
+          serverMaxUploadSizeRef.current = Number(vData.max_upload_size);
+        }
       }
     }
 
@@ -51,6 +54,11 @@ async function autoSyncServerApi(cleanBaseUrl, apiToken, serverApiVersionRef) {
       if (pushJson && pushJson.status === 'success') {
         if (serverApiVersionRef) serverApiVersionRef.current = BUNDLED_API_VERSION;
         console.log(`[AutoSync] Successfully synced server api.php to ${BUNDLED_API_VERSION}`);
+        // Read fresh upload limits from updated API
+        const freshV = await apiFetchJson(`${cleanBaseUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=version&_t=${Date.now()}`, {}, 3500, 0).catch(() => null);
+        if (freshV && freshV.max_upload_size && serverMaxUploadSizeRef) {
+          serverMaxUploadSizeRef.current = Number(freshV.max_upload_size);
+        }
         return true;
       }
     }
@@ -170,6 +178,7 @@ export default function FilesScreen({ navigation }) {
   const transferProgressRef = useRef({}); // taskId -> { totalBytes, confirmedBytes, currentChunkLen, chunkStartTime, lastSpeed }
   const isPickingFileRef = useRef(false);
   const serverApiVersionRef = useRef('');
+  const serverMaxUploadSizeRef = useRef(15 * 1024 * 1024); // 默认 15MB 安全直传阈值（精准适配 Unraid 默认 16M php.ini 与反代限制）
   const csrfTokenRef = useRef('');
 
   // Transfer Queue Persistence Key & Reference
@@ -332,10 +341,13 @@ export default function FilesScreen({ navigation }) {
         if (data.csrf_token) {
           csrfTokenRef.current = data.csrf_token;
         }
+        if (data.max_upload_size && serverMaxUploadSizeRef) {
+          serverMaxUploadSizeRef.current = Number(data.max_upload_size);
+        }
         if (data.api_version) {
           serverApiVersionRef.current = data.api_version;
           if (data.api_version < BUNDLED_API_VERSION) {
-            autoSyncServerApi(cleanUrl, token, serverApiVersionRef);
+            autoSyncServerApi(cleanUrl, token, serverApiVersionRef, serverMaxUploadSizeRef);
           }
         }
         const items = (data.items || []).map(it => ({
@@ -586,7 +598,7 @@ export default function FilesScreen({ navigation }) {
       } catch (_) {}
 
       const cleanBaseUrl = (serverUrl || '').replace(/\/+$/, '');
-      await autoSyncServerApi(cleanBaseUrl, apiToken, serverApiVersionRef);
+      await autoSyncServerApi(cleanBaseUrl, apiToken, serverApiVersionRef, serverMaxUploadSizeRef);
 
       setTransfers(prev => prev.map(t => (t.id === taskId ? {
         ...t,
@@ -599,11 +611,14 @@ export default function FilesScreen({ navigation }) {
       let activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
 
       // =========================================================================
-      // 🚀 智能双模极速传输：模式一【原生流式直传】(用于 <= 32MB 文件或首发直传)
+      // 🚀 智能双模极速传输：模式一【原生流式直传】(用于 <= 15MB 默认安全阈值或服务端实测上限)
       // 原生 OkHttp Socket 直推，0% Base64 膨胀，0 CPU 转义，满带宽 30~80MB/s 瞬间完成！
       // =========================================================================
+      const srvLimit = serverMaxUploadSizeRef?.current > 0 ? serverMaxUploadSizeRef.current : (15 * 1024 * 1024);
+      const safeDirectThreshold = Math.min(32 * 1024 * 1024, Math.max(2 * 1024 * 1024, srvLimit));
+
       let directStreamSuccess = false;
-      const canDirectStream = (Number(taskItem.chunkIndex) || 0) === 0 && (totalSize > 0 && totalSize <= 32 * 1024 * 1024);
+      const canDirectStream = (Number(taskItem.chunkIndex) || 0) === 0 && (totalSize > 0 && totalSize <= safeDirectThreshold);
 
       if (canDirectStream) {
         try {
@@ -665,7 +680,8 @@ export default function FilesScreen({ navigation }) {
                   transferProgressRef.current[taskId].chunkStartTime = now;
                 }
 
-                const pct = Math.min(99, Math.round((loaded / event.total) * 100));
+                // 传输过程中最高显示 95%，留出 5% 待服务端物理落盘强校验确认后再标为 100%，杜绝误报
+                const pct = Math.min(95, Math.max(1, Math.round((loaded / event.total) * 95)));
                 setTransfers(prev => prev.map(t => (t.id === taskId ? {
                   ...t,
                   status: 'running',
@@ -714,6 +730,15 @@ export default function FilesScreen({ navigation }) {
               directStreamSuccess = true;
               finalServerResult = streamResult.resJson;
               if (streamResult.resJson.path) savedPath = streamResult.resJson.path;
+              setTransfers(prev => prev.map(t => (t.id === taskId ? {
+                ...t,
+                status: 'success',
+                progress: 100,
+                transferredBytes: totalSize,
+                totalBytes: totalSize,
+                sizeText: `${formatBytesFixed(totalSize)} / ${formatBytesFixed(totalSize)}`,
+                speedDisplay: '已完成',
+              } : t)));
             } else {
               console.log(`[Upload] Direct stream size mismatch (server=${diskSize}, expected=${totalSize}), falling back to chunk engine...`);
             }
@@ -730,10 +755,20 @@ export default function FilesScreen({ navigation }) {
       }
 
       // =========================================================================
-      // ⚡ 模式二【超高速流水线分片引擎】(用于 > 32MB 文件、断点续传或直传降级)
+      // ⚡ 模式二【超高速流水线分片引擎】(用于 > 15MB 大文件、断点续传或直传降级)
       // 4MB 块对齐分片，全异步后台流水线预读，支持任意尺寸大文件安全稳定落盘
       // =========================================================================
       if (!directStreamSuccess) {
+        if (canDirectStream) {
+          setTransfers(prev => prev.map(t => (t.id === taskId ? {
+            ...t,
+            status: 'running',
+            progress: 0,
+            transferredBytes: 0,
+            sizeText: `0.0 B / ${formatBytesFixed(totalSize)}`,
+            speedDisplay: '直传超限，智能切换分片传输...',
+          } : t)));
+        }
         const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB chunks (4096KB 块对齐)
         const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
         let startChunk = Number(taskItem.chunkIndex) || 0;
