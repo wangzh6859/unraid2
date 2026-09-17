@@ -6,7 +6,7 @@
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.16.09');
+define('UNRAID_API_VERSION', '2026.09.17.01');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -3426,11 +3426,9 @@ function handle_file_chunk() {
         if ($chunkIndex === 0 && $offset == 0) {
             $fp = @fopen($destPath, 'wb');
         } else {
-            if (file_exists($destPath)) {
+            $fp = @fopen($destPath, 'c+b');
+            if (!$fp && file_exists($destPath)) {
                 $fp = @fopen($destPath, 'r+b');
-            }
-            if (!$fp) {
-                $fp = @fopen($destPath, 'c+b');
             }
             if (!$fp) {
                 $fp = @fopen($destPath, 'ab');
@@ -3452,7 +3450,6 @@ function handle_file_chunk() {
         if (strlen($binaryData) > 0) {
             $written = @fwrite($fp, $binaryData);
         }
-        @fflush($fp);
         @fclose($fp);
 
         if (strlen($binaryData) > 0 && ($written === false || $written !== strlen($binaryData))) {
@@ -3469,8 +3466,10 @@ function handle_file_chunk() {
             }
             clearstatcache(true, $destPath);
             clearstatcache(true, $targetDir);
+            $currentSize = @filesize($destPath);
+        } else {
+            $currentSize = (float)($offset + $written);
         }
-        $currentSize = @filesize($destPath);
 
         if ($chunkIndex === 0 || $chunkIndex % 10 === 0 || $isComplete) {
             log_upload_debug("chunk_ok: file={$cleanName} chunk={$chunkIndex}/{$totalChunks} written={$written} curSize={$currentSize} complete=" . ($isComplete ? '1' : '0'));

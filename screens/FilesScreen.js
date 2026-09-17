@@ -167,6 +167,7 @@ export default function FilesScreen({ navigation }) {
   const [isTransferVisible, setIsTransferVisible] = useState(false);
   const [transfers, setTransfers] = useState([]);
   const activeTasksRef = useRef({}); // taskId -> FileSystem.UploadTask or XHR
+  const transferProgressRef = useRef({}); // taskId -> { totalBytes, confirmedBytes, currentChunkLen, chunkStartTime, lastSpeed }
   const isPickingFileRef = useRef(false);
   const serverApiVersionRef = useRef('');
   const csrfTokenRef = useRef('');
@@ -223,6 +224,50 @@ export default function FilesScreen({ navigation }) {
     };
     loadPersistedTransfers();
   }, []);
+
+  // 1-Second Live Refresh Heartbeat for Transfer Task Center
+  useEffect(() => {
+    const hasRunning = transfers.some(t => t.status === 'running');
+    if (!hasRunning) return;
+
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setTransfers(prev => {
+        let hasChanges = false;
+        const next = prev.map(t => {
+          if (t.status !== 'running') return t;
+          const prog = transferProgressRef.current[t.id];
+          if (!prog || !prog.totalBytes) return t;
+
+          const { totalBytes, confirmedBytes, currentChunkLen, chunkStartTime, lastSpeed } = prog;
+          if (lastSpeed <= 0 || !chunkStartTime) return t;
+
+          const elapsedSec = (now - chunkStartTime) / 1000;
+          // Smooth in-flight estimation (capped at 90% of current chunk to never overshoot before server ACK)
+          const inFlight = Math.min(currentChunkLen * 0.90, Math.max(0, lastSpeed * elapsedSec));
+          const currentBytes = Math.min(totalBytes, Math.round(confirmedBytes + inFlight));
+          const pct = Math.min(99, Math.round((currentBytes / Math.max(1, totalBytes)) * 100));
+          const speedText = `${formatBytesFixed(lastSpeed)}/s`;
+          const sizeText = `${formatBytesFixed(currentBytes)} / ${formatBytesFixed(totalBytes)}`;
+
+          if (t.progress !== pct || t.transferredBytes !== currentBytes || t.speedDisplay !== speedText) {
+            hasChanges = true;
+            return {
+              ...t,
+              progress: Math.max(t.progress || 0, pct),
+              transferredBytes: Math.max(t.transferredBytes || 0, currentBytes),
+              sizeText,
+              speedDisplay: speedText,
+            };
+          }
+          return t;
+        });
+        return hasChanges ? next : prev;
+      });
+    }, 1000); // Refreshes exactly once every second!
+
+    return () => clearInterval(timer);
+  }, [transfers.some(t => t.status === 'running')]);
 
 
 
@@ -549,10 +594,9 @@ export default function FilesScreen({ navigation }) {
         speedDisplay: '正在连接传输...',
       } : t)));
 
-      // 4MB Block-Aligned Chunk Engine with Full-Pipelined Background Pre-Encoding:
-      // Perfectly aligned to OS/disk block boundaries (4096 KB = 4,194,304 bytes).
-      // Reduces HTTP round-trips to only ~16 requests for a 64MB file (16x fewer than 256KB)
-      const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB chunks (further speedup)
+      // 2MB High-Throughput Chunk Engine with Full-Pipelined Background Pre-Encoding:
+      // Perfectly balanced for mobile JS bridge memory and zero-delay socket saturation.
+      const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks (faster bridge transfer & frequent 1s updates)
       const totalChunks = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : 1;
       let startChunk = Number(taskItem.chunkIndex) || 0;
       if (startChunk >= totalChunks) startChunk = 0;
@@ -562,6 +606,15 @@ export default function FilesScreen({ navigation }) {
       let smoothedSpeed = 0;
       let finalServerResult = null;
       let savedPath = `${taskItem.targetPath}/${taskItem.name}`;
+
+      // Initialize live tracker ref for real-time 1-second UI refresh
+      transferProgressRef.current[taskId] = {
+        totalBytes: totalSize,
+        confirmedBytes: startChunk * CHUNK_SIZE,
+        currentChunkLen: 0,
+        chunkStartTime: Date.now(),
+        lastSpeed: 0,
+      };
 
       let activeCsrf = await ensureCsrfToken(cleanBaseUrl, apiToken);
 
@@ -598,6 +651,7 @@ export default function FilesScreen({ navigation }) {
 
       for (let i = startChunk; i < totalChunks; i++) {
         if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
+          delete transferProgressRef.current[taskId];
           return;
         }
 
@@ -620,11 +674,19 @@ export default function FilesScreen({ navigation }) {
 
         const encodedData = chunkPayload?.encodedData || '';
 
+        // Record chunk start in tracker for real-time in-flight progress estimation
+        if (transferProgressRef.current[taskId]) {
+          transferProgressRef.current[taskId].confirmedBytes = offset;
+          transferProgressRef.current[taskId].currentChunkLen = currentChunkLen;
+          transferProgressRef.current[taskId].chunkStartTime = Date.now();
+        }
+
         let chunkSuccess = false;
         let serverChunkRes = null;
 
         for (let attempt = 0; attempt < 3; attempt++) {
           if (abortController.signal.aborted || activeTasksRef.current[taskId]?.cancelled) {
+            delete transferProgressRef.current[taskId];
             return;
           }
           if (attempt > 0) {
@@ -708,7 +770,7 @@ export default function FilesScreen({ navigation }) {
               }
 
               if (res?.status === 413) {
-                throw new Error(`分片大小 (4MB) 超出外部反代限制 (HTTP 413 Payload Too Large)，请在反向代理配置中增加 client_max_body_size 10m;`);
+                throw new Error(`分片大小 (2MB) 超出外部反代限制 (HTTP 413 Payload Too Large)，请在反向代理配置中增加 client_max_body_size 10m;`);
               }
 
               if (resJson && resJson.status === 'error') {
@@ -768,12 +830,20 @@ export default function FilesScreen({ navigation }) {
         const now = Date.now();
         const dt = (now - lastTime) / 1000;
         const currentTransferred = Math.min(totalSize, offset + currentChunkLen);
-        if (dt >= 0.4) {
+        if (dt >= 0.25) {
           const bytesDiff = currentTransferred - lastLoaded;
           const instSpeed = Math.max(0, bytesDiff / dt);
-          smoothedSpeed = smoothedSpeed > 0 ? (smoothedSpeed * 0.6 + instSpeed * 0.4) : instSpeed;
+          smoothedSpeed = smoothedSpeed > 0 ? (smoothedSpeed * 0.65 + instSpeed * 0.35) : instSpeed;
           lastTime = now;
           lastLoaded = currentTransferred;
+        }
+
+        // Update confirmed progress and calibrated speed in tracker ref
+        if (transferProgressRef.current[taskId]) {
+          transferProgressRef.current[taskId].confirmedBytes = currentTransferred;
+          transferProgressRef.current[taskId].currentChunkLen = 0;
+          transferProgressRef.current[taskId].chunkStartTime = now;
+          transferProgressRef.current[taskId].lastSpeed = smoothedSpeed;
         }
 
         const isLastChunk = (i + 1 >= totalChunks);
@@ -812,6 +882,7 @@ export default function FilesScreen({ navigation }) {
       }
 
       delete activeTasksRef.current[taskId];
+      delete transferProgressRef.current[taskId];
 
       // Mark success in transfer list
       setTransfers(prev => {
@@ -850,6 +921,7 @@ export default function FilesScreen({ navigation }) {
 
     } catch (err) {
       delete activeTasksRef.current[taskId];
+      delete transferProgressRef.current[taskId];
 
       // Cleanup temp chunks on error/cancel
       try {
@@ -922,6 +994,7 @@ export default function FilesScreen({ navigation }) {
     try {
       backgroundTransferManager.notifyTransferEnded(taskId, 'paused');
     } catch (_) {}
+    delete transferProgressRef.current[taskId];
     setTransfers(prev => {
       const next = prev.map(t => {
         if (t.id === taskId) {
