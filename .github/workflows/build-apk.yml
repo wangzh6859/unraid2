@@ -109,13 +109,13 @@ jobs:
             } catch (e) {}
 
             const lines = [
-              changelogSection || ('## 📱 Unraid Mobile Manager v1.3.${{ github.run_number }}'),
+              changelogSection || ('## 📱 Unraid Mobile Manager v1.4.${{ github.run_number }}'),
               '',
               '### 📦 本次提交历史 (Git Commits)',
               logText,
               '',
               '### 📥 下载与服务端同步',
-              '- **Android 客户端**: 请下载下方 Assets 中的 \`unraid-v1.3.${{ github.run_number }}.apk\`',
+              '- **Android 客户端**: 请下载下方 Assets 中的 \`unraid-v1.4.${{ github.run_number }}.apk\`',
               '- **服务端 API 脚本**: 请在 Unraid 服务器端通过终端命令同步更新 \`/boot/config/my_api/api.php\`'
             ];
             fs.writeFileSync('release_notes.md', lines.join('\n'));
@@ -127,8 +127,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v1.3.${{ github.run_number }}
-          release_name: Unraid v1.3.${{ github.run_number }}
+          tag_name: v1.4.${{ github.run_number }}
+          release_name: Unraid v1.4.${{ github.run_number }}
           body_path: release_notes.md
           draft: false
           prerelease: false
@@ -140,5 +140,5 @@ jobs:
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ${{ steps.sign_app.outputs.signedReleaseFile }}
-          asset_name: unraid-v1.3.${{ github.run_number }}.apk
+          asset_name: unraid-v1.4.${{ github.run_number }}.apk
           asset_content_type: application/vnd.android.package-archive
