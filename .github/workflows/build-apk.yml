@@ -55,6 +55,9 @@ jobs:
       - name: Setup Wake-on-LAN Native Module
         run: node scripts/setup-wake-on-lan.js
 
+      - name: Setup PDF Renderer Native Module
+        run: node scripts/setup-pdf-renderer.js
+
       - name: Configure APK Signing
         run: |
           echo "KEY_ALIAS=${{ secrets.ANDROID_ALIAS }}" >> $GITHUB_ENV

@@ -1,102 +1,221 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, TouchableOpacity,
-  ActivityIndicator, Image, Dimensions, Platform, PanResponder,
+  ActivityIndicator, Image, Dimensions, Platform, NativeModules,
 } from 'react-native';
 import {
-  FileText, BookOpen, Layers, ChevronLeft, ChevronRight,
-  ZoomIn, ZoomOut, RotateCcw, AlertCircle, RefreshCw,
-  ChevronsLeft, ChevronsRight,
+  BookOpen, Layers, ChevronLeft, ChevronRight,
+  ZoomIn, RotateCcw, AlertCircle, RefreshCw,
+  ChevronsLeft, ChevronsRight, Download, CheckCircle2,
 } from 'lucide-react-native';
 import { useTheme } from '../../ThemeContext';
 import { formatBytes } from '../../utils/cacheManager';
 import { apiFetch } from '../../utils/apiClient';
+import { downloadToCache } from '../../utils/previewUtils';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const { PdfRenderer } = NativeModules;
 
 export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClose, onDownload }) {
   const { colors, isDark } = useTheme();
 
   const [loading, setLoading] = useState(true);
+  const [loadingStep, setLoadingStep] = useState('正在初始化阅读器...');
+  const [downloadProgress, setDownloadProgress] = useState(0);
+
   const [pageLoading, setPageLoading] = useState(true);
   const [pageError, setPageError] = useState(false);
+  const [pageErrorMessage, setPageErrorMessage] = useState('');
+  const [retryNonce, setRetryNonce] = useState(0);
+
   const [meta, setMeta] = useState({
     pageCount: 1,
     hasRenderEngine: false,
     hasText: false,
     text: '',
+    isNative: false,
+    localUri: '',
   });
 
   const [currentPage, setCurrentPage] = useState(1);
   const [viewMode, setViewMode] = useState('image'); // 'image' | 'text'
   const [zoomLevel, setZoomLevel] = useState(1);
   const [touchState, setTouchState] = useState({ startX: 0, startY: 0 });
+  const [pageImageUri, setPageImageUri] = useState('');
 
   const scrollRef = useRef(null);
   const lastTapRef = useRef(null);
+  const isMountedRef = useRef(true);
+  const pageLoadingTimerRef = useRef(null);
 
   const targetPath = item?.path || item?.href || '';
 
-  // 1. Fetch PDF Metadata & Capabilities on mount
-  const fetchPdfMeta = async () => {
-    setLoading(true);
-    setPageError(false);
-    try {
-      const url = `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=pdf_preview&path=${encodeURIComponent(targetPath)}`;
-      const res = await apiFetch(url, { method: 'GET' }, 8000, 1);
-      if (res && res.ok) {
-        const json = await res.json().catch(() => null);
-        if (json && json.status === 'success') {
-          const pCount = Math.max(1, json.page_count || 1);
+  // Clean up on unmount
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (pageLoadingTimerRef.current) {
+        clearTimeout(pageLoadingTimerRef.current);
+      }
+    };
+  }, []);
+
+  // 1. Initialize PDF Viewer (Native Android PdfRenderer or Server Fallback)
+  useEffect(() => {
+    let cancelled = false;
+
+    const initPdf = async () => {
+      setLoading(true);
+      setPageError(false);
+
+      const hasNative = Boolean(PdfRenderer && typeof PdfRenderer.getPdfInfo === 'function');
+
+      if (hasNative) {
+        try {
+          if (!cancelled) setLoadingStep('正在从服务器下载 PDF 文件...');
+          
+          const localUri = await downloadToCache({
+            file: item,
+            getDirectUrl: (p) => `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=download&path=${encodeURIComponent(p)}`,
+            authHeaders: { 'X-API-Token': apiToken },
+          });
+
+          if (cancelled) return;
+          setLoadingStep('正在解析文档结构...');
+
+          const info = await PdfRenderer.getPdfInfo(localUri);
+          const pCount = Math.max(1, info?.pageCount || 1);
+
+          if (cancelled) return;
           setMeta({
             pageCount: pCount,
-            hasRenderEngine: Boolean(json.has_render_engine),
-            hasText: Boolean(json.has_text),
-            text: json.text || '',
+            hasRenderEngine: true,
+            hasText: false,
+            text: '',
+            isNative: true,
+            localUri: localUri,
           });
-          if (!json.has_render_engine && json.has_text) {
-            setViewMode('text');
-          }
+
+          // Render first page
+          await renderNativePage(localUri, 1, pCount);
+          if (!cancelled) setLoading(false);
+          return;
+        } catch (e) {
+          console.warn('[PdfViewer] Native render setup failed, falling back to server preview:', e);
+          if (cancelled) return;
         }
       }
-    } catch (_) {
-    } finally {
-      setLoading(false);
+
+      // Fallback: Query server capabilities
+      try {
+        if (!cancelled) setLoadingStep('正在连接服务器渲染引擎...');
+        const url = `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=pdf_preview&path=${encodeURIComponent(targetPath)}`;
+        const res = await apiFetch(url, { method: 'GET' }, 8000, 1);
+        if (res && res.ok) {
+          const json = await res.json().catch(() => null);
+          if (json && json.status === 'success') {
+            const pCount = Math.max(1, json.page_count || 1);
+            if (!cancelled) {
+              setMeta({
+                pageCount: pCount,
+                hasRenderEngine: Boolean(json.has_render_engine),
+                hasText: Boolean(json.has_text),
+                text: json.text || '',
+                isNative: false,
+                localUri: '',
+              });
+              if (!json.has_render_engine && json.has_text) {
+                setViewMode('text');
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[PdfViewer] Server metadata query error:', err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    if (serverUrl && (targetPath || item)) {
+      initPdf();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [serverUrl, targetPath, item?.name, item?.size]);
+
+  // Native page renderer helper
+  const renderNativePage = async (localUri, pageNum, totalPages = meta.pageCount) => {
+    if (!PdfRenderer || !localUri) return;
+    setPageLoading(true);
+    setPageError(false);
+
+    // Timeout safety: if render doesn't return within 10 seconds, clear loading
+    if (pageLoadingTimerRef.current) clearTimeout(pageLoadingTimerRef.current);
+    pageLoadingTimerRef.current = setTimeout(() => {
+      if (isMountedRef.current) {
+        setPageLoading(false);
+        setPageError(true);
+        setPageErrorMessage('页面渲染超时，请点击下方重试');
+      }
+    }, 10000);
+
+    try {
+      const res = await PdfRenderer.renderPage(localUri, pageNum - 1, 144);
+      if (pageLoadingTimerRef.current) clearTimeout(pageLoadingTimerRef.current);
+      if (isMountedRef.current && res && res.uri) {
+        setPageImageUri(res.uri);
+        setPageLoading(false);
+      }
+
+      // Background pre-render adjacent pages
+      const nextPage = pageNum + 1;
+      if (nextPage <= totalPages) {
+        PdfRenderer.renderPage(localUri, nextPage - 1, 144).catch(() => {});
+      }
+      const prevPage = pageNum - 1;
+      if (prevPage >= 1) {
+        PdfRenderer.renderPage(localUri, prevPage - 1, 144).catch(() => {});
+      }
+    } catch (e) {
+      if (pageLoadingTimerRef.current) clearTimeout(pageLoadingTimerRef.current);
+      if (isMountedRef.current) {
+        setPageLoading(false);
+        setPageError(true);
+        setPageErrorMessage(e?.message || '本地光栅化渲染失败');
+      }
     }
   };
 
-  useEffect(() => {
-    if (serverUrl && targetPath) {
-      fetchPdfMeta();
-    }
-  }, [serverUrl, targetPath]);
-
-  // Current page image URL
-  const pageImageUrl = useMemo(() => {
+  // Server page image URL calculation
+  const serverPageUrl = useMemo(() => {
     if (!serverUrl || !targetPath) return '';
-    return `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=pdf_page&path=${encodeURIComponent(targetPath)}&page=${currentPage}&dpi=144`;
-  }, [serverUrl, apiToken, targetPath, currentPage]);
+    return `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=pdf_page&path=${encodeURIComponent(targetPath)}&page=${currentPage}&dpi=144&_t=${retryNonce}`;
+  }, [serverUrl, apiToken, targetPath, currentPage, retryNonce]);
 
-  // Next page prefetch URL for zero-lag page turning
-  const nextPrefetchUrl = useMemo(() => {
-    if (currentPage >= meta.pageCount) return '';
-    return `${serverUrl}/api.php?token=${encodeURIComponent(apiToken)}&action=pdf_page&path=${encodeURIComponent(targetPath)}&page=${currentPage + 1}&dpi=144`;
-  }, [serverUrl, apiToken, targetPath, currentPage, meta.pageCount]);
-
+  // Handle page change
   useEffect(() => {
-    if (nextPrefetchUrl) {
-      Image.prefetch(nextPrefetchUrl).catch(() => {});
+    if (meta.isNative && meta.localUri) {
+      renderNativePage(meta.localUri, currentPage, meta.pageCount);
+    } else {
+      setPageLoading(true);
+      setPageError(false);
+      // Timeout safety for server image
+      if (pageLoadingTimerRef.current) clearTimeout(pageLoadingTimerRef.current);
+      pageLoadingTimerRef.current = setTimeout(() => {
+        if (isMountedRef.current) {
+          setPageLoading(false);
+        }
+      }, 12000);
     }
-  }, [nextPrefetchUrl]);
 
-  // Reset page zoom and loading when page changes
-  useEffect(() => {
-    setPageLoading(true);
-    setPageError(false);
     if (scrollRef.current) {
       scrollRef.current.scrollResponderZoomTo({ x: 0, y: 0, width: SCREEN_WIDTH, height: SCREEN_HEIGHT, animated: false });
     }
-  }, [currentPage]);
+  }, [currentPage, meta.isNative, meta.localUri]);
 
   // Page navigation handlers
   const goToPage = (p) => {
@@ -112,6 +231,15 @@ export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClos
 
   const handleNextPage = () => {
     if (currentPage < meta.pageCount) goToPage(currentPage + 1);
+  };
+
+  const handleRetryPage = () => {
+    setPageError(false);
+    setPageLoading(true);
+    setRetryNonce(n => n + 1);
+    if (meta.isNative && meta.localUri) {
+      renderNativePage(meta.localUri, currentPage, meta.pageCount);
+    }
   };
 
   // Double tap to toggle zoom
@@ -146,10 +274,8 @@ export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClos
 
     if (Math.abs(dx) > 60 && Math.abs(dy) < 50) {
       if (dx < 0) {
-        // Swipe left -> Next Page
         handleNextPage();
       } else if (dx > 0 && touchState.startX > 50) {
-        // Swipe right (from inside screen) -> Prev Page
         handlePrevPage();
       }
     }
@@ -161,7 +287,8 @@ export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClos
     return (
       <View style={styles.centerContainer}>
         <ActivityIndicator size="large" color={colors.accent} />
-        <Text style={styles.loadingText}>正在初始化内置 PDF 阅读器...</Text>
+        <Text style={styles.loadingTitle}>内置高保真 PDF 渲染器</Text>
+        <Text style={styles.loadingText}>{loadingStep}</Text>
         {onClose && (
           <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
             <Text style={styles.cancelBtnText}>取消并返回</Text>
@@ -171,6 +298,8 @@ export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClos
     );
   }
 
+  const activeImageSource = meta.isNative ? { uri: pageImageUri } : { uri: serverPageUrl };
+
   return (
     <View style={styles.container}>
       {/* Top Toolbar */}
@@ -178,7 +307,7 @@ export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClos
         {/* Page Pill */}
         <View style={styles.pagePill}>
           <Text style={styles.pagePillText}>
-            第 {currentPage} / {meta.pageCount} 页
+            第 {currentPage} / {meta.pageCount} 页 {meta.isNative ? '· 本地渲染' : ''}
           </Text>
         </View>
 
@@ -248,17 +377,25 @@ export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClos
             onScrollEndDrag={() => {}}
           >
             <TouchableOpacity activeOpacity={1} onPress={handleDoubleTap} style={styles.imageTouchBox}>
-              <Image
-                source={{ uri: pageImageUrl }}
-                style={styles.pageImage}
-                resizeMode="contain"
-                onLoadStart={() => setPageLoading(true)}
-                onLoadEnd={() => setPageLoading(false)}
-                onError={() => {
-                  setPageLoading(false);
-                  setPageError(true);
-                }}
-              />
+              {Boolean(meta.isNative ? pageImageUri : serverPageUrl) && (
+                <Image
+                  key={`pdf_page_${currentPage}_${retryNonce}`}
+                  source={activeImageSource}
+                  style={styles.pageImage}
+                  resizeMode="contain"
+                  onLoadStart={() => setPageLoading(true)}
+                  onLoadEnd={() => {
+                    if (pageLoadingTimerRef.current) clearTimeout(pageLoadingTimerRef.current);
+                    setPageLoading(false);
+                  }}
+                  onError={() => {
+                    if (pageLoadingTimerRef.current) clearTimeout(pageLoadingTimerRef.current);
+                    setPageLoading(false);
+                    setPageError(true);
+                    setPageErrorMessage('页面光栅化渲染失败');
+                  }}
+                />
+              )}
             </TouchableOpacity>
           </ScrollView>
 
@@ -274,20 +411,31 @@ export default function PdfViewer({ item, serverUrl, apiToken, streamUrl, onClos
           {pageError && (
             <View style={styles.pageErrorOverlay}>
               <AlertCircle color={colors.red} size={40} style={{ marginBottom: 12 }} />
-              <Text style={styles.pageErrorTitle}>该页光栅化渲染失败</Text>
+              <Text style={styles.pageErrorTitle}>{pageErrorMessage || '该页光栅化渲染失败'}</Text>
               <Text style={styles.pageErrorSub}>
-                服务器可能正在处理超大图元，请尝试重新加载本页或切换到速读文字模式。
+                {meta.isNative
+                  ? '本地光栅化遇到复杂图元，请点击下方重试，或切换至文字模式。'
+                  : '服务器未配置光栅化引擎（poppler/ghostscript）。请尝试重新加载或下载至手机查看。'}
               </Text>
-              <TouchableOpacity
-                style={styles.pageRetryBtn}
-                onPress={() => {
-                  setPageError(false);
-                  setPageLoading(true);
-                }}
-              >
-                <RefreshCw color="#ffffff" size={15} />
-                <Text style={styles.pageRetryText}>重试本页</Text>
-              </TouchableOpacity>
+              <View style={styles.errorActionRow}>
+                <TouchableOpacity
+                  style={styles.pageRetryBtn}
+                  onPress={handleRetryPage}
+                >
+                  <RefreshCw color="#ffffff" size={15} />
+                  <Text style={styles.pageRetryText}>重试本页</Text>
+                </TouchableOpacity>
+
+                {meta.hasText && (
+                  <TouchableOpacity
+                    style={[styles.pageRetryBtn, { backgroundColor: colors.cardSecondary, borderWidth: 1, borderColor: colors.cardBorder }]}
+                    onPress={() => setViewMode('text')}
+                  >
+                    <BookOpen color={colors.textStrong} size={15} />
+                    <Text style={[styles.pageRetryText, { color: colors.textStrong }]}>切换文字模式</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             </View>
           )}
         </View>
@@ -367,13 +515,20 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     padding: 32,
     backgroundColor: colors.bg,
   },
+  loadingTitle: {
+    color: colors.textStrong,
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginTop: 16,
+  },
   loadingText: {
     color: colors.sub,
-    fontSize: 14,
-    marginTop: 14,
+    fontSize: 13,
+    marginTop: 8,
+    textAlign: 'center',
   },
   cancelBtn: {
-    marginTop: 20,
+    marginTop: 24,
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 20,
@@ -462,7 +617,7 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   },
   imageTouchBox: {
     width: SCREEN_WIDTH,
-    height: SCREEN_HEIGHT * 0.76,
+    height: SCREEN_HEIGHT * 0.74,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -493,19 +648,26 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
     marginBottom: 6,
+    textAlign: 'center',
   },
   pageErrorSub: {
     color: colors.sub,
     fontSize: 13,
     textAlign: 'center',
-    marginBottom: 16,
+    marginBottom: 18,
     lineHeight: 18,
+    paddingHorizontal: 12,
+  },
+  errorActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
   pageRetryBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.accent,
-    paddingHorizontal: 18,
+    paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 20,
     gap: 6,
@@ -520,19 +682,18 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     backgroundColor: colors.bg,
   },
   textContent: {
-    padding: 18,
-    paddingBottom: 40,
+    padding: 20,
   },
   textExtractionTitle: {
-    color: colors.sub,
-    fontSize: 13,
-    marginBottom: 12,
-    fontWeight: '500',
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: colors.textStrong,
+    marginBottom: 14,
   },
   textExtractionBody: {
+    fontSize: 14,
+    lineHeight: 22,
     color: colors.text,
-    fontSize: 15,
-    lineHeight: 24,
   },
   bottomBar: {
     flexDirection: 'row',
@@ -540,14 +701,14 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 10,
-    backgroundColor: colors.bar,
+    backgroundColor: colors.card,
     borderTopWidth: 1,
     borderTopColor: colors.divider,
   },
   navBtn: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 8,
     backgroundColor: colors.cardSecondary,
     justifyContent: 'center',
     alignItems: 'center',
@@ -558,11 +719,11 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   navStepBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.accent,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 18,
-    gap: 2,
+    borderRadius: 8,
+    backgroundColor: colors.accent,
+    gap: 4,
   },
   navStepText: {
     color: '#ffffff',
@@ -578,7 +739,6 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   jumpPillText: {
     color: colors.textStrong,
     fontSize: 13,
-    fontWeight: 'bold',
-    fontVariant: ['tabular-nums'],
+    fontWeight: '600',
   },
 });

@@ -6,7 +6,7 @@
  * Release: 2026-09-15
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.17.05');
+define('UNRAID_API_VERSION', '2026.09.17.06');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -3197,20 +3197,32 @@ function handle_file_read() {
     }
 
     // Default 2MB (2,097,152 bytes) reads ~1 million Chinese characters / 50,000+ lines in one shot
+    // If max_bytes=0, read until end of file
     $maxBytes = isset($_GET['max_bytes']) ? intval($_GET['max_bytes']) : 2097152;
     $offset = isset($_GET['offset']) ? max(0, intval($_GET['offset'])) : 0;
-    $isTruncated = false;
 
-    if ($maxBytes > 0 && ($size - $offset) > $maxBytes) {
-        $content = @file_get_contents($filePath, false, null, $offset, $maxBytes);
-        $isTruncated = true;
-    } else {
-        $content = @file_get_contents($filePath, false, null, $offset);
+    $fp = @fopen($filePath, 'rb');
+    if ($fp === false) {
+        json_output(['status' => 'error', 'message' => '读取文件内容失败: 无法打开文件'], 500);
     }
 
-    if ($content === false) {
-        json_output(['status' => 'error', 'message' => '读取文件内容失败'], 500);
+    if ($offset > 0) {
+        @fseek($fp, $offset);
     }
+
+    $bytesRemaining = max(0, $size - $offset);
+    $readLen = ($maxBytes > 0) ? min($maxBytes, $bytesRemaining) : $bytesRemaining;
+
+    $content = '';
+    if ($readLen > 0) {
+        $readResult = @fread($fp, (int)$readLen);
+        if ($readResult !== false) {
+            $content = $readResult;
+        }
+    }
+    @fclose($fp);
+
+    $isTruncated = ($maxBytes > 0 && ($offset + strlen($content)) < $size);
 
     // Client requested encoding override (e.g. ?encoding=gbk or ?encoding=utf-8)
     $requestedEncoding = isset($_GET['encoding']) ? strtolower(trim($_GET['encoding'])) : '';
@@ -3323,10 +3335,52 @@ function handle_pdf_preview() {
         }
     }
 
+    // Pure PHP page count fallback if external tools absent
+    if ($pageCount <= 0) {
+        $fp = @fopen($filePath, 'rb');
+        if ($fp) {
+            $pdfHead = @fread($fp, 5242880); // Read first 5MB
+            @fclose($fp);
+            if ($pdfHead) {
+                if (preg_match_all('/\/Type\s*\/Page\b/', $pdfHead, $pm)) {
+                    $pageCount = count($pm[0]);
+                }
+                if ($pageCount <= 0 && preg_match('/\/Count\s+(\d+)/', $pdfHead, $cm)) {
+                    $pageCount = (int)$cm[1];
+                }
+            }
+        }
+    }
+
     $extractedText = '';
     if ($hasPdftotext) {
         $cmd = "pdftotext -f 1 -l 30 -enc UTF-8 {$escaped} - 2>/dev/null";
         $extractedText = (string)@shell_exec($cmd);
+    }
+
+    // Pure PHP text extraction fallback from PDF streams
+    if (empty($extractedText)) {
+        $fp = @fopen($filePath, 'rb');
+        if ($fp) {
+            $rawHead = @fread($fp, 2097152); // Read up to 2MB
+            @fclose($fp);
+            if ($rawHead && preg_match_all('/stream\r?\n(.*?)\r?\nendstream/s', $rawHead, $streamMatches)) {
+                $accum = '';
+                foreach ($streamMatches[1] as $rawStream) {
+                    $decomp = @gzuncompress($rawStream);
+                    $streamText = ($decomp !== false) ? $decomp : $rawStream;
+                    if (preg_match_all('/\((.*?)\)\s*Tj/s', $streamText, $tjMatches)) {
+                        foreach ($tjMatches[1] as $val) {
+                            $accum .= str_replace(['\\(', '\\)', '\\\\'], ['(', ')', '\\'], $val) . ' ';
+                        }
+                    }
+                    if (strlen($accum) > 20000) break;
+                }
+                if (!empty($accum)) {
+                    $extractedText = trim($accum);
+                }
+            }
+        }
     }
 
     $cleanText = trim($extractedText);

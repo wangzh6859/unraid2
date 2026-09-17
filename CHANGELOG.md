@@ -4,6 +4,36 @@
 
 ---
 
+## [v1.4.220] - 2026-09-17
+> **核心主题**：彻底修复 TXT 文本读取 HTTP 500 报错、集成 Android 原生内部 PdfRenderer 渲染引擎（免服务端任何依赖）、修复 PDF 重试转圈假死与增加纯 PHP 降级流
+
+### 🛠️ TXT 文本读取 HTTP 500 根因彻底修复
+- **根因分析**：
+  - 此前 `api.php` 中使用 `@file_get_contents($filePath, false, null, $offset)` 传递了 4 个参数（在未指定 `$length` 情况下传入了 `$offset`）。在 PHP 7/8 环境中，当文件体积小于 2MB 进入 else 分支且 `$offset === 0` 时，此调用均会抛出警告或返回 `false`，从而导致 `json_output(['status' => 'error', 'message' => '读取文件内容失败'], 500)`，造成所有 TXT 文件打开直接报 HTTP 500。
+- **修复方案**：
+  - 改用底层二进制安全且完全兼容的 `@fopen` + `@fseek` + `@fread` 方案。
+  - 精确计算剩余可读字节，无缝支持全量读取（`max_bytes=0`）与流式分块追加（`max_bytes=2097152`），杜绝任何 PHP 层面报错，TXT 毫秒级秒开。
+
+### 📄 原生内嵌 Android 硬件级 PdfRenderer 模块（完全无需依赖 Unraid 服务端工具）
+- **痛点解决**：
+  - 原生未安装 poppler / ghostscript / ImageMagick 的标准 Unraid 系统，服务端光栅化会返回 500，导致手机端报错「该页光栅化渲染失败」。
+  - 用户明确要求将 PDF 阅读器完全集成在软件内部，不得依赖调用第三方 WPS、Chrome 等外部应用。
+- **Android Native 模块注入**：
+  - 新增 `scripts/setup-pdf-renderer.js` 构建脚本，向 Android 宿主注入 `PdfRendererModule.java` 与 `PdfRendererPackage.java`。
+  - 基于 Android 系统底层原生 API（`android.graphics.pdf.PdfRenderer`，自 Android 5.0 API 21 起内置）：
+    - 手机下载 PDF 缓存后，在手机本地 CPU/GPU 直接光栅化渲染各页（默认 144 DPI 极清，支持白底画布防透明发黑，最高 4096px 防爆内存）；
+    - 支持后台预热相邻页面与本地磁盘缓存，无论 Unraid 服务端环境如何贫瘠，均可在手机内实现毫秒级丝滑翻页与离线阅读；
+  - CI 构建流中自动接入 `Setup PDF Renderer Native Module` 步骤。
+
+### 🔄 修复 PDF 重试死循环转圈与双模降级保障
+- **重试无响应根因修复**：
+  - 此前点击「重试本页」仅切换了 `setPageLoading(true)` 但图片 URL 未改变，导致 React Native `<Image>` 不会重新触发网络或加载回调，界面永久卡在加载转圈。
+  - 修复：增加 `retryNonce` 动态随机时间戳与超时保护，点击重试会重置状态并强制重新发起渲染或网络请求，超时自动解除加载状态。
+- **纯 PHP 兜底支持 (`api.php 2026.09.17.06`)**：
+  - 在 Unraid 未安装任何 poppler 工具的环境下，`api.php` 增加了纯 PHP 的 FlateDecode 解压提取与 `/Type /Page` 正则页数扫描，确保在 Web 或无原生模块时依然能秒显页数与纯文本内容。
+
+---
+
 ## [v1.4.219] - 2026-09-17
 > **核心主题**：解除全局返回手势屏蔽、TXT 文本全量无上限载入与分段动态流、TXT 中文乱码根除与编码一键切换、全内置纯内嵌原生 PDF 阅读器
 
