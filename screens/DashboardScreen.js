@@ -123,6 +123,7 @@ export default function DashboardScreen({ navigation }) {
   const [syslogLevelFilter, setSyslogLevelFilter] = useState('all');
   const [syslogCopiedToast, setSyslogCopiedToast] = useState(false);
   const syslogScrollRef = useRef(null);
+  const isFetchingServerDataRef = useRef(false);
 
   // 通知中心与系统时钟状态
   const [notifications, setNotifications] = useState([]);
@@ -239,7 +240,9 @@ export default function DashboardScreen({ navigation }) {
   };
 
   // 核心拉取逻辑
-  const fetchServerData = async () => {
+  const fetchServerData = async (isManual = false) => {
+    if (isFetchingServerDataRef.current && !isManual) return;
+    isFetchingServerDataRef.current = true;
     try {
       const savedUrl = await AsyncStorage.getItem('@server_url');
       const savedToken = await AsyncStorage.getItem('@api_token');
@@ -329,6 +332,8 @@ export default function DashboardScreen({ navigation }) {
       }
     } catch (error) {
       setServerStatus('offline');
+    } finally {
+      isFetchingServerDataRef.current = false;
     }
   };
 
@@ -572,7 +577,7 @@ export default function DashboardScreen({ navigation }) {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     resetNetworkPool();
-    await Promise.all([fetchServerData(), fetchNotifications()]);
+    await Promise.all([fetchServerData(true), fetchNotifications()]);
     setRefreshing(false);
   }, []);
 
@@ -582,7 +587,7 @@ export default function DashboardScreen({ navigation }) {
       if (nextAppState === 'active') {
         resetNetworkPool();
         setTimeout(() => {
-          fetchServerData();
+          fetchServerData(true);
           fetchNotifications();
         }, 200);
       }
@@ -594,8 +599,8 @@ export default function DashboardScreen({ navigation }) {
 
   useFocusEffect(
     useCallback(() => {
-      fetchServerData();
-      const interval = setInterval(() => fetchServerData(), 1000);
+      fetchServerData(true);
+      const interval = setInterval(() => fetchServerData(false), 1000);
       return () => clearInterval(interval);
     }, [])
   );

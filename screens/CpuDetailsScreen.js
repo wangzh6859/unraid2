@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -25,6 +25,7 @@ export default function CpuDetailsScreen({ navigation, route }) {
   const [loading, setLoading] = useState(!initialStats);
   const [refreshing, setRefreshing] = useState(false);
   const [filterTab, setFilterTab] = useState('all'); // 'all' | 'docker' | 'vm' | 'process'
+  const isFetchingRef = useRef(false);
 
   const [cpuData, setCpuData] = useState(() => ({
     usage: initialStats?.cpu || 0,
@@ -39,6 +40,8 @@ export default function CpuDetailsScreen({ navigation, route }) {
 
   // Fetch metrics detail from backend
   const fetchData = useCallback(async (isSilent = false) => {
+    if (isFetchingRef.current && isSilent) return;
+    isFetchingRef.current = true;
     try {
       if (!isSilent) setLoading(true);
       const host = (await AsyncStorage.getItem('@server_url')) || (await AsyncStorage.getItem('server_host'));
@@ -46,7 +49,7 @@ export default function CpuDetailsScreen({ navigation, route }) {
       if (!host) return;
 
       const cleanHost = host.replace(/\/+$/, '');
-      const detailUrl = `${cleanHost}/api.php?action=metrics_detail&token=${encodeURIComponent(token || '')}`;
+      const detailUrl = `${cleanHost}/api.php?action=metrics_detail&type=cpu&token=${encodeURIComponent(token || '')}`;
 
       let json = null;
       try {
@@ -90,6 +93,7 @@ export default function CpuDetailsScreen({ navigation, route }) {
     } catch (e) {
       console.warn('[CpuDetailsScreen] Fetch error:', e);
     } finally {
+      isFetchingRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }

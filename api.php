@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.18.09
+ * Version: 2026.09.18.10
  * Release: 2026-09-18
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.18.09');
+define('UNRAID_API_VERSION', '2026.09.18.10');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -4310,6 +4310,29 @@ function get_disk_io_stats() {
 }
 
 function get_gpu_telemetry() {
+    static $lastTele = null;
+    static $lastTeleTime = 0;
+    $now = microtime(true);
+    if ($lastTele !== null && ($now - $lastTeleTime) < 1.0) {
+        return $lastTele;
+    }
+    $cacheFile = '/tmp/unraid_gpu_tele_cache.json';
+    if (file_exists($cacheFile) && ($now - @filemtime($cacheFile)) < 1.0) {
+        $c = @json_decode(@file_get_contents($cacheFile), true);
+        if (is_array($c)) {
+            $lastTele = $c;
+            $lastTeleTime = $now;
+            return $c;
+        }
+    }
+    $res = _get_gpu_telemetry_raw();
+    $lastTele = $res;
+    $lastTeleTime = $now;
+    @file_put_contents($cacheFile, json_encode($res));
+    return $res;
+}
+
+function _get_gpu_telemetry_raw() {
     $gpuData = [
         'name' => '未配置独立显卡',
         'vendor' => 'N/A',
@@ -4566,7 +4589,7 @@ function get_gpu_telemetry() {
 
                     // Live engine usage query via intel_gpu_top (-n 2 outputs 2 samples and exits cleanly)
                     $intelUsage = null;
-                    $topOut = @shell_exec('timeout 2s intel_gpu_top -J -s 100 -n 2 2>/dev/null');
+                    $topOut = @shell_exec('timeout 0.3s intel_gpu_top -J -s 50 -n 2 2>/dev/null');
                     if (!empty($topOut)) {
                         $topData = @json_decode(trim($topOut), true);
                         if (!is_array($topData)) {
@@ -4924,11 +4947,34 @@ function get_intel_rc6_usage() {
  * Find processes and Docker containers currently accessing the GPU
  */
 function get_gpu_active_apps() {
+    static $lastApps = null;
+    static $lastAppsTime = 0;
+    $now = microtime(true);
+    if ($lastApps !== null && ($now - $lastAppsTime) < 2.5) {
+        return $lastApps;
+    }
+    $cacheFile = '/tmp/unraid_gpu_apps_cache.json';
+    if (file_exists($cacheFile) && ($now - @filemtime($cacheFile)) < 2.5) {
+        $c = @json_decode(@file_get_contents($cacheFile), true);
+        if (is_array($c)) {
+            $lastApps = $c;
+            $lastAppsTime = $now;
+            return $c;
+        }
+    }
+    $apps = _get_gpu_active_apps_raw();
+    $lastApps = $apps;
+    $lastAppsTime = $now;
+    @file_put_contents($cacheFile, json_encode($apps));
+    return $apps;
+}
+
+function _get_gpu_active_apps_raw() {
     $apps = [];
     $pids = [];
 
     // 1. Linux DRM /dev/dri clients (Intel QuickSync / AMD VA-API)
-    // Method A: CLI tools (fuser / lsof)
+    // Fast CLI tools (fuser / lsof directly targeting device nodes - takes < 5ms)
     $fuserCmds = [
         'fuser /dev/dri/renderD* /dev/dri/card* 2>/dev/null',
         '/usr/sbin/fuser /dev/dri/renderD* /dev/dri/card* 2>/dev/null',
@@ -4945,20 +4991,6 @@ function get_gpu_active_apps() {
                 }
             }
             if (!empty($pids)) break;
-        }
-    }
-
-    // Method B: Direct procfs fd scanning for /dev/dri/ or /dev/nvidia
-    $procDri = @shell_exec("ls -l /proc/[0-9]*/fd/* 2>/dev/null | grep -E '/dev/dri/|/dev/nvidia'");
-    if (!empty($procDri)) {
-        $fdLines = explode("\n", trim($procDri));
-        foreach ($fdLines as $fdLine) {
-            if (preg_match('#/proc/(\d+)/fd/#', $fdLine, $pm)) {
-                $p = (int)$pm[1];
-                if ($p > 0 && !isset($pids[$p])) {
-                    $pids[$p] = ['source' => 'dri_fd', 'name' => '', 'vram' => ''];
-                }
-            }
         }
     }
 
@@ -5001,7 +5033,7 @@ function get_gpu_active_apps() {
         }
     }
 
-    // 3. Scan for media transcode processes (Emby, Jellyfin, Plex, ffmpeg)
+    // 3. Scan for media transcode processes (Emby, Jellyfin, Plex, ffmpeg) - targeted and ultra fast (< 3ms)
     $mediaPids = @shell_exec("pgrep -f -i 'emby|ffmpeg|jellyfin|plex|handbrake|tdarr' 2>/dev/null");
     if (!empty($mediaPids)) {
         foreach (preg_split('/\s+/', trim($mediaPids)) as $mPid) {
@@ -5017,22 +5049,31 @@ function get_gpu_active_apps() {
 
     if (empty($pids)) return [];
 
-    // Resolve Docker container names
-    $containerMap = [];
-    $dockerPs = @shell_exec('docker ps --no-trunc --format "{{.ID}}\t{{.Names}}\t{{.Image}}" 2>/dev/null');
-    if (!empty($dockerPs)) {
-        $lines = explode("\n", trim($dockerPs));
-        foreach ($lines as $line) {
-            $cols = explode("\t", trim($line));
-            if (count($cols) >= 2) {
-                $longId = trim($cols[0]);
-                $shortId = substr($longId, 0, 12);
-                $cName = ltrim(trim($cols[1]), '/');
-                $cImg = isset($cols[2]) ? trim($cols[2]) : '';
-                $containerMap[$longId] = ['name' => $cName, 'image' => $cImg];
-                $containerMap[$shortId] = ['name' => $cName, 'image' => $cImg];
+    // Resolve Docker container names with 5-second TTL cache to prevent repetitive docker ps overhead
+    static $cachedContainerMap = null;
+    static $cachedContainerTime = 0;
+    $nowC = microtime(true);
+    if ($cachedContainerMap !== null && ($nowC - $cachedContainerTime) < 5.0) {
+        $containerMap = $cachedContainerMap;
+    } else {
+        $containerMap = [];
+        $dockerPs = @shell_exec('docker ps --no-trunc --format "{{.ID}}\t{{.Names}}\t{{.Image}}" 2>/dev/null');
+        if (!empty($dockerPs)) {
+            $lines = explode("\n", trim($dockerPs));
+            foreach ($lines as $line) {
+                $cols = explode("\t", trim($line));
+                if (count($cols) >= 2) {
+                    $longId = trim($cols[0]);
+                    $shortId = substr($longId, 0, 12);
+                    $cName = ltrim(trim($cols[1]), '/');
+                    $cImg = isset($cols[2]) ? trim($cols[2]) : '';
+                    $containerMap[$longId] = ['name' => $cName, 'image' => $cImg];
+                    $containerMap[$shortId] = ['name' => $cName, 'image' => $cImg];
+                }
             }
         }
+        $cachedContainerMap = $containerMap;
+        $cachedContainerTime = $nowC;
     }
 
     foreach ($pids as $pid => $meta) {
@@ -5726,6 +5767,19 @@ function handle_metrics_detail() {
         return;
     }
 
+    if ($type === 'gpu') {
+        // Fast path for GpuDetailsScreen (< 50ms execution time)
+        $gpuData = get_gpu_telemetry();
+        $history = update_metrics_history(null, null, $gpuData['usage'], null, null);
+        json_output([
+            'status' => 'success',
+            'api_version' => UNRAID_API_VERSION,
+            'gpu' => $gpuData,
+            'history' => $history
+        ]);
+        return;
+    }
+
     // 1. CPU
     $cpuUsage = 0;
     $cpuTemp = null;
@@ -5840,6 +5894,50 @@ function handle_metrics_detail() {
         }
     }
 
+    if ($type === 'cpu') {
+        // Fast path for CpuDetailsScreen (< 60ms execution time)
+        $dockerStats = get_dockers_network_stats($nowFloat, false);
+        $vmsList = [];
+        $virshOut = @shell_exec('virsh list --all 2>/dev/null');
+        if ($virshOut) {
+            $lines = explode("\n", trim($virshOut));
+            if (count($lines) >= 3) {
+                array_shift($lines);
+                array_shift($lines);
+                foreach ($lines as $line) {
+                    $line = trim($line);
+                    if (!$line) continue;
+                    $parts = preg_split('/\s+/', $line, 3);
+                    if (count($parts) >= 3) {
+                        $vmsList[] = [
+                            'id' => $parts[0] !== '-' ? (int)$parts[0] : null,
+                            'name' => $parts[1],
+                            'state' => $parts[2]
+                        ];
+                    }
+                }
+            }
+        }
+        $history = update_metrics_history($cpuUsage, null, null, null, null);
+        json_output([
+            'status' => 'success',
+            'api_version' => UNRAID_API_VERSION,
+            'cpu' => [
+                'usage' => $cpuUsage,
+                'temp' => $cpuTemp,
+                'model' => $cpuModel,
+                'cores' => $cores,
+                'top_processes' => $cpuProcs
+            ],
+            'cpu_usage' => $cpuUsage,
+            'cpu_temp' => $cpuTemp,
+            'dockers' => $dockerStats,
+            'vms' => $vmsList,
+            'history' => $history
+        ]);
+        return;
+    }
+
     // 2. Memory
     $meminfo = @file_get_contents('/proc/meminfo');
     $memData = [
@@ -5906,6 +6004,45 @@ function handle_metrics_detail() {
                 ];
             }
         }
+    }
+
+    if ($type === 'memory') {
+        // Fast path for MemoryDetailsScreen (< 50ms execution time)
+        $dockerStats = get_dockers_network_stats($nowFloat, false);
+        $vmsList = [];
+        $virshOut = @shell_exec('virsh list --all 2>/dev/null');
+        if ($virshOut) {
+            $lines = explode("\n", trim($virshOut));
+            if (count($lines) >= 3) {
+                array_shift($lines);
+                array_shift($lines);
+                foreach ($lines as $line) {
+                    $line = trim($line);
+                    if (!$line) continue;
+                    $parts = preg_split('/\s+/', $line, 3);
+                    if (count($parts) >= 3) {
+                        $vmsList[] = [
+                            'id' => $parts[0] !== '-' ? (int)$parts[0] : null,
+                            'name' => $parts[1],
+                            'state' => $parts[2]
+                        ];
+                    }
+                }
+            }
+        }
+        $history = update_metrics_history(null, $memData['usage_pct'], null, null, null);
+        json_output([
+            'status' => 'success',
+            'api_version' => UNRAID_API_VERSION,
+            'memory' => $memData,
+            'memory_usage' => $memData['usage_pct'],
+            'mem_total' => $memData['total'],
+            'mem_used' => $memData['used'],
+            'dockers' => $dockerStats,
+            'vms' => $vmsList,
+            'history' => $history
+        ]);
+        return;
     }
 
     // 3. GPU Telemetry

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -23,6 +23,7 @@ export default function GpuDetailsScreen({ navigation, route }) {
 
   const [loading, setLoading] = useState(!initialGpu);
   const [refreshing, setRefreshing] = useState(false);
+  const isFetchingRef = useRef(false);
 
   const [gpu, setGpu] = useState(() => (initialGpu && initialGpu.name ? {
     name: initialGpu.clean_name || initialGpu.name,
@@ -54,6 +55,8 @@ export default function GpuDetailsScreen({ navigation, route }) {
   const [history, setHistory] = useState(() => (Array.isArray(initialHistory) ? initialHistory : []));
 
   const fetchData = useCallback(async (isSilent = false) => {
+    if (isFetchingRef.current && isSilent) return;
+    isFetchingRef.current = true;
     try {
       if (!isSilent) setLoading(true);
       const host = (await AsyncStorage.getItem('@server_url')) || (await AsyncStorage.getItem('server_host'));
@@ -61,7 +64,7 @@ export default function GpuDetailsScreen({ navigation, route }) {
       if (!host) return;
 
       const cleanHost = host.replace(/\/+$/, '');
-      const detailUrl = `${cleanHost}/api.php?action=metrics_detail&token=${encodeURIComponent(token || '')}`;
+      const detailUrl = `${cleanHost}/api.php?action=metrics_detail&type=gpu&token=${encodeURIComponent(token || '')}`;
 
       let json = null;
       try {
@@ -95,6 +98,7 @@ export default function GpuDetailsScreen({ navigation, route }) {
     } catch (e) {
       console.warn('[GpuDetailsScreen] Fetch error:', e);
     } finally {
+      isFetchingRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }
