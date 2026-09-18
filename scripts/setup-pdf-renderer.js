@@ -621,7 +621,8 @@ if (fs.existsSync(appBuildGradle)) {
   if (!gradleContent.includes('androidx.documentfile:documentfile')) {
     gradleContent = gradleContent.replace(
       'dependencies {',
-      "dependencies {\\n    implementation 'androidx.documentfile:documentfile:1.0.1'"
+      `dependencies {
+    implementation 'androidx.documentfile:documentfile:1.0.1'`
     );
     fs.writeFileSync(appBuildGradle, gradleContent, 'utf8');
     console.log('[setup-pdf-renderer] Added androidx.documentfile dependency to app/build.gradle');
