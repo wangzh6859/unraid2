@@ -829,7 +829,7 @@ export default function DashboardScreen({ navigation }) {
         </View>
       )}
 
-      {/* 2. Bento 核心硬件区：第一行 CPU 与 RAM 并列卡片 */}
+      {/* 2. Bento 核心硬件区：第一行 CPU 与 GPU 并列卡片 */}
       <View style={styles.bentoRow}>
         {/* CPU 卡片 */}
         <TouchableOpacity
@@ -900,63 +900,7 @@ export default function DashboardScreen({ navigation }) {
           </View>
         </TouchableOpacity>
 
-        {/* RAM 卡片 */}
-        <TouchableOpacity
-          style={styles.bentoCard}
-          onPress={() => navigation.navigate('MemoryDetails', { initialStats: stats })}
-          activeOpacity={0.8}
-        >
-          <View style={styles.bentoHeader}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Database size={15} color={colors.green} style={{ marginRight: 6 }} />
-              <Text style={styles.bentoTitle}>RAM</Text>
-              <ChevronRight size={13} color={colors.muted} style={{ marginLeft: 3 }} />
-            </View>
-            <Text style={styles.bentoSubMeta}>{memVal}%</Text>
-          </View>
-
-          {/* SVG 仪表环 */}
-          <View style={styles.gaugeContainer}>
-            <Svg width={100} height={100} viewBox="0 0 100 100">
-              <Defs>
-                <LinearGradient id="ramGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <Stop offset="0%" stopColor={colors.green} />
-                  <Stop offset="100%" stopColor={colors.purple} />
-                </LinearGradient>
-              </Defs>
-              <Path
-                d={ramTrackPath}
-                stroke={colors.ringBg}
-                strokeWidth={7.5}
-                strokeLinecap="round"
-                fill="none"
-              />
-              {ramProgPath ? (
-                <Path
-                  d={ramProgPath}
-                  stroke="url(#ramGrad)"
-                  strokeWidth={7.5}
-                  strokeLinecap="round"
-                  fill="none"
-                />
-              ) : null}
-            </Svg>
-            <View style={styles.gaugeCenterText}>
-              <Text style={styles.gaugeBigNum}>{usedRamDisplayNum}</Text>
-              <Text style={styles.gaugeUnitText}>{usedRamUnitText}</Text>
-            </View>
-          </View>
-
-          {/* 内存总量概览 */}
-          <View style={styles.ramMetaBox}>
-            <Text style={styles.ramMetaText}>{totalRamMetaText}</Text>
-          </View>
-        </TouchableOpacity>
-      </View>
-
-      {/* 2.2 Bento 第二行：GPU 与网络吞吐并列卡片 (尺寸与 CPU / RAM 完全一致) */}
-      <View style={styles.bentoRow}>
-        {/* GPU 卡片 */}
+        {/* GPU 卡片 (与原 RAM 位置互换) */}
         <TouchableOpacity
           style={styles.bentoCard}
           onPress={() => navigation.navigate('GpuDetails', { initialGpu: gpu })}
@@ -1022,11 +966,67 @@ export default function DashboardScreen({ navigation }) {
             </Text>
           </View>
         </TouchableOpacity>
+      </View>
 
-        {/* 网络吞吐卡片 (缩小为 Bento 规格，与 GPU 并列) */}
+      {/* 2.2 Bento 第二行：RAM 与网络吞吐并列卡片 */}
+      <View style={styles.bentoRow}>
+        {/* RAM 卡片 (与原 GPU 位置互换) */}
         <TouchableOpacity
           style={styles.bentoCard}
-          onPress={() => navigation.navigate('NetworkDetails', { initialNetSpeed: netSpeed })}
+          onPress={() => navigation.navigate('MemoryDetails', { initialStats: stats })}
+          activeOpacity={0.8}
+        >
+          <View style={styles.bentoHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Database size={15} color={colors.green} style={{ marginRight: 6 }} />
+              <Text style={styles.bentoTitle}>RAM</Text>
+              <ChevronRight size={13} color={colors.muted} style={{ marginLeft: 3 }} />
+            </View>
+            <Text style={styles.bentoSubMeta}>{memVal}%</Text>
+          </View>
+
+          {/* SVG 仪表环 */}
+          <View style={styles.gaugeContainer}>
+            <Svg width={100} height={100} viewBox="0 0 100 100">
+              <Defs>
+                <LinearGradient id="ramGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <Stop offset="0%" stopColor={colors.green} />
+                  <Stop offset="100%" stopColor={colors.purple} />
+                </LinearGradient>
+              </Defs>
+              <Path
+                d={ramTrackPath}
+                stroke={colors.ringBg}
+                strokeWidth={7.5}
+                strokeLinecap="round"
+                fill="none"
+              />
+              {ramProgPath ? (
+                <Path
+                  d={ramProgPath}
+                  stroke="url(#ramGrad)"
+                  strokeWidth={7.5}
+                  strokeLinecap="round"
+                  fill="none"
+                />
+              ) : null}
+            </Svg>
+            <View style={styles.gaugeCenterText}>
+              <Text style={styles.gaugeBigNum}>{usedRamDisplayNum}</Text>
+              <Text style={styles.gaugeUnitText}>{usedRamUnitText}</Text>
+            </View>
+          </View>
+
+          {/* 内存总量概览 */}
+          <View style={styles.ramMetaBox}>
+            <Text style={styles.ramMetaText}>{totalRamMetaText}</Text>
+          </View>
+        </TouchableOpacity>
+
+        {/* 网络吞吐卡片 */}
+        <TouchableOpacity
+          style={styles.bentoCard}
+          onPress={() => navigation.navigate('NetworkDetails', { initialNetSpeed: netSpeed, initialHistory: history })}
           activeOpacity={0.8}
         >
           <View style={styles.bentoHeader}>
@@ -1034,12 +1034,6 @@ export default function DashboardScreen({ navigation }) {
               <Wifi size={15} color={colors.networkDown} style={{ marginRight: 6 }} />
               <Text style={styles.bentoTitle}>网络</Text>
               <ChevronRight size={13} color={colors.muted} style={{ marginLeft: 3 }} />
-            </View>
-            <View style={styles.compactNetSpeedBadge}>
-              <ArrowDown size={11} color={colors.networkDown} style={{ marginRight: 2 }} />
-              <Text style={[styles.compactNetSpeedText, { color: colors.networkDown }]} numberOfLines={1}>
-                {formatSpeed(netSpeed.down)}
-              </Text>
             </View>
           </View>
 
@@ -1064,25 +1058,27 @@ export default function DashboardScreen({ navigation }) {
               </Svg>
             </View>
 
-            {/* 下方双向速率 */}
+            {/* 下方双向速率：先写上行再写下行 */}
             <View style={styles.compactNetRow}>
+              {/* 上行 */}
               <View style={styles.compactNetCol}>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <ArrowDown size={10} color={colors.networkDown} style={{ marginRight: 2 }} />
-                  <Text style={[styles.compactNetRateLabel, { color: colors.sub }]}>下行</Text>
-                </View>
-                <Text style={[styles.compactNetRateValue, { color: colors.networkDown }]} numberOfLines={1}>
-                  {formatSpeed(netSpeed.down)}
-                </Text>
-              </View>
-
-              <View style={[styles.compactNetCol, { alignItems: 'flex-end' }]}>
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <ArrowUp size={10} color={colors.networkUp} style={{ marginRight: 2 }} />
                   <Text style={[styles.compactNetRateLabel, { color: colors.sub }]}>上行</Text>
                 </View>
                 <Text style={[styles.compactNetRateValue, { color: colors.networkUp }]} numberOfLines={1}>
                   {formatSpeed(netSpeed.up)}
+                </Text>
+              </View>
+
+              {/* 下行 */}
+              <View style={[styles.compactNetCol, { alignItems: 'flex-end' }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <ArrowDown size={10} color={colors.networkDown} style={{ marginRight: 2 }} />
+                  <Text style={[styles.compactNetRateLabel, { color: colors.sub }]}>下行</Text>
+                </View>
+                <Text style={[styles.compactNetRateValue, { color: colors.networkDown }]} numberOfLines={1}>
+                  {formatSpeed(netSpeed.down)}
                 </Text>
               </View>
             </View>

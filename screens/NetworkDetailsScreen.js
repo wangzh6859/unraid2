@@ -47,6 +47,11 @@ export default function NetworkDetailsScreen({ navigation, route }) {
   const [refreshing, setRefreshing] = useState(false);
   const [filterTab, setFilterTab] = useState('all'); // 'all' | 'docker' | 'vm' | 'process'
 
+  const [currentSpeeds, setCurrentSpeeds] = useState({
+    rx: initialNetSpeed?.down || initialNetSpeed?.rx || 0,
+    tx: initialNetSpeed?.up || initialNetSpeed?.tx || 0,
+  });
+
   const [networkData, setNetworkData] = useState({
     total_rx_bytes: 0,
     total_tx_bytes: 0,
@@ -57,8 +62,11 @@ export default function NetworkDetailsScreen({ navigation, route }) {
   const [vms, setVms] = useState([]);
   const [history, setHistory] = useState(() => (Array.isArray(initialHistory) ? initialHistory : []));
   const prevNetRef = useRef({});
+  const isFetchingRef = useRef(false);
 
-  const fetchData = useCallback(async (isSilent = false) => {
+  const fetchData = useCallback(async (isSilent = false, isRefresh = false) => {
+    if (isFetchingRef.current && !isRefresh) return;
+    isFetchingRef.current = true;
     try {
       if (!isSilent) setLoading(true);
       const host = (await AsyncStorage.getItem('@server_url')) || (await AsyncStorage.getItem('server_host'));
@@ -66,44 +74,77 @@ export default function NetworkDetailsScreen({ navigation, route }) {
       if (!host) return;
 
       const cleanHost = host.replace(/\/+$/, '');
-      const detailUrl = `${cleanHost}/api.php?action=metrics_detail&token=${encodeURIComponent(token || '')}`;
+      const detailUrl = `${cleanHost}/api.php?action=metrics_detail&type=network${isRefresh ? '&nocache=1' : ''}&token=${encodeURIComponent(token || '')}`;
 
       let json = null;
       try {
-        json = await apiFetchJson(detailUrl, {}, 5000, 1);
+        json = await apiFetchJson(detailUrl, {}, 6000, 1);
       } catch (err) {
         // Fallback to action=status
         const fallbackUrl = `${cleanHost}/api.php?action=status&token=${encodeURIComponent(token || '')}`;
-        json = await apiFetchJson(fallbackUrl, {}, 5000, 1);
+        json = await apiFetchJson(fallbackUrl, {}, 6000, 1);
       }
 
+      if (!json) return;
+
+      // Extract current live speeds
+      let curRx = 0;
+      let curTx = 0;
+      if (json?.network_speed) {
+        curRx = json.network_speed.down || json.network_speed.rx || 0;
+        curTx = json.network_speed.up || json.network_speed.tx || 0;
+      } else if (json?.network?.rx_bps !== undefined || json?.network?.tx_bps !== undefined) {
+        curRx = json.network.rx_bps || 0;
+        curTx = json.network.tx_bps || 0;
+      } else if (Array.isArray(json?.network?.interfaces)) {
+        json.network.interfaces.forEach(iface => {
+          if (iface.is_physical || iface.name === 'br0' || iface.name === 'bond0') {
+            curRx += iface.rx_bps || 0;
+            curTx += iface.tx_bps || 0;
+          }
+        });
+      }
+      setCurrentSpeeds({ rx: curRx, tx: curTx });
+
+      // Update network data
       if (json?.network) {
         setNetworkData(prev => ({
           ...prev,
           ...json.network,
+          total_rx_bytes: json.network.total_rx_bytes ?? json.network.rx_bytes ?? prev.total_rx_bytes,
+          total_tx_bytes: json.network.total_tx_bytes ?? json.network.tx_bytes ?? prev.total_tx_bytes,
           interfaces: Array.isArray(json.network.interfaces) ? json.network.interfaces : prev.interfaces,
           top_processes: Array.isArray(json.network.top_processes) ? json.network.top_processes : prev.top_processes,
         }));
       }
+
+      // Update Dockers
       if (Array.isArray(json?.dockers)) {
         setDockers(json.dockers);
+      } else if (Array.isArray(json?.dockers?.list)) {
+        setDockers(json.dockers.list);
       }
+
+      // Update VMs
       if (Array.isArray(json?.vms)) {
         setVms(json.vms);
+      } else if (Array.isArray(json?.vms?.list)) {
+        setVms(json.vms.list);
       }
+
+      // Update History
       if (Array.isArray(json?.history) && json.history.length > 0) {
         setHistory(json.history);
-      } else if (json?.network_speed) {
-        const rx = json.network_speed.down || json.network_speed.rx || 0;
-        const tx = json.network_speed.up || json.network_speed.tx || 0;
+      } else {
         setHistory(prev => {
-          const next = [...prev, { t: Date.now(), rx, tx }];
+          const next = [...prev, { t: Date.now(), rx: curRx, tx: curTx }];
           return next.slice(-150);
         });
       }
     } catch (e) {
       console.warn('[NetworkDetailsScreen] Fetch error:', e);
     } finally {
+      isFetchingRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }
@@ -119,39 +160,15 @@ export default function NetworkDetailsScreen({ navigation, route }) {
     }, [fetchData])
   );
 
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    fetchData(true);
+    isFetchingRef.current = false;
+    try {
+      await fetchData(true, true);
+    } finally {
+      setRefreshing(false);
+    }
   }, [fetchData]);
-
-  // Derive current overall RX/TX speed from history or sum of interfaces
-  const currentSpeeds = useMemo(() => {
-    if (history.length > 0) {
-      const last = history[history.length - 1];
-      if (last.rx !== undefined || last.tx !== undefined) {
-        return {
-          rx: last.rx || 0,
-          tx: last.tx || 0,
-        };
-      }
-    }
-    // Sum interfaces
-    let rx = 0;
-    let tx = 0;
-    (networkData.interfaces || []).forEach(iface => {
-      if (iface.is_physical || iface.name === 'br0' || iface.name === 'bond0') {
-        rx += iface.rx_bps || 0;
-        tx += iface.tx_bps || 0;
-      }
-    });
-    if (rx === 0 && tx === 0 && initialNetSpeed) {
-      return {
-        rx: initialNetSpeed.down || initialNetSpeed.rx || 0,
-        tx: initialNetSpeed.up || initialNetSpeed.tx || 0,
-      };
-    }
-    return { rx, tx };
-  }, [history, networkData.interfaces, initialNetSpeed]);
 
   const rxPoints = useMemo(() => {
     if (history.length === 0) return [currentSpeeds.rx];
@@ -302,8 +319,15 @@ export default function NetworkDetailsScreen({ navigation, route }) {
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.networkDown} />}
       showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor={colors.networkDown}
+          colors={[colors.networkDown]}
+        />
+      }
     >
       {/* Top Network Throughput Card */}
       <View style={styles.topCard}>
