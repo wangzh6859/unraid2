@@ -25,6 +25,11 @@
 - 近 5 分钟走势图第一轨正式调整为【实时上传】（紫色），第二轨为【实时下载】（绿色）；
 - 容器与虚拟机卡片副标题中的累计流量顺序同步调整为【总累计: ↑ 上传 · ↓ 下载】。
 
+### 🎬 GPU 详情页支持 Emby / 影视容器硬件视频解码实时侦测与负载呈现
+- **多途径 DRM 与设备节点感知**：针对 Intel 核显 QuickSync (VA-API) 与 NVIDIA NVDEC 硬件解码，突破旧版仅依赖 `fuser` 的限制，全面引入 `/proc/[0-9]*/fd/*` 文件描述符级扫描与媒体硬件加速（`-hwaccel`）智能匹配；
+- **NVIDIA 解码引擎利用率纳入**：`nvidia-smi` 实时查询增加 `utilization.decoder` (NVDEC) 与 `utilization.encoder` (NVENC)，彻底解决 Emby 纯解码时 3D 计算核占用为 0 导致显卡显示待机节能的盲区；
+- **Emby 容器与 ffmpeg 专属卡片呈现**：当 Emby 发起视频转码或硬件解码时，GPU 详情页立即呈现 `[Docker 容器] emby`、进程 `Emby 视频解码 (ffmpeg)`、硬件加速状态及动态负载。
+
 ---
 
 ## [v1.4.233] - 2026-09-18
