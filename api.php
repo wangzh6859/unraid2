@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.18.08
+ * Version: 2026.09.18.09
  * Release: 2026-09-18
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.18.08');
+define('UNRAID_API_VERSION', '2026.09.18.09');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -1346,7 +1346,7 @@ $disks[] = [
     $txBps = 0;
     $netRateFile = '/tmp/unraid_net_rate.json';
     $nowFloat = microtime(true);
-    $MAX_SANITY_BPS = 1250 * 1024 * 1024; // 1.25 GB/s (10GbE wire speed limit)
+    $MAX_SANITY_BPS = 150 * 1024 * 1024; // 150 MB/s limit
 
     if (file_exists($netRateFile)) {
         $lastNet = @json_decode(@file_get_contents($netRateFile), true);
@@ -1354,17 +1354,16 @@ $disks[] = [
             $dt = $nowFloat - (float)$lastNet['t'];
             $lastRx = (float)$lastNet['rx'];
             $lastTx = (float)$lastNet['tx'];
-            // Guard against initial baseline zero-spike: only compute if baseline > 0
-            if ($dt > 0.2 && $dt < 60.0 && $lastRx > 0 && $lastTx > 0) {
+            // Guard against baseline zero / re-initialization jump
+            if ($dt > 0.3 && $dt < 60.0 && $lastRx > 0 && $lastTx > 0) {
                 $rxDiff = $netRx - $lastRx;
                 $txDiff = $netTx - $lastTx;
-                if ($rxDiff >= 0) {
-                    $calcRx = round($rxDiff / $dt);
-                    $rxBps = ($calcRx <= $MAX_SANITY_BPS) ? $calcRx : 0;
+                // Discard impossible differential jumps instead of storing spikes
+                if ($rxDiff >= 0 && $rxDiff < ($MAX_SANITY_BPS * $dt)) {
+                    $rxBps = round($rxDiff / $dt);
                 }
-                if ($txDiff >= 0) {
-                    $calcTx = round($txDiff / $dt);
-                    $txBps = ($calcTx <= $MAX_SANITY_BPS) ? $calcTx : 0;
+                if ($txDiff >= 0 && $txDiff < ($MAX_SANITY_BPS * $dt)) {
+                    $txBps = round($txDiff / $dt);
                 }
             }
         }
@@ -5025,11 +5024,11 @@ function get_gpu_active_apps() {
 function update_metrics_history($cpuUsage, $memUsage, $gpuUsage, $rxBps, $txBps) {
     $histFile = '/tmp/unraid_metrics_history.json';
     $history = [];
-    $MAX_SANITY_BPS = 1250 * 1024 * 1024; // 10GbE limit ~1.25 GB/s
+    $MAX_SANITY_BPS = 150 * 1024 * 1024; // Strict 150 MB/s cap for home network telemetry
     if (file_exists($histFile)) {
         $data = @json_decode(@file_get_contents($histFile), true);
         if (is_array($data)) {
-            // Filter out any existing rogue spike entries
+            // Aggressively purge any rogue spike entries (> 150 MB/s)
             foreach ($data as $entry) {
                 if (!is_array($entry)) continue;
                 $eRx = isset($entry['rx']) ? (float)$entry['rx'] : 0;
@@ -5046,9 +5045,9 @@ function update_metrics_history($cpuUsage, $memUsage, $gpuUsage, $rxBps, $txBps)
     $memVal = $memUsage !== null ? round((float)$memUsage, 1) : ($lastHist && isset($lastHist['mem']) ? $lastHist['mem'] : 0);
     $gpuVal = $gpuUsage !== null ? round((float)$gpuUsage, 1) : ($lastHist && isset($lastHist['gpu']) ? $lastHist['gpu'] : 0);
 
-    // Cap rx/tx at sanity limit before storing
-    $rxSafe = min((float)$rxBps, $MAX_SANITY_BPS);
-    $txSafe = min((float)$txBps, $MAX_SANITY_BPS);
+    // Filter impossible values: if rxBps or txBps exceeds wire speed, clamp to 0 instead of propagating spike
+    $rxSafe = ((float)$rxBps <= $MAX_SANITY_BPS) ? (float)$rxBps : 0;
+    $txSafe = ((float)$txBps <= $MAX_SANITY_BPS) ? (float)$txBps : 0;
 
     $history[] = [
         't' => $now,
@@ -5069,58 +5068,40 @@ function update_metrics_history($cpuUsage, $memUsage, $gpuUsage, $rxBps, $txBps)
  * Calculate host aggregate RX and TX bytes without double-counting bridged or bonded NICs
  */
 function calculate_host_net_totals($ifaceMap) {
+    // In Unraid, br0 bridges eth0 and all local bridged containers/VMs.
+    // Always use br0 as the single authoritative host interface if present to guarantee strict monotonicity.
+    if (isset($ifaceMap['br0'])) {
+        return [
+            'rx' => (float)$ifaceMap['br0']['rx'],
+            'tx' => (float)$ifaceMap['br0']['tx']
+        ];
+    }
+    if (isset($ifaceMap['bond0'])) {
+        return [
+            'rx' => (float)$ifaceMap['bond0']['rx'],
+            'tx' => (float)$ifaceMap['bond0']['tx']
+        ];
+    }
+    if (isset($ifaceMap['eth0'])) {
+        return [
+            'rx' => (float)$ifaceMap['eth0']['rx'],
+            'tx' => (float)$ifaceMap['eth0']['tx']
+        ];
+    }
+    // Fallback: aggregate physical interfaces only
     $totalRx = 0;
     $totalTx = 0;
-    $bridgedSlaves = [];
-    if (is_dir('/sys/class/net/br0/brif')) {
-        $slaves = @scandir('/sys/class/net/br0/brif');
-        if ($slaves) {
-            foreach ($slaves as $s) {
-                if ($s !== '.' && $s !== '..') $bridgedSlaves[$s] = true;
-            }
+    foreach ($ifaceMap as $ifname => $idata) {
+        if (!empty($idata['is_physical'])) {
+            $totalRx += (float)$idata['rx'];
+            $totalTx += (float)$idata['tx'];
         }
     }
-    if (is_dir('/sys/class/net/bond0/bonding')) {
-        $bSlaves = @file_get_contents('/sys/class/net/bond0/bonding/slaves');
-        if ($bSlaves) {
-            foreach (preg_split('/\s+/', trim($bSlaves)) as $bs) {
-                if ($bs) $bridgedSlaves[$bs] = true;
-            }
-        }
-    }
-
-    if (isset($ifaceMap['br0'])) {
-        $totalRx += $ifaceMap['br0']['rx'];
-        $totalTx += $ifaceMap['br0']['tx'];
-        foreach ($ifaceMap as $ifname => $idata) {
-            if ($ifname !== 'br0' && !empty($idata['is_physical']) && empty($bridgedSlaves[$ifname])) {
-                $totalRx += $idata['rx'];
-                $totalTx += $idata['tx'];
-            }
-        }
-    } elseif (isset($ifaceMap['bond0'])) {
-        $totalRx += $ifaceMap['bond0']['rx'];
-        $totalTx += $ifaceMap['bond0']['tx'];
-        foreach ($ifaceMap as $ifname => $idata) {
-            if ($ifname !== 'bond0' && !empty($idata['is_physical']) && empty($bridgedSlaves[$ifname])) {
-                $totalRx += $idata['rx'];
-                $totalTx += $idata['tx'];
-            }
-        }
-    } else {
-        foreach ($ifaceMap as $ifname => $idata) {
-            if (!empty($idata['is_physical'])) {
-                $totalRx += $idata['rx'];
-                $totalTx += $idata['tx'];
-            }
-        }
-    }
-
     if ($totalRx == 0 && !empty($ifaceMap)) {
         foreach ($ifaceMap as $ifname => $idata) {
-            if ($ifname !== 'lo' && $idata['rx'] > $totalRx) {
-                $totalRx = $idata['rx'];
-                $totalTx = $idata['tx'];
+            if ($ifname !== 'lo' && (float)$idata['rx'] > $totalRx) {
+                $totalRx = (float)$idata['rx'];
+                $totalTx = (float)$idata['tx'];
             }
         }
     }
@@ -5256,6 +5237,183 @@ function update_24h_net_telemetry(&$hostNetwork, &$dockerStats, &$vmsList, &$net
 }
 
 /**
+ * Robust Docker container network & telemetry collector.
+ * Uses rapid 'docker ps' to resolve real container names and ensure no container displays '--' or is missed.
+ */
+function get_dockers_network_stats($nowFloat, $isRefresh = false) {
+    $statsCacheFile = '/tmp/unraid_docker_stats.json';
+    $cachedStats = [];
+    if (file_exists($statsCacheFile)) {
+        $cJson = @json_decode(@file_get_contents($statsCacheFile), true);
+        if (is_array($cJson)) $cachedStats = $cJson;
+    }
+
+    // 1. Authoritative list of containers via rapid docker ps (< 30ms)
+    $psOut = @shell_exec('docker ps -a --no-trunc --format "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Networks}}" 2>/dev/null');
+    $idToNameMap = [];
+    $allContainers = [];
+    if (!empty($psOut)) {
+        $psLines = explode("\n", trim($psOut));
+        foreach ($psLines as $pLine) {
+            $pCols = explode("\t", trim($pLine));
+            if (count($pCols) >= 2 && !empty($pCols[0])) {
+                $fullId = trim($pCols[0]);
+                $shortId = substr($fullId, 0, 12);
+                $rawName = trim($pCols[1]);
+                $cleanName = ltrim($rawName, '/');
+                $img = isset($pCols[2]) ? trim($pCols[2]) : '';
+                $statStr = isset($pCols[3]) ? trim($pCols[3]) : '';
+                $isRunning = (stripos($statStr, 'Up') === 0);
+                $nets = isset($pCols[4]) ? trim($pCols[4]) : '';
+
+                if (!empty($cleanName) && $cleanName !== '--') {
+                    $idToNameMap[$fullId] = $cleanName;
+                    $idToNameMap[$shortId] = $cleanName;
+                    $idToNameMap[$rawName] = $cleanName;
+                    $idToNameMap[$cleanName] = $cleanName;
+                }
+                $allContainers[$cleanName] = [
+                    'id' => $shortId,
+                    'full_id' => $fullId,
+                    'name' => $cleanName,
+                    'image' => $img,
+                    'is_running' => $isRunning,
+                    'networks' => $nets
+                ];
+            }
+        }
+    }
+
+    // 2. Return cached stats if fresh (< 2.5s) and not a manual refresh
+    if (!$isRefresh && !empty($cachedStats) && (microtime(true) - @filemtime($statsCacheFile) < 2.5)) {
+        return $cachedStats;
+    }
+
+    // 3. Collect live docker stats with 4s timeout
+    $statsOut = @shell_exec('timeout 4s docker stats --no-stream --format "{{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}\t{{.ID}}" 2>/dev/null');
+    
+    $lastDockerNetFile = '/tmp/unraid_dockers_net_last.json';
+    $lastDockerNet = [];
+    if (file_exists($lastDockerNetFile)) {
+        $lastDockerNet = @json_decode(@file_get_contents($lastDockerNetFile), true) ?: [];
+    }
+    $newDockerNet = ['time' => $nowFloat, 'containers' => []];
+    $parsedStats = [];
+
+    if (!empty($statsOut)) {
+        $lines = explode("\n", trim($statsOut));
+        foreach ($lines as $line) {
+            $cols = explode("\t", trim($line));
+            if (count($cols) >= 5) {
+                $cIdentifier = trim($cols[0]);
+                $cpuRaw = str_replace('%', '', trim($cols[1]));
+                $memRaw = trim($cols[2]);
+                $memPctRaw = str_replace('%', '', trim($cols[3]));
+                $netIoRaw = trim($cols[4]);
+                $blockIo = isset($cols[5]) ? trim($cols[5]) : '';
+                $cid = isset($cols[6]) ? trim($cols[6]) : '';
+                $shortCid = !empty($cid) ? substr($cid, 0, 12) : '';
+
+                // Resolve real container name from docker ps map
+                $realName = '';
+                if (!empty($cid) && isset($idToNameMap[$cid])) {
+                    $realName = $idToNameMap[$cid];
+                } elseif (!empty($shortCid) && isset($idToNameMap[$shortCid])) {
+                    $realName = $idToNameMap[$shortCid];
+                } elseif (!empty($cIdentifier) && isset($idToNameMap[$cIdentifier])) {
+                    $realName = $idToNameMap[$cIdentifier];
+                } elseif (!empty($cIdentifier) && $cIdentifier !== '--' && $cIdentifier !== 'NAME') {
+                    $realName = ltrim($cIdentifier, '/');
+                } elseif (!empty($shortCid)) {
+                    $realName = $shortCid;
+                } else {
+                    continue;
+                }
+
+                $memParts = explode('/', $memRaw);
+                $memUsedBytes = parse_bytes_string(trim($memParts[0]));
+                $memTotalBytes = isset($memParts[1]) ? parse_bytes_string(trim($memParts[1])) : 0;
+
+                $netParts = explode('/', $netIoRaw);
+                $netRxBytes = isset($netParts[0]) ? parse_bytes_string(trim($netParts[0])) : 0;
+                $netTxBytes = isset($netParts[1]) ? parse_bytes_string(trim($netParts[1])) : 0;
+
+                $newDockerNet['containers'][$realName] = ['rx' => $netRxBytes, 'tx' => $netTxBytes];
+                $rxBps = 0;
+                $txBps = 0;
+                if (isset($lastDockerNet['containers'][$realName]) && isset($lastDockerNet['time'])) {
+                    $dt = $nowFloat - (float)$lastDockerNet['time'];
+                    if ($dt > 0.2 && $dt < 60.0) {
+                        $dRx = $netRxBytes - (float)$lastDockerNet['containers'][$realName]['rx'];
+                        $dTx = $netTxBytes - (float)$lastDockerNet['containers'][$realName]['tx'];
+                        if ($dRx >= 0 && $dRx < (150 * 1024 * 1024 * $dt)) $rxBps = round($dRx / $dt);
+                        if ($dTx >= 0 && $dTx < (150 * 1024 * 1024 * $dt)) $txBps = round($dTx / $dt);
+                    }
+                }
+
+                $parsedStats[$realName] = [
+                    'name' => $realName,
+                    'cpu_pct' => (float)$cpuRaw,
+                    'mem_usage_str' => $memRaw,
+                    'mem_used_bytes' => $memUsedBytes,
+                    'mem_total_bytes' => $memTotalBytes,
+                    'mem_pct' => (float)$memPctRaw,
+                    'net_io_str' => $netIoRaw,
+                    'net_rx_bytes' => $netRxBytes,
+                    'net_tx_bytes' => $netTxBytes,
+                    'net_rx_bps' => $rxBps,
+                    'net_tx_bps' => $txBps,
+                    'block_io' => $blockIo,
+                    'id' => !empty($shortCid) ? $shortCid : (!empty($cid) ? $cid : $realName)
+                ];
+            }
+        }
+        @file_put_contents($lastDockerNetFile, json_encode($newDockerNet), LOCK_EX);
+    }
+
+    // 4. Ensure all running containers from docker ps are present in output
+    foreach ($allContainers as $cName => $cMeta) {
+        if (!$cMeta['is_running']) continue;
+        if (!isset($parsedStats[$cName])) {
+            $foundInCache = false;
+            foreach ($cachedStats as $cachedItem) {
+                if (isset($cachedItem['name']) && $cachedItem['name'] === $cName) {
+                    $parsedStats[$cName] = $cachedItem;
+                    $foundInCache = true;
+                    break;
+                }
+            }
+            if (!$foundInCache) {
+                $isHostNet = (stripos($cMeta['networks'], 'host') !== false);
+                $parsedStats[$cName] = [
+                    'name' => $cName,
+                    'cpu_pct' => 0.0,
+                    'mem_usage_str' => '0 B',
+                    'mem_used_bytes' => 0,
+                    'mem_total_bytes' => 0,
+                    'mem_pct' => 0.0,
+                    'net_io_str' => $isHostNet ? 'Host 共享' : '0 B / 0 B',
+                    'net_rx_bytes' => 0,
+                    'net_tx_bytes' => 0,
+                    'net_rx_bps' => 0,
+                    'net_tx_bps' => 0,
+                    'block_io' => '0 B / 0 B',
+                    'id' => $cMeta['id']
+                ];
+            }
+        }
+    }
+
+    $finalList = array_values($parsedStats);
+    if (!empty($finalList)) {
+        @file_put_contents($statsCacheFile, json_encode($finalList), LOCK_EX);
+    } elseif (!empty($cachedStats)) {
+        return $cachedStats;
+    }
+    return $finalList;
+}
+
+/**
  * Handle action=metrics_detail for 4 drill-down pages
  */
 function handle_metrics_detail() {
@@ -5327,100 +5485,26 @@ function handle_metrics_detail() {
         // Calculate host real-time rate
         $hostRxBps = 0;
         $hostTxBps = 0;
-        $MAX_SANITY_NET_BPS = 1250 * 1024 * 1024; // 10GbE ~1.25 GB/s
+        $MAX_SANITY_NET_BPS = 150 * 1024 * 1024; // 150 MB/s limit
         $netRateFile = '/tmp/unraid_net_rate.json';
         if (file_exists($netRateFile)) {
             $lastNet = @json_decode(@file_get_contents($netRateFile), true);
-            if (is_array($lastNet) && isset($lastNet['t']) && isset($lastNet['rx']) && isset($lastNet['tx'])
-                && (float)$lastNet['rx'] > 0 && (float)$lastNet['tx'] >= 0) {
+            if (is_array($lastNet) && isset($lastNet['t']) && isset($lastNet['rx']) && isset($lastNet['tx'])) {
                 $dt = $nowFloat - (float)$lastNet['t'];
-                if ($dt > 0.2 && $dt < 60.0) {
-                    $rxDiff = $totalRx - (float)$lastNet['rx'];
-                    $txDiff = $totalTx - (float)$lastNet['tx'];
-                    if ($rxDiff >= 0) $hostRxBps = min(round($rxDiff / $dt), $MAX_SANITY_NET_BPS);
-                    if ($txDiff >= 0) $hostTxBps = min(round($txDiff / $dt), $MAX_SANITY_NET_BPS);
+                $lastRx = (float)$lastNet['rx'];
+                $lastTx = (float)$lastNet['tx'];
+                if ($dt > 0.3 && $dt < 60.0 && $lastRx > 0 && $lastTx > 0) {
+                    $rxDiff = $totalRx - $lastRx;
+                    $txDiff = $totalTx - $lastTx;
+                    if ($rxDiff >= 0 && $rxDiff < ($MAX_SANITY_NET_BPS * $dt)) $hostRxBps = round($rxDiff / $dt);
+                    if ($txDiff >= 0 && $txDiff < ($MAX_SANITY_NET_BPS * $dt)) $hostTxBps = round($txDiff / $dt);
                 }
             }
         }
         @file_put_contents($netRateFile, json_encode(['t' => $nowFloat, 'rx' => $totalRx, 'tx' => $totalTx]), LOCK_EX);
 
-        // 2. Docker stats for network
-        $dockerStats = [];
-        $statsCacheFile = '/tmp/unraid_docker_stats.json';
-        $cached = false;
-        if (!$isRefresh && file_exists($statsCacheFile) && (microtime(true) - filemtime($statsCacheFile) < 1.8)) {
-            $cJson = @json_decode(@file_get_contents($statsCacheFile), true);
-            if (is_array($cJson)) {
-                $dockerStats = $cJson;
-                $cached = true;
-            }
-        }
-        if (!$cached) {
-            $statsOut = @shell_exec('timeout 2s docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}\t{{.ID}}" 2>/dev/null');
-            if (!empty($statsOut)) {
-                $lastDockerNetFile = '/tmp/unraid_dockers_net_last.json';
-                $lastDockerNet = [];
-                if (file_exists($lastDockerNetFile)) {
-                    $lastDockerNet = @json_decode(@file_get_contents($lastDockerNetFile), true) ?: [];
-                }
-                $newDockerNet = ['time' => $nowFloat, 'containers' => []];
-
-                $lines = explode("\n", trim($statsOut));
-                foreach ($lines as $line) {
-                    $cols = explode("\t", trim($line));
-                    if (count($cols) >= 5) {
-                        $name = trim($cols[0]);
-                        // Skip lines with empty, placeholder, or header names
-                        if (empty($name) || $name === '--' || $name === 'NAME' || strlen($name) < 1) continue;
-                        $cpuRaw = str_replace('%', '', trim($cols[1]));
-                        $memRaw = trim($cols[2]);
-                        $memPctRaw = str_replace('%', '', trim($cols[3]));
-                        $netIoRaw = trim($cols[4]);
-                        $blockIo = isset($cols[5]) ? trim($cols[5]) : '';
-                        $cid = isset($cols[6]) ? trim($cols[6]) : '';
-
-                        $memParts = explode('/', $memRaw);
-                        $memUsedBytes = parse_bytes_string(trim($memParts[0]));
-                        $memTotalBytes = isset($memParts[1]) ? parse_bytes_string(trim($memParts[1])) : 0;
-
-                        $netParts = explode('/', $netIoRaw);
-                        $netRxBytes = isset($netParts[0]) ? parse_bytes_string(trim($netParts[0])) : 0;
-                        $netTxBytes = isset($netParts[1]) ? parse_bytes_string(trim($netParts[1])) : 0;
-
-                        $newDockerNet['containers'][$name] = ['rx' => $netRxBytes, 'tx' => $netTxBytes];
-                        $rxBps = 0;
-                        $txBps = 0;
-                        if (isset($lastDockerNet['containers'][$name]) && isset($lastDockerNet['time'])) {
-                            $dt = $nowFloat - (float)$lastDockerNet['time'];
-                            if ($dt > 0.2 && $dt < 60.0) {
-                                $dRx = $netRxBytes - (float)$lastDockerNet['containers'][$name]['rx'];
-                                $dTx = $netTxBytes - (float)$lastDockerNet['containers'][$name]['tx'];
-                                if ($dRx >= 0) $rxBps = round($dRx / $dt);
-                                if ($dTx >= 0) $txBps = round($dTx / $dt);
-                            }
-                        }
-
-                        $dockerStats[] = [
-                            'name' => $name,
-                            'cpu_pct' => (float)$cpuRaw,
-                            'mem_usage_str' => $memRaw,
-                            'mem_used_bytes' => $memUsedBytes,
-                            'mem_total_bytes' => $memTotalBytes,
-                            'mem_pct' => (float)$memPctRaw,
-                            'net_io_str' => $netIoRaw,
-                            'net_rx_bytes' => $netRxBytes,
-                            'net_tx_bytes' => $netTxBytes,
-                            'net_rx_bps' => $rxBps,
-                            'net_tx_bps' => $txBps,
-                            'block_io' => $blockIo,
-                            'id' => $cid
-                        ];
-                    }
-                }
-                @file_put_contents($lastDockerNetFile, json_encode($newDockerNet), LOCK_EX);
-                @file_put_contents($statsCacheFile, json_encode($dockerStats), LOCK_EX);
-            }
-        }
+        // 2. Docker stats for network (robust resolver)
+        $dockerStats = get_dockers_network_stats($nowFloat, $isRefresh);
 
         // 3. VM network stats
         $vmsList = [];
@@ -5726,81 +5810,8 @@ function handle_metrics_detail() {
     // 3. GPU Telemetry
     $gpuData = get_gpu_telemetry();
 
-    // 4. Docker Stats Breakdown
-    $dockerStats = [];
-    $statsCacheFile = '/tmp/unraid_docker_stats.json';
-    $cached = false;
-    if (file_exists($statsCacheFile) && (time() - filemtime($statsCacheFile) < 3)) {
-        $cJson = @json_decode(@file_get_contents($statsCacheFile), true);
-        if (is_array($cJson)) {
-            $dockerStats = $cJson;
-            $cached = true;
-        }
-    }
-    if (!$cached) {
-        $statsOut = @shell_exec('timeout 3s docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}\t{{.ID}}" 2>/dev/null');
-        if (!empty($statsOut)) {
-            $lastDockerNetFile = '/tmp/unraid_dockers_net_last.json';
-            $lastDockerNet = [];
-            if (file_exists($lastDockerNetFile)) {
-                $lastDockerNet = @json_decode(@file_get_contents($lastDockerNetFile), true) ?: [];
-            }
-            $newDockerNet = ['time' => $nowFloat, 'containers' => []];
-
-            $lines = explode("\n", trim($statsOut));
-            foreach ($lines as $line) {
-                $cols = explode("\t", trim($line));
-                if (count($cols) >= 5) {
-                    $name = trim($cols[0]);
-                    $cpuRaw = str_replace('%', '', trim($cols[1]));
-                    $memRaw = trim($cols[2]);
-                    $memPctRaw = str_replace('%', '', trim($cols[3]));
-                    $netIoRaw = trim($cols[4]);
-                    $blockIo = isset($cols[5]) ? trim($cols[5]) : '';
-                    $cid = isset($cols[6]) ? trim($cols[6]) : '';
-
-                    $memParts = explode('/', $memRaw);
-                    $memUsedBytes = parse_bytes_string(trim($memParts[0]));
-                    $memTotalBytes = isset($memParts[1]) ? parse_bytes_string(trim($memParts[1])) : 0;
-
-                    $netParts = explode('/', $netIoRaw);
-                    $netRxBytes = isset($netParts[0]) ? parse_bytes_string(trim($netParts[0])) : 0;
-                    $netTxBytes = isset($netParts[1]) ? parse_bytes_string(trim($netParts[1])) : 0;
-
-                    $newDockerNet['containers'][$name] = ['rx' => $netRxBytes, 'tx' => $netTxBytes];
-                    $rxBps = 0;
-                    $txBps = 0;
-                    if (isset($lastDockerNet['containers'][$name]) && isset($lastDockerNet['time'])) {
-                        $dt = $nowFloat - (float)$lastDockerNet['time'];
-                        if ($dt > 0.2 && $dt < 60.0) {
-                            $dRx = $netRxBytes - (float)$lastDockerNet['containers'][$name]['rx'];
-                            $dTx = $netTxBytes - (float)$lastDockerNet['containers'][$name]['tx'];
-                            if ($dRx >= 0) $rxBps = round($dRx / $dt);
-                            if ($dTx >= 0) $txBps = round($dTx / $dt);
-                        }
-                    }
-
-                    $dockerStats[] = [
-                        'name' => $name,
-                        'cpu_pct' => (float)$cpuRaw,
-                        'mem_usage_str' => $memRaw,
-                        'mem_used_bytes' => $memUsedBytes,
-                        'mem_total_bytes' => $memTotalBytes,
-                        'mem_pct' => (float)$memPctRaw,
-                        'net_io_str' => $netIoRaw,
-                        'net_rx_bytes' => $netRxBytes,
-                        'net_tx_bytes' => $netTxBytes,
-                        'net_rx_bps' => $rxBps,
-                        'net_tx_bps' => $txBps,
-                        'block_io' => $blockIo,
-                        'id' => $cid
-                    ];
-                }
-            }
-            @file_put_contents($lastDockerNetFile, json_encode($newDockerNet), LOCK_EX);
-            @file_put_contents($statsCacheFile, json_encode($dockerStats), LOCK_EX);
-        }
-    }
+    // 4. Docker Stats Breakdown (robust resolver)
+    $dockerStats = get_dockers_network_stats($nowFloat, false);
 
     // 5. VMs List with Live Network Speeds
     $vmsList = [];
@@ -5942,16 +5953,19 @@ function handle_metrics_detail() {
     // Calculate host-level real-time network speed differential
     $hostRxBps = 0;
     $hostTxBps = 0;
+    $MAX_SANITY_NET_BPS = 150 * 1024 * 1024;
     $netRateFile = '/tmp/unraid_net_rate.json';
     if (file_exists($netRateFile)) {
         $lastNet = @json_decode(@file_get_contents($netRateFile), true);
         if (is_array($lastNet) && isset($lastNet['t']) && isset($lastNet['rx']) && isset($lastNet['tx'])) {
             $dt = $nowFloat - (float)$lastNet['t'];
-            if ($dt > 0.2 && $dt < 60.0) {
-                $rxDiff = $totalRx - (float)$lastNet['rx'];
-                $txDiff = $totalTx - (float)$lastNet['tx'];
-                if ($rxDiff >= 0) $hostRxBps = round($rxDiff / $dt);
-                if ($txDiff >= 0) $hostTxBps = round($txDiff / $dt);
+            $lastRx = (float)$lastNet['rx'];
+            $lastTx = (float)$lastNet['tx'];
+            if ($dt > 0.3 && $dt < 60.0 && $lastRx > 0 && $lastTx > 0) {
+                $rxDiff = $totalRx - $lastRx;
+                $txDiff = $totalTx - $lastTx;
+                if ($rxDiff >= 0 && $rxDiff < ($MAX_SANITY_NET_BPS * $dt)) $hostRxBps = round($rxDiff / $dt);
+                if ($txDiff >= 0 && $txDiff < ($MAX_SANITY_NET_BPS * $dt)) $hostTxBps = round($txDiff / $dt);
             }
         }
     }

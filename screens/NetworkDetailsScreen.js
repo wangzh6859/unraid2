@@ -180,7 +180,7 @@ export default function NetworkDetailsScreen({ navigation, route }) {
     }
   }, [fetchData]);
 
-  const SANITY_MAX_BPS = 1250 * 1024 * 1024; // 1.25 GB/s (10GbE wire limit)
+  const SANITY_MAX_BPS = 150 * 1024 * 1024; // 150 MB/s wire speed limit for home network
 
   const rxPoints = useMemo(() => {
     const list = history
@@ -207,8 +207,9 @@ export default function NetworkDetailsScreen({ navigation, route }) {
 
     // 1. Docker Containers
     (dockers || []).forEach(d => {
-      if (!d || !d.name) return;
-      const id = `docker-${d.name}`;
+      if (!d) return;
+      const dName = (d.name && d.name !== '--') ? d.name : (d.id ? d.id.substring(0, 12) : '容器');
+      const id = `docker-${dName}`;
       const rxBytes = typeof d.net_rx_bytes === 'number' && !isNaN(d.net_rx_bytes) ? d.net_rx_bytes : 0;
       const txBytes = typeof d.net_tx_bytes === 'number' && !isNaN(d.net_tx_bytes) ? d.net_tx_bytes : 0;
 
@@ -234,7 +235,7 @@ export default function NetworkDetailsScreen({ navigation, route }) {
       list.push({
         type: 'docker',
         id,
-        name: d.name,
+        name: dName,
         rx_bps: rxBps,
         tx_bps: txBps,
         total_bps: rxBps + txBps,
@@ -242,8 +243,8 @@ export default function NetworkDetailsScreen({ navigation, route }) {
         total_tx: txBytes,
         rx_24h: rx24h,
         tx_24h: tx24h,
-        rawStr: d.net_io_str || `${formatBytes(rxBytes)} / ${formatBytes(txBytes)}`,
-        sub: `总累计: ↓ ${formatBytes(rxBytes)} · ↑ ${formatBytes(txBytes)}`,
+        rawStr: d.net_io_str || `${formatBytes(txBytes)} / ${formatBytes(rxBytes)}`,
+        sub: `总累计: ↑ ${formatBytes(txBytes)} · ↓ ${formatBytes(rxBytes)}`,
         raw: d,
       });
     });
@@ -462,12 +463,12 @@ export default function NetworkDetailsScreen({ navigation, route }) {
         <Text style={styles.sectionTitle}>近 5 分钟吞吐走势 (双轨)</Text>
       </View>
       <MetricsLineChart
-        data={rxPoints}
-        data2={txPoints}
-        color={colors.networkDown}
-        color2={colors.networkUp}
-        label="实时下载"
-        label2="实时上传"
+        data={txPoints}
+        data2={rxPoints}
+        color={colors.networkUp}
+        color2={colors.networkDown}
+        label="实时上传"
+        label2="实时下载"
         unit=""
         formatValue={formatSpeed}
         height={165}
