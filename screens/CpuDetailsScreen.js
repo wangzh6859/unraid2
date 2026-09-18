@@ -100,7 +100,7 @@ export default function CpuDetailsScreen({ navigation, route }) {
       fetchData(true);
       const timer = setInterval(() => {
         fetchData(true);
-      }, 2000);
+      }, 1000);
       return () => clearInterval(timer);
     }, [fetchData])
   );

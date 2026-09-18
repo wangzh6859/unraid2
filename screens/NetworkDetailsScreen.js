@@ -165,7 +165,7 @@ export default function NetworkDetailsScreen({ navigation, route }) {
       fetchData(true);
       const timer = setInterval(() => {
         fetchData(true);
-      }, 2000);
+      }, 1000);
       return () => clearInterval(timer);
     }, [fetchData])
   );
@@ -180,14 +180,22 @@ export default function NetworkDetailsScreen({ navigation, route }) {
     }
   }, [fetchData]);
 
+  const SANITY_MAX_BPS = 1250 * 1024 * 1024; // 1.25 GB/s (10GbE wire limit)
+
   const rxPoints = useMemo(() => {
-    if (history.length === 0) return [currentSpeeds.rx];
-    return history.map(h => (typeof h.rx === 'number' ? h.rx : 0));
+    const list = history
+      .map(h => (typeof h.rx === 'number' ? h.rx : 0))
+      .filter(v => typeof v === 'number' && !isNaN(v) && isFinite(v) && v <= SANITY_MAX_BPS);
+    if (list.length === 0) return [Math.min(currentSpeeds.rx, SANITY_MAX_BPS)];
+    return list;
   }, [history, currentSpeeds.rx]);
 
   const txPoints = useMemo(() => {
-    if (history.length === 0) return [currentSpeeds.tx];
-    return history.map(h => (typeof h.tx === 'number' ? h.tx : 0));
+    const list = history
+      .map(h => (typeof h.tx === 'number' ? h.tx : 0))
+      .filter(v => typeof v === 'number' && !isNaN(v) && isFinite(v) && v <= SANITY_MAX_BPS);
+    if (list.length === 0) return [Math.min(currentSpeeds.tx, SANITY_MAX_BPS)];
+    return list;
   }, [history, currentSpeeds.tx]);
 
   // Combine and sort Docker containers, VMs, and processes by live real-time network speed
@@ -386,19 +394,6 @@ export default function NetworkDetailsScreen({ navigation, route }) {
 
         {/* Dual Rates Big Stat */}
         <View style={styles.dualSpeedRow}>
-          {/* Downloader */}
-          <View style={styles.speedBox}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-              <ArrowDown size={15} color={colors.networkDown} style={{ marginRight: 4 }} />
-              <Text style={[styles.speedLabel, { color: colors.networkDown }]}>下行速率 (下载)</Text>
-            </View>
-            <Text style={[styles.speedNumber, { color: colors.networkDown }]}>
-              {formatSpeed(currentSpeeds.rx)}
-            </Text>
-          </View>
-
-          <View style={styles.speedDivider} />
-
           {/* Uploader */}
           <View style={styles.speedBox}>
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
@@ -409,6 +404,19 @@ export default function NetworkDetailsScreen({ navigation, route }) {
               {formatSpeed(currentSpeeds.tx)}
             </Text>
           </View>
+
+          <View style={styles.speedDivider} />
+
+          {/* Downloader */}
+          <View style={styles.speedBox}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+              <ArrowDown size={15} color={colors.networkDown} style={{ marginRight: 4 }} />
+              <Text style={[styles.speedLabel, { color: colors.networkDown }]}>下行速率 (下载)</Text>
+            </View>
+            <Text style={[styles.speedNumber, { color: colors.networkDown }]}>
+              {formatSpeed(currentSpeeds.rx)}
+            </Text>
+          </View>
         </View>
 
         {/* Dedicated Cumulative Traffic Badges */}
@@ -417,23 +425,12 @@ export default function NetworkDetailsScreen({ navigation, route }) {
             <Text style={styles.cumulativeSectionTitle}>流量统计</Text>
             {(networkData.rx_24h_bytes > 0 || networkData.tx_24h_bytes > 0) && (
               <Text style={styles.cumulative24hBadge}>
-                24h: ↓ {formatBytes(networkData.rx_24h_bytes)} · ↑ {formatBytes(networkData.tx_24h_bytes)}
+                24h: ↑ {formatBytes(networkData.tx_24h_bytes)} · ↓ {formatBytes(networkData.rx_24h_bytes)}
               </Text>
             )}
           </View>
 
           <View style={styles.cumulativeRow}>
-            {/* Cumulative Download */}
-            <View style={[styles.cumulativePill, { backgroundColor: isDark ? 'rgba(34, 197, 94, 0.08)' : 'rgba(34, 197, 94, 0.06)' }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <ArrowDown size={12} color={colors.networkDown} style={{ marginRight: 4 }} />
-                <Text style={[styles.cumulativePillLabel, { color: colors.sub }]}>累计接收 (下载)</Text>
-              </View>
-              <Text style={[styles.cumulativePillValue, { color: colors.networkDown }]}>
-                {formatBytes(networkData.total_rx_bytes)}
-              </Text>
-            </View>
-
             {/* Cumulative Upload */}
             <View style={[styles.cumulativePill, { backgroundColor: isDark ? 'rgba(168, 85, 247, 0.08)' : 'rgba(168, 85, 247, 0.06)' }]}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -442,6 +439,17 @@ export default function NetworkDetailsScreen({ navigation, route }) {
               </View>
               <Text style={[styles.cumulativePillValue, { color: colors.networkUp }]}>
                 {formatBytes(networkData.total_tx_bytes)}
+              </Text>
+            </View>
+
+            {/* Cumulative Download */}
+            <View style={[styles.cumulativePill, { backgroundColor: isDark ? 'rgba(34, 197, 94, 0.08)' : 'rgba(34, 197, 94, 0.06)' }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <ArrowDown size={12} color={colors.networkDown} style={{ marginRight: 4 }} />
+                <Text style={[styles.cumulativePillLabel, { color: colors.sub }]}>累计接收 (下载)</Text>
+              </View>
+              <Text style={[styles.cumulativePillValue, { color: colors.networkDown }]}>
+                {formatBytes(networkData.total_rx_bytes)}
               </Text>
             </View>
           </View>
@@ -558,20 +566,20 @@ export default function NetworkDetailsScreen({ navigation, route }) {
                   </View>
                 </View>
 
-                {/* Dual Speeds: Live Download & Live Upload */}
+                {/* Dual Speeds: Live Upload & Live Download */}
                 <View style={styles.liveSpeedsRow}>
                   <View style={styles.liveSpeedCol}>
-                    <ArrowDown size={11} color={item.rx_bps > 0 ? colors.networkDown : colors.muted} style={{ marginRight: 3 }} />
-                    <Text style={[styles.liveSpeedLabel, { color: colors.sub }]}>实时下载:</Text>
-                    <Text style={[styles.liveSpeedVal, { color: item.rx_bps > 0 ? colors.networkDown : colors.sub }]}>
-                      {formatSpeed(item.rx_bps)}
-                    </Text>
-                  </View>
-                  <View style={[styles.liveSpeedCol, { marginLeft: 12 }]}>
                     <ArrowUp size={11} color={item.tx_bps > 0 ? colors.networkUp : colors.muted} style={{ marginRight: 3 }} />
                     <Text style={[styles.liveSpeedLabel, { color: colors.sub }]}>实时上传:</Text>
                     <Text style={[styles.liveSpeedVal, { color: item.tx_bps > 0 ? colors.networkUp : colors.sub }]}>
                       {formatSpeed(item.tx_bps)}
+                    </Text>
+                  </View>
+                  <View style={[styles.liveSpeedCol, { marginLeft: 12 }]}>
+                    <ArrowDown size={11} color={item.rx_bps > 0 ? colors.networkDown : colors.muted} style={{ marginRight: 3 }} />
+                    <Text style={[styles.liveSpeedLabel, { color: colors.sub }]}>实时下载:</Text>
+                    <Text style={[styles.liveSpeedVal, { color: item.rx_bps > 0 ? colors.networkDown : colors.sub }]}>
+                      {formatSpeed(item.rx_bps)}
                     </Text>
                   </View>
                 </View>
@@ -589,7 +597,7 @@ export default function NetworkDetailsScreen({ navigation, route }) {
                     <Text style={styles.cumBadgeLabel}>24h累计</Text>
                   </View>
                   <Text style={styles.cumTrafficText}>
-                    ↓ {formatBytes(item.rx_24h)}   ↑ {formatBytes(item.tx_24h)}
+                    ↑ {formatBytes(item.tx_24h)}   ↓ {formatBytes(item.rx_24h)}
                   </Text>
                   <Text style={styles.cumTrafficTotal}>
                     (合计 {formatBytes((item.rx_24h || 0) + (item.tx_24h || 0))})

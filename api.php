@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.18.06
+ * Version: 2026.09.18.08
  * Release: 2026-09-18
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.18.06');
+define('UNRAID_API_VERSION', '2026.09.18.08');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -1322,38 +1322,50 @@ $disks[] = [
     }
     $runningVms = count(array_filter($vmsList, function($v) { return $v['status'] === 'running'; }));
 
-    // 7. Network rx/tx bytes & differential speed
-    $netRx = 0;
-    $netTx = 0;
+    // 7. Network rx/tx bytes & differential speed (unified with calculate_host_net_totals)
+    $ifaceMap = [];
     $netLines = @file('/proc/net/dev');
     if ($netLines) {
         foreach ($netLines as $nLine) {
-            if (strpos($nLine, ':') !== false) {
-                $parts = explode(':', $nLine);
-                $iface = trim($parts[0]);
-                if ($iface === 'eth0' || $iface === 'br0' || $iface === 'bond0') {
-                    $vals = preg_split('/\s+/', trim($parts[1]));
-                    $netRx += (float)$vals[0];
-                    $netTx += (float)$vals[8];
-                    break;
-                }
-            }
+            if (strpos($nLine, ':') === false) continue;
+            $parts = explode(':', $nLine);
+            $ifname = trim($parts[0]);
+            if ($ifname === 'lo') continue;
+            $vals = preg_split('/\s+/', trim($parts[1]));
+            $rx = (float)$vals[0];
+            $tx = (float)$vals[8];
+            $isPhysical = (strpos($ifname, 'eth') === 0 || strpos($ifname, 'en') === 0);
+            $ifaceMap[$ifname] = ['rx' => $rx, 'tx' => $tx, 'is_physical' => $isPhysical];
         }
     }
+    $hostTotals = calculate_host_net_totals($ifaceMap);
+    $netRx = $hostTotals['rx'];
+    $netTx = $hostTotals['tx'];
 
     $rxBps = 0;
     $txBps = 0;
     $netRateFile = '/tmp/unraid_net_rate.json';
     $nowFloat = microtime(true);
+    $MAX_SANITY_BPS = 1250 * 1024 * 1024; // 1.25 GB/s (10GbE wire speed limit)
+
     if (file_exists($netRateFile)) {
         $lastNet = @json_decode(@file_get_contents($netRateFile), true);
         if (is_array($lastNet) && isset($lastNet['t']) && isset($lastNet['rx']) && isset($lastNet['tx'])) {
             $dt = $nowFloat - (float)$lastNet['t'];
-            if ($dt > 0.2 && $dt < 60.0) {
-                $rxDiff = $netRx - (float)$lastNet['rx'];
-                $txDiff = $netTx - (float)$lastNet['tx'];
-                if ($rxDiff >= 0) $rxBps = round($rxDiff / $dt);
-                if ($txDiff >= 0) $txBps = round($txDiff / $dt);
+            $lastRx = (float)$lastNet['rx'];
+            $lastTx = (float)$lastNet['tx'];
+            // Guard against initial baseline zero-spike: only compute if baseline > 0
+            if ($dt > 0.2 && $dt < 60.0 && $lastRx > 0 && $lastTx > 0) {
+                $rxDiff = $netRx - $lastRx;
+                $txDiff = $netTx - $lastTx;
+                if ($rxDiff >= 0) {
+                    $calcRx = round($rxDiff / $dt);
+                    $rxBps = ($calcRx <= $MAX_SANITY_BPS) ? $calcRx : 0;
+                }
+                if ($txDiff >= 0) {
+                    $calcTx = round($txDiff / $dt);
+                    $txBps = ($calcTx <= $MAX_SANITY_BPS) ? $calcTx : 0;
+                }
             }
         }
     }
@@ -5013,9 +5025,20 @@ function get_gpu_active_apps() {
 function update_metrics_history($cpuUsage, $memUsage, $gpuUsage, $rxBps, $txBps) {
     $histFile = '/tmp/unraid_metrics_history.json';
     $history = [];
+    $MAX_SANITY_BPS = 1250 * 1024 * 1024; // 10GbE limit ~1.25 GB/s
     if (file_exists($histFile)) {
         $data = @json_decode(@file_get_contents($histFile), true);
-        if (is_array($data)) $history = $data;
+        if (is_array($data)) {
+            // Filter out any existing rogue spike entries
+            foreach ($data as $entry) {
+                if (!is_array($entry)) continue;
+                $eRx = isset($entry['rx']) ? (float)$entry['rx'] : 0;
+                $eTx = isset($entry['tx']) ? (float)$entry['tx'] : 0;
+                if ($eRx <= $MAX_SANITY_BPS && $eTx <= $MAX_SANITY_BPS) {
+                    $history[] = $entry;
+                }
+            }
+        }
     }
     $now = time();
     $lastHist = !empty($history) ? end($history) : null;
@@ -5023,13 +5046,17 @@ function update_metrics_history($cpuUsage, $memUsage, $gpuUsage, $rxBps, $txBps)
     $memVal = $memUsage !== null ? round((float)$memUsage, 1) : ($lastHist && isset($lastHist['mem']) ? $lastHist['mem'] : 0);
     $gpuVal = $gpuUsage !== null ? round((float)$gpuUsage, 1) : ($lastHist && isset($lastHist['gpu']) ? $lastHist['gpu'] : 0);
 
+    // Cap rx/tx at sanity limit before storing
+    $rxSafe = min((float)$rxBps, $MAX_SANITY_BPS);
+    $txSafe = min((float)$txBps, $MAX_SANITY_BPS);
+
     $history[] = [
         't' => $now,
         'cpu' => $cpuVal,
         'mem' => $memVal,
         'gpu' => $gpuVal,
-        'rx' => round((float)$rxBps, 1),
-        'tx' => round((float)$txBps, 1),
+        'rx' => round($rxSafe, 1),
+        'tx' => round($txSafe, 1),
     ];
     if (count($history) > 150) {
         $history = array_slice($history, -150);
@@ -5300,16 +5327,18 @@ function handle_metrics_detail() {
         // Calculate host real-time rate
         $hostRxBps = 0;
         $hostTxBps = 0;
+        $MAX_SANITY_NET_BPS = 1250 * 1024 * 1024; // 10GbE ~1.25 GB/s
         $netRateFile = '/tmp/unraid_net_rate.json';
         if (file_exists($netRateFile)) {
             $lastNet = @json_decode(@file_get_contents($netRateFile), true);
-            if (is_array($lastNet) && isset($lastNet['t']) && isset($lastNet['rx']) && isset($lastNet['tx'])) {
+            if (is_array($lastNet) && isset($lastNet['t']) && isset($lastNet['rx']) && isset($lastNet['tx'])
+                && (float)$lastNet['rx'] > 0 && (float)$lastNet['tx'] >= 0) {
                 $dt = $nowFloat - (float)$lastNet['t'];
                 if ($dt > 0.2 && $dt < 60.0) {
                     $rxDiff = $totalRx - (float)$lastNet['rx'];
                     $txDiff = $totalTx - (float)$lastNet['tx'];
-                    if ($rxDiff >= 0) $hostRxBps = round($rxDiff / $dt);
-                    if ($txDiff >= 0) $hostTxBps = round($txDiff / $dt);
+                    if ($rxDiff >= 0) $hostRxBps = min(round($rxDiff / $dt), $MAX_SANITY_NET_BPS);
+                    if ($txDiff >= 0) $hostTxBps = min(round($txDiff / $dt), $MAX_SANITY_NET_BPS);
                 }
             }
         }
@@ -5341,6 +5370,8 @@ function handle_metrics_detail() {
                     $cols = explode("\t", trim($line));
                     if (count($cols) >= 5) {
                         $name = trim($cols[0]);
+                        // Skip lines with empty, placeholder, or header names
+                        if (empty($name) || $name === '--' || $name === 'NAME' || strlen($name) < 1) continue;
                         $cpuRaw = str_replace('%', '', trim($cols[1]));
                         $memRaw = trim($cols[2]);
                         $memPctRaw = str_replace('%', '', trim($cols[3]));

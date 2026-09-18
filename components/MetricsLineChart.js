@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import Svg, { Path, Defs, LinearGradient, Stop, Line } from 'react-native-svg';
+import Svg, { Path, Defs, LinearGradient, Stop, Line, Text as SvgText } from 'react-native-svg';
 import { useTheme } from '../ThemeContext';
 
 /**
@@ -209,20 +209,33 @@ export default function MetricsLineChart({
             )}
           </Defs>
 
-          {/* Horizontal Dashed Grid Lines */}
+          {/* Horizontal Dashed Grid Lines & Y-Axis Coordinate Labels */}
           {gridLevels.map((lvl, idx) => {
             const y = Number((height - 22 - lvl * usableH).toFixed(1));
+            const labelText = formatText(effectiveMax * lvl);
+            const textY = lvl === 1 ? y + 10 : y - 3;
             return (
-              <Line
-                key={idx}
-                x1={0}
-                y1={y}
-                x2={chartWidth}
-                y2={y}
-                stroke={isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'}
-                strokeWidth={1}
-                strokeDasharray="4, 4"
-              />
+              <React.Fragment key={idx}>
+                <Line
+                  x1={0}
+                  y1={y}
+                  x2={chartWidth}
+                  y2={y}
+                  stroke={isDark ? 'rgba(255, 255, 255, 0.10)' : 'rgba(0, 0, 0, 0.08)'}
+                  strokeWidth={1}
+                  strokeDasharray="4, 4"
+                />
+                <SvgText
+                  x={6}
+                  y={textY}
+                  fontSize={9}
+                  fill={isDark ? 'rgba(148, 163, 184, 0.85)' : 'rgba(71, 85, 105, 0.85)'}
+                  fontFamily="monospace"
+                  fontWeight="700"
+                >
+                  {labelText}
+                </SvgText>
+              </React.Fragment>
             );
           })}
 

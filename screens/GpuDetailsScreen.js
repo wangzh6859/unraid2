@@ -105,7 +105,7 @@ export default function GpuDetailsScreen({ navigation, route }) {
       fetchData(true);
       const timer = setInterval(() => {
         fetchData(true);
-      }, 2000);
+      }, 1000);
       return () => clearInterval(timer);
     }, [fetchData])
   );

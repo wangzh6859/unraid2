@@ -131,7 +131,7 @@ export default function StorageDetailsScreen({ navigation }) {
   useFocusEffect(
     useCallback(() => {
       fetchStorageData();
-      const interval = setInterval(fetchStorageData, 3000);
+      const interval = setInterval(fetchStorageData, 1000);
       return () => clearInterval(interval);
     }, [])
   );

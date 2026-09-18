@@ -595,7 +595,7 @@ export default function DashboardScreen({ navigation }) {
   useFocusEffect(
     useCallback(() => {
       fetchServerData();
-      const interval = setInterval(() => fetchServerData(), 2500);
+      const interval = setInterval(() => fetchServerData(), 1000);
       return () => clearInterval(interval);
     }, [])
   );
