@@ -4,6 +4,28 @@
 
 ---
 
+## [v1.4.224] - 2026-09-18
+> **核心主题**：重构 Android 原生 SafCache 模块（基于 DocumentFile），彻底解决缓存落盘在下载根目录的问题；实施严密的 temp/ 隔离保护，清空缓存仅清理 temp 内部文件，绝对保护 temp 文件夹、下载目录及用户正式下载文件！
+
+### 🛡️ 缓存目录精准落盘与下载目录严密保护
+- **用户紧急反馈**：
+  - 「不对不对，缓存目录是在我设置的下载目录下的temp文件夹中，现在是放到了下载目录里面，清理缓存也是直接把我的下载目录里面的文件全删了，甚至把我的下载目录都删了，我要的是清理缓存清理的是下载目录下temp文件夹中的文件，不包括temp文件夹以及下载目录。再改。」
+- **深度根因剖析**：
+  - Expo 官方的 `StorageAccessFramework.readDirectoryAsync` 存在已知架构级缺陷：无论传入的是何种层级的子目录 URI，其底层均固定读取用户授予权限的顶级 Tree 根目录（即下载目录根部）。
+  - 在此前实现中，`readDirectoryAsync(tempUri)` 错误地返回了下载根目录中的所有文件；而 `clearCache` 对其进行遍历并调用 `deleteAsync`，从而误将用户下载根目录下的文件全部删除，甚至将 `temp` 本身也删除了！
+  - 此外，Expo 的 `createFileAsync` 在面对子目录 URI 时也无法正确下潜创建，导致文件被创建到了下载根目录。
+- **工业级原生重构方案**：
+  - **原生 SafCacheModule (DocumentFile) 注入**：
+    - 在 Android 原生端注入 `SafCacheModule`，直接使用 Google 官方推荐的 `androidx.documentfile.provider.DocumentFile` 树状模型；
+    - `saveFileToTempDir`：通过 `rootDir.findFile("temp")` / `rootDir.createDirectory("temp")`，精准将缓存文件写入 `<下载目录>/temp/` 文件夹内部，绝对不泄露到下载根目录；
+    - `listTempFiles`：通过 `tempDir.listFiles()` 仅列出 `temp/` 子目录下的普通文件，绝不扫描或返回下载根目录中的任何文件；
+    - `clearTempDir`：**核心安全防线**。仅循环遍历 `tempDir.listFiles()`，对其中的 `f.isFile()` 执行删除。**绝对不删除 `tempDir` 自身，绝对不触碰 `rootDir`（下载目录），绝不误删用户下载的任何正式文件**！
+    - `deleteTempFile`：用于 LRU 自动清理，仅删除指定 URI 的普通缓存文件。
+  - **JS 层的多重安全白名单兜底**：
+    - 即使在本地非 SAF 路径下，也强制校验路径必须包含 `/temp/` 且不是目录本身，杜绝任何误删父目录的可能。
+
+---
+
 ## [v1.4.223] - 2026-09-17
 > **核心主题**：预览缓存全面落地用户指定下载目录的 `temp/` 文件夹（支持 Android SAF 与普通目录）、彻底清除 GPU 占用率 95% 频率算式假死（引入真实引擎采样与 0% 待机）、解决 TXT 预览 HTTP 500（512KB 分片 + 自动静默同步最新 api.php）
 

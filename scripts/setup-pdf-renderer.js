@@ -282,7 +282,304 @@ public class PdfRendererModule extends ReactContextBaseJavaModule {
 fs.writeFileSync(moduleJavaPath, moduleJavaContent, 'utf8');
 console.log('[setup-pdf-renderer] Wrote PdfRendererModule.java to:', moduleJavaPath);
 
-// 3. Write PdfRendererPackage.java
+// 2.1 Write SafCacheModule.java
+const safCacheJavaPath = path.join(pdfDir, 'SafCacheModule.java');
+const safCacheJavaContent = `package com.yourname.unraidmanager.pdf;
+
+import android.net.Uri;
+import android.os.AsyncTask;
+import android.util.Log;
+
+import androidx.annotation.NonNull;
+import androidx.documentfile.provider.DocumentFile;
+
+import com.facebook.react.bridge.Arguments;
+import com.facebook.react.bridge.Promise;
+import com.facebook.react.bridge.ReactApplicationContext;
+import com.facebook.react.bridge.ReactContextBaseJavaModule;
+import com.facebook.react.bridge.ReactMethod;
+import com.facebook.react.bridge.WritableArray;
+import com.facebook.react.bridge.WritableMap;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URLDecoder;
+
+public class SafCacheModule extends ReactContextBaseJavaModule {
+    private static final String TAG = "SafCacheModule";
+    private static final String MODULE_NAME = "SafCache";
+    private final ReactApplicationContext reactContext;
+
+    public SafCacheModule(ReactApplicationContext reactContext) {
+        super(reactContext);
+        this.reactContext = reactContext;
+    }
+
+    @NonNull
+    @Override
+    public String getName() {
+        return MODULE_NAME;
+    }
+
+    @ReactMethod
+    public void isAvailable(Promise promise) {
+        promise.resolve(true);
+    }
+
+    private String decodePath(String raw) {
+        if (raw == null) return "";
+        String clean = raw.startsWith("file://") ? raw.substring(7) : raw;
+        if (clean.contains("%")) {
+            try {
+                return URLDecoder.decode(clean, "UTF-8");
+            } catch (Exception ignored) {}
+        }
+        return clean;
+    }
+
+    @ReactMethod
+    public void saveFileToTempDir(String treeUriOrPath, String fileName, String localTempPath, Promise promise) {
+        AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
+            try {
+                if (treeUriOrPath == null || treeUriOrPath.trim().isEmpty() ||
+                    fileName == null || fileName.trim().isEmpty() ||
+                    localTempPath == null || localTempPath.trim().isEmpty()) {
+                    promise.reject("INVALID_ARGS", "参数不完整");
+                    return;
+                }
+
+                File localFile = new File(decodePath(localTempPath));
+                if (!localFile.exists() || !localFile.isFile()) {
+                    promise.reject("SOURCE_NOT_FOUND", "本地临时文件不存在: " + localTempPath);
+                    return;
+                }
+
+                if (treeUriOrPath.startsWith("content://")) {
+                    Uri treeUri = Uri.parse(treeUriOrPath);
+                    DocumentFile rootDir = DocumentFile.fromTreeUri(reactContext, treeUri);
+                    if (rootDir == null || !rootDir.exists()) {
+                        promise.reject("ROOT_NOT_FOUND", "无法访问授权下载目录: " + treeUriOrPath);
+                        return;
+                    }
+
+                    // 1. 查找或创建 temp 子文件夹
+                    DocumentFile tempDir = rootDir.findFile("temp");
+                    if (tempDir == null || !tempDir.isDirectory()) {
+                        tempDir = rootDir.createDirectory("temp");
+                    }
+                    if (tempDir == null || !tempDir.isDirectory()) {
+                        promise.reject("CREATE_DIR_FAILED", "无法在授权目录下创建 temp 子文件夹");
+                        return;
+                    }
+
+                    // 2. 若 temp 文件夹内已有同名文件，先删除旧文件以覆盖
+                    DocumentFile existing = tempDir.findFile(fileName);
+                    if (existing != null && existing.isFile()) {
+                        existing.delete();
+                    }
+
+                    // 3. 在 temp 子文件夹中创建目标文件
+                    DocumentFile destDoc = tempDir.createFile("application/octet-stream", fileName);
+                    if (destDoc == null) {
+                        promise.reject("CREATE_FILE_FAILED", "无法在 temp 目录下创建文件: " + fileName);
+                        return;
+                    }
+
+                    InputStream in = null;
+                    OutputStream out = null;
+                    try {
+                        in = new FileInputStream(localFile);
+                        out = reactContext.getContentResolver().openOutputStream(destDoc.getUri());
+                        if (out == null) {
+                            promise.reject("OPEN_STREAM_FAILED", "无法打开目标文件输出流");
+                            return;
+                        }
+                        byte[] buffer = new byte[32768];
+                        int read;
+                        while ((read = in.read(buffer)) != -1) {
+                            out.write(buffer, 0, read);
+                        }
+                        out.flush();
+                    } finally {
+                        if (in != null) { try { in.close(); } catch (Exception ignored) {} }
+                        if (out != null) { try { out.close(); } catch (Exception ignored) {} }
+                    }
+
+                    promise.resolve(destDoc.getUri().toString());
+                } else {
+                    File rootDir = new File(decodePath(treeUriOrPath));
+                    File tempDir = new File(rootDir, "temp");
+                    if (!tempDir.exists()) {
+                        tempDir.mkdirs();
+                    }
+
+                    File destFile = new File(tempDir, fileName);
+                    InputStream in = null;
+                    OutputStream out = null;
+                    try {
+                        in = new FileInputStream(localFile);
+                        out = new FileOutputStream(destFile);
+                        byte[] buffer = new byte[32768];
+                        int read;
+                        while ((read = in.read(buffer)) != -1) {
+                            out.write(buffer, 0, read);
+                        }
+                        out.flush();
+                    } finally {
+                        if (in != null) { try { in.close(); } catch (Exception ignored) {} }
+                        if (out != null) { try { out.close(); } catch (Exception ignored) {} }
+                    }
+
+                    promise.resolve("file://" + destFile.getAbsolutePath());
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "saveFileToTempDir error: " + e.getMessage(), e);
+                promise.reject("SAVE_FAILED", e.getMessage(), e);
+            }
+        });
+    }
+
+    @ReactMethod
+    public void listTempFiles(String treeUriOrPath, Promise promise) {
+        AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
+            try {
+                WritableArray array = Arguments.createArray();
+                if (treeUriOrPath == null || treeUriOrPath.trim().isEmpty()) {
+                    promise.resolve(array);
+                    return;
+                }
+
+                if (treeUriOrPath.startsWith("content://")) {
+                    Uri treeUri = Uri.parse(treeUriOrPath);
+                    DocumentFile rootDir = DocumentFile.fromTreeUri(reactContext, treeUri);
+                    if (rootDir != null && rootDir.exists()) {
+                        DocumentFile tempDir = rootDir.findFile("temp");
+                        // 严密安全界限：仅统计 temp 子文件夹中的普通文件，绝不触碰 rootDir
+                        if (tempDir != null && tempDir.isDirectory()) {
+                            DocumentFile[] children = tempDir.listFiles();
+                            if (children != null) {
+                                for (DocumentFile f : children) {
+                                    if (f.isFile()) {
+                                        WritableMap item = Arguments.createMap();
+                                        item.putString("name", f.getName());
+                                        item.putString("uri", f.getUri().toString());
+                                        item.putDouble("size", (double) f.length());
+                                        item.putDouble("mtime", (double) f.lastModified());
+                                        array.pushMap(item);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    File tempDir = new File(decodePath(treeUriOrPath), "temp");
+                    if (tempDir.exists() && tempDir.isDirectory()) {
+                        File[] children = tempDir.listFiles();
+                        if (children != null) {
+                            for (File f : children) {
+                                if (f.isFile()) {
+                                    WritableMap item = Arguments.createMap();
+                                    item.putString("name", f.getName());
+                                    item.putString("uri", "file://" + f.getAbsolutePath());
+                                    item.putDouble("size", (double) f.length());
+                                    item.putDouble("mtime", (double) f.lastModified());
+                                    array.pushMap(item);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                promise.resolve(array);
+            } catch (Exception e) {
+                Log.e(TAG, "listTempFiles error: " + e.getMessage(), e);
+                promise.resolve(Arguments.createArray());
+            }
+        });
+    }
+
+    @ReactMethod
+    public void clearTempDir(String treeUriOrPath, Promise promise) {
+        AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
+            try {
+                int deletedCount = 0;
+                if (treeUriOrPath != null && !treeUriOrPath.trim().isEmpty()) {
+                    if (treeUriOrPath.startsWith("content://")) {
+                        Uri treeUri = Uri.parse(treeUriOrPath);
+                        DocumentFile rootDir = DocumentFile.fromTreeUri(reactContext, treeUri);
+                        if (rootDir != null && rootDir.exists()) {
+                            DocumentFile tempDir = rootDir.findFile("temp");
+                            // 严密安全防护：
+                            // 1. 仅当 temp 子文件夹存在且是目录时处理
+                            // 2. 仅删除 temp 目录下的文件，绝不删除 temp 文件夹本身！
+                            // 3. 绝不触碰 rootDir（下载根目录），绝不删除下载根目录中的任何文件！
+                            if (tempDir != null && tempDir.isDirectory()) {
+                                DocumentFile[] children = tempDir.listFiles();
+                                if (children != null) {
+                                    for (DocumentFile f : children) {
+                                        if (f.isFile()) {
+                                            f.delete();
+                                            deletedCount++;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        File tempDir = new File(decodePath(treeUriOrPath), "temp");
+                        if (tempDir.exists() && tempDir.isDirectory()) {
+                            File[] children = tempDir.listFiles();
+                            if (children != null) {
+                                for (File f : children) {
+                                    if (f.isFile()) {
+                                        f.delete();
+                                        deletedCount++;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                promise.resolve(deletedCount);
+            } catch (Exception e) {
+                Log.e(TAG, "clearTempDir error: " + e.getMessage(), e);
+                promise.reject("CLEAR_FAILED", e.getMessage(), e);
+            }
+        });
+    }
+
+    @ReactMethod
+    public void deleteTempFile(String fileUriOrPath, Promise promise) {
+        AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
+            try {
+                if (fileUriOrPath != null && !fileUriOrPath.trim().isEmpty()) {
+                    if (fileUriOrPath.startsWith("content://")) {
+                        DocumentFile df = DocumentFile.fromSingleUri(reactContext, Uri.parse(fileUriOrPath));
+                        if (df != null && df.exists() && df.isFile()) {
+                            df.delete();
+                        }
+                    } else {
+                        File f = new File(decodePath(fileUriOrPath));
+                        if (f.exists() && f.isFile()) {
+                            f.delete();
+                        }
+                    }
+                }
+                promise.resolve(true);
+            } catch (Exception e) {
+                promise.resolve(false);
+            }
+        });
+    }
+}
+`;
+fs.writeFileSync(safCacheJavaPath, safCacheJavaContent, 'utf8');
+console.log('[setup-pdf-renderer] Wrote SafCacheModule.java to:', safCacheJavaPath);
+
+// 3. Write PdfRendererPackage.java (registering both PdfRenderer and SafCache)
 const packageJavaPath = path.join(pdfDir, 'PdfRendererPackage.java');
 const packageJavaContent = `package com.yourname.unraidmanager.pdf;
 
@@ -303,6 +600,7 @@ public class PdfRendererPackage implements ReactPackage {
     public List<NativeModule> createNativeModules(@NonNull ReactApplicationContext reactContext) {
         List<NativeModule> modules = new ArrayList<>();
         modules.add(new PdfRendererModule(reactContext));
+        modules.add(new SafCacheModule(reactContext));
         return modules;
     }
 
@@ -315,6 +613,20 @@ public class PdfRendererPackage implements ReactPackage {
 `;
 fs.writeFileSync(packageJavaPath, packageJavaContent, 'utf8');
 console.log('[setup-pdf-renderer] Wrote PdfRendererPackage.java to:', packageJavaPath);
+
+// 3.1 Ensure androidx.documentfile dependency in android/app/build.gradle
+const appBuildGradle = path.join(androidDir, 'app/build.gradle');
+if (fs.existsSync(appBuildGradle)) {
+  let gradleContent = fs.readFileSync(appBuildGradle, 'utf8');
+  if (!gradleContent.includes('androidx.documentfile:documentfile')) {
+    gradleContent = gradleContent.replace(
+      'dependencies {',
+      "dependencies {\\n    implementation 'androidx.documentfile:documentfile:1.0.1'"
+    );
+    fs.writeFileSync(appBuildGradle, gradleContent, 'utf8');
+    console.log('[setup-pdf-renderer] Added androidx.documentfile dependency to app/build.gradle');
+  }
+}
 
 // 4. Inject PdfRendererPackage into MainApplication
 const mainAppBase = path.join(androidDir, 'app/src/main/java/com/yourname/unraidmanager');

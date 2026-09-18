@@ -551,7 +551,7 @@ export default function SettingsScreen({ navigation }) {
     showConfirm({
       type: 'danger',
       title: '清理预览缓存',
-      message: '确定要清除指定下载目录 temp/ 及所有本地预览缓存文件吗？',
+      message: '确定要清除下载目录下 temp/ 文件夹中的所有缓存文件吗？（仅清理 temp 缓存文件，绝不影响您的正式下载文件及目录结构）',
       confirmText: '确认清理',
       onConfirm: async () => {
         setIsClearing(true);

@@ -1,12 +1,14 @@
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { NativeModules, Platform } from 'react-native';
 
 /**
- * 缓存与下载目录管理工具 (v1.4.223 增强版)
+ * 缓存与下载目录管理工具 (v1.4.224 工业级隔离加固版)
  *
- * - 缓存位置：物理落盘在用户指定的下载目录下的 `temp/` 文件夹中（无论 SAF 还是本地目录）
- * - 本地沙盒：保留高速本地缓存供底层硬件渲染引擎（如 Android PdfRenderer）秒级读取
- * - 智能清理：支持实时计算占用、LRU 超额自动剔除最旧文件、一键物理清空
+ * 【用户核心诉求】：
+ * 1. 缓存文件必须存放在用户指定的下载目录下的 `temp/` 文件夹中，不能放在下载根目录下；
+ * 2. 清理缓存时，仅能删除下载目录下 `temp/` 文件夹中的文件，绝对不能删除 temp 文件夹本身，绝对不能删除下载目录本身，绝对不能误删下载根目录中的任何文件；
+ * 3. 完美结合 Android 原生 SafCacheModule (DocumentFile) 与严格的路径白名单防护，根绝 SAF 根目录遍历删除缺陷。
  */
 
 // AsyncStorage keys
@@ -18,6 +20,9 @@ export const DEFAULT_CACHE_LIMIT_MB = 500;
 
 // 应用内部高速渲染临时缓存目录
 const LOCAL_CACHE_DIR = () => FileSystem.cacheDirectory + 'preview_cache/';
+
+const SafCache = NativeModules.SafCache;
+const isSafCacheAvailable = () => Platform.OS === 'android' && Boolean(SafCache && typeof SafCache.clearTempDir === 'function');
 
 export const formatBytes = (bytes) => {
   if (!bytes || bytes <= 0) return '0 B';
@@ -54,7 +59,6 @@ export const getDownloadDir = async () => {
 export const setDownloadDir = async (uri, name) => {
   if (uri) {
     let cleanName = name || '已授权目录';
-    // 若名称未指定，从 SAF URI 中解析更友好的目录名（如 Download）
     if (!name || name === '已授权目录') {
       try {
         const decoded = decodeURIComponent(uri);
@@ -68,7 +72,7 @@ export const setDownloadDir = async (uri, name) => {
     await AsyncStorage.setItem(KEY_DOWNLOAD_DIR, uri);
     await AsyncStorage.setItem(KEY_DOWNLOAD_DIR_NAME, cleanName);
 
-    // 立即确保该目录下创建好 temp/ 子目录
+    // 预热/确保 temp 目录就绪
     try {
       await getTempDirInfo();
     } catch (_) {}
@@ -86,56 +90,20 @@ export const resetDownloadDir = async () => {
 // ---------------- 预览缓存 temp/ 目录管理 ----------------
 
 /**
- * 获取并确保在用户指定的下载目录下存在 `temp/` 文件夹
- * @returns {Promise<{ isSaf: boolean, uri: string, parentUri: string, displayPath: string }>}
+ * 获取 temp 目录信息与展示路径
  */
 export const getTempDirInfo = async () => {
   const dlDir = await getDownloadDir();
-
-  // 1. Android SAF (content://) 目录处理
-  if (dlDir.configured && dlDir.uri.startsWith('content://')) {
-    try {
-      const children = await FileSystem.StorageAccessFramework.readDirectoryAsync(dlDir.uri);
-      let tempUri = children.find(c => {
-        const dec = decodeURIComponent(c);
-        return dec.endsWith('/temp') || dec.endsWith('%2Ftemp') || dec.endsWith(':temp');
-      });
-
-      if (!tempUri) {
-        tempUri = await FileSystem.StorageAccessFramework.makeDirectoryAsync(dlDir.uri, 'temp');
-      }
-
-      return {
-        isSaf: true,
-        uri: tempUri,
-        parentUri: dlDir.uri,
-        displayPath: `${dlDir.name}/temp/`,
-      };
-    } catch (e) {
-      console.warn('[cacheManager] SAF getTempDirInfo error:', e);
-    }
-  }
-
-  // 2. 本地标准文件目录处理
-  const base = dlDir.configured ? dlDir.uri.replace(/\/?$/, '/') : (FileSystem.documentDirectory + 'downloads/');
-  const tempPath = base + 'temp/';
-  try {
-    const info = await FileSystem.getInfoAsync(tempPath);
-    if (!info.exists) {
-      await FileSystem.makeDirectoryAsync(tempPath, { intermediates: true });
-    }
-  } catch (_) {}
-
   return {
-    isSaf: false,
-    uri: tempPath,
+    isSaf: dlDir.configured && dlDir.uri.startsWith('content://'),
+    uri: dlDir.uri,
     parentUri: dlDir.uri,
     displayPath: `${dlDir.name}/temp/`,
   };
 };
 
 /**
- * 确保内部临时高速缓存目录存在
+ * 确保内部临时高速渲染缓存目录存在
  */
 export const ensureCacheDir = async () => {
   try {
@@ -144,8 +112,6 @@ export const ensureCacheDir = async () => {
     if (!info.exists) {
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
     }
-    // 同时唤醒用户指定下载目录下的 temp/ 结构
-    getTempDirInfo().catch(() => {});
     return dir;
   } catch (e) {
     return LOCAL_CACHE_DIR();
@@ -153,47 +119,42 @@ export const ensureCacheDir = async () => {
 };
 
 /**
- * 获取当前展示用的缓存路径描述
+ * 获取当前展示用的缓存路径描述（例如 "Download/temp/"）
  */
 export const getCacheDirPath = async () => {
   try {
-    const info = await getTempDirInfo();
-    return info.displayPath;
+    const dlDir = await getDownloadDir();
+    return `${dlDir.name}/temp/`;
   } catch (e) {
     return 'temp/';
   }
 };
 
 /**
- * 将下载的文件保存/镜像到用户指定下载目录的 `temp/` 文件夹中
+ * 将预览文件物理镜像保存到用户指定下载目录的 `temp/` 文件夹中
+ * 绝不直接放在下载根目录，必须精准进入子文件夹 temp/
  */
 export const saveToCache = async ({ fileName, localTempUri, mimeType = 'application/octet-stream' }) => {
   if (!fileName || !localTempUri) return;
   try {
-    const tempInfo = await getTempDirInfo();
+    const dlDir = await getDownloadDir();
 
-    if (tempInfo.isSaf) {
-      // 在 SAF temp 目录下创建或覆盖文件
-      const existingFiles = await FileSystem.StorageAccessFramework.readDirectoryAsync(tempInfo.uri).catch(() => []);
-      const encodedName = encodeURIComponent(fileName);
-      let targetFileUri = existingFiles.find(u => {
-        const dec = decodeURIComponent(u);
-        return dec.endsWith('/' + fileName) || dec.endsWith('%2F' + encodedName);
-      });
-
-      if (!targetFileUri) {
-        targetFileUri = await FileSystem.StorageAccessFramework.createFileAsync(tempInfo.uri, fileName, mimeType);
-      }
-
-      const base64Data = await FileSystem.readAsStringAsync(localTempUri, { encoding: FileSystem.EncodingType.Base64 });
-      await FileSystem.writeAsStringAsync(targetFileUri, base64Data, { encoding: FileSystem.EncodingType.Base64 });
+    if (isSafCacheAvailable()) {
+      // 通过原生 DocumentFile 精准写入 <下载目录>/temp/
+      await SafCache.saveFileToTempDir(dlDir.uri, fileName, localTempUri);
     } else {
-      // 普通本地文件目录：直接 copy
-      const destUri = tempInfo.uri + encodeURIComponent(fileName);
+      // 标准本地文件系统分支
+      const base = dlDir.configured ? dlDir.uri.replace(/\/?$/, '/') : (FileSystem.documentDirectory + 'downloads/');
+      const tempDir = base + 'temp/';
+      const dirInfo = await FileSystem.getInfoAsync(tempDir).catch(() => null);
+      if (!dirInfo || !dirInfo.exists) {
+        await FileSystem.makeDirectoryAsync(tempDir, { intermediates: true }).catch(() => {});
+      }
+      const destUri = tempDir + encodeURIComponent(fileName);
       await FileSystem.copyAsync({ from: localTempUri, to: destUri });
     }
 
-    // 触发 LRU 限制核验
+    // 触发缓存超限清理
     enforceCacheLimit().catch(() => {});
   } catch (e) {
     console.warn('[cacheManager] saveToCache error:', e);
@@ -201,59 +162,55 @@ export const saveToCache = async ({ fileName, localTempUri, mimeType = 'applicat
 };
 
 /**
- * 获取指定下载目录 temp/ 下所有缓存文件
+ * 获取指定下载目录 temp/ 下的所有缓存文件（绝不遍历或返回下载根目录中的任何文件）
  */
 export const getCacheFiles = async () => {
   try {
-    const tempInfo = await getTempDirInfo();
-    const files = [];
+    const dlDir = await getDownloadDir();
 
-    if (tempInfo.isSaf) {
-      const uris = await FileSystem.StorageAccessFramework.readDirectoryAsync(tempInfo.uri).catch(() => []);
-      for (const u of uris) {
-        try {
-          const info = await FileSystem.getInfoAsync(u);
-          if (!info.isDirectory) {
-            const decoded = decodeURIComponent(u);
-            const nameParts = decoded.split('/');
-            const rawName = nameParts[nameParts.length - 1] || 'cached_file';
-            files.push({
-              name: rawName,
-              uri: u,
-              size: info.size || 0,
-              mtime: info.modificationTime || 0,
-              isSaf: true,
-            });
-          }
-        } catch (_) {}
-      }
-    } else {
-      const names = await FileSystem.readDirectoryAsync(tempInfo.uri).catch(() => []);
-      for (const name of names) {
-        try {
-          const filePath = tempInfo.uri + name;
-          const info = await FileSystem.getInfoAsync(filePath);
-          if (!info.isDirectory) {
-            files.push({
-              name,
-              uri: filePath,
-              size: info.size || 0,
-              mtime: info.modificationTime || 0,
-              isSaf: false,
-            });
-          }
-        } catch (_) {}
-      }
+    if (isSafCacheAvailable()) {
+      const list = await SafCache.listTempFiles(dlDir.uri);
+      return (list || []).map(f => ({
+        name: f.name || 'cached_file',
+        uri: f.uri,
+        size: f.size || 0,
+        mtime: f.mtime || 0,
+      }));
     }
 
+    // 标准本地文件系统分支
+    const base = dlDir.configured ? dlDir.uri.replace(/\/?$/, '/') : (FileSystem.documentDirectory + 'downloads/');
+    const tempDir = base + 'temp/';
+    const dirInfo = await FileSystem.getInfoAsync(tempDir).catch(() => null);
+    if (!dirInfo || !dirInfo.exists || !dirInfo.isDirectory) {
+      return [];
+    }
+
+    const names = await FileSystem.readDirectoryAsync(tempDir).catch(() => []);
+    const files = [];
+    for (const name of names) {
+      try {
+        const filePath = tempDir + name;
+        const info = await FileSystem.getInfoAsync(filePath);
+        if (!info.isDirectory) {
+          files.push({
+            name,
+            uri: filePath,
+            size: info.size || 0,
+            mtime: info.modificationTime || 0,
+          });
+        }
+      } catch (_) {}
+    }
     return files;
   } catch (e) {
+    console.warn('[cacheManager] getCacheFiles error:', e);
     return [];
   }
 };
 
 /**
- * 获取缓存总大小
+ * 获取缓存总大小（字节）
  */
 export const getCacheSize = async () => {
   const files = await getCacheFiles();
@@ -283,12 +240,19 @@ export const setCacheLimitMB = async (mb) => {
 };
 
 /**
- * 删除单个缓存文件
+ * 删除单个缓存文件（LRU 轮转清理）
  */
 export const deleteCacheFile = async (uri) => {
+  if (!uri) return;
   try {
-    const info = await FileSystem.getInfoAsync(uri);
-    if (info.exists) await FileSystem.deleteAsync(uri, { idempotent: true });
+    if (isSafCacheAvailable()) {
+      await SafCache.deleteTempFile(uri);
+    } else {
+      const info = await FileSystem.getInfoAsync(uri).catch(() => null);
+      if (info && info.exists && !info.isDirectory) {
+        await FileSystem.deleteAsync(uri, { idempotent: true });
+      }
+    }
   } catch (e) {}
 };
 
@@ -311,29 +275,57 @@ export const enforceCacheLimit = async () => {
 };
 
 /**
- * 清空指定下载目录 temp/ 缓存及内部渲染临时文件
+ * 清空预览缓存（核心安全加固）：
+ *
+ * 1. 严密边界隔离：仅删除用户指定下载目录下的 `temp/` 文件夹内部的文件；
+ * 2. 绝对禁止删除 `temp/` 文件夹本身；
+ * 3. 绝对禁止删除用户下载目录本身，绝不触碰下载目录中的任何正式文件；
+ * 4. 同步清空应用私有沙盒 preview_cache/ 中的渲染临时文件。
  */
 export const clearCache = async () => {
   try {
-    // 1. 清空用户指定的 temp/
-    const tempInfo = await getTempDirInfo();
-    if (tempInfo.isSaf) {
-      const uris = await FileSystem.StorageAccessFramework.readDirectoryAsync(tempInfo.uri).catch(() => []);
-      for (const u of uris) {
-        await FileSystem.deleteAsync(u, { idempotent: true }).catch(() => {});
-      }
+    const dlDir = await getDownloadDir();
+
+    // 1. 清空指定下载目录 temp/ 文件夹内部的文件
+    if (isSafCacheAvailable()) {
+      await SafCache.clearTempDir(dlDir.uri);
     } else {
-      const names = await FileSystem.readDirectoryAsync(tempInfo.uri).catch(() => []);
-      for (const name of names) {
-        await FileSystem.deleteAsync(tempInfo.uri + name, { idempotent: true }).catch(() => {});
+      // 本地文件系统模式严格防护
+      const base = dlDir.configured ? dlDir.uri.replace(/\/?$/, '/') : (FileSystem.documentDirectory + 'downloads/');
+      const tempDir = base + 'temp/';
+      const dirInfo = await FileSystem.getInfoAsync(tempDir).catch(() => null);
+      if (dirInfo && dirInfo.exists && dirInfo.isDirectory) {
+        const names = await FileSystem.readDirectoryAsync(tempDir).catch(() => []);
+        for (const name of names) {
+          const filePath = tempDir + name;
+          // 绝对路径与特征安全校验：
+          // 只有包含 /temp/，且既不是 tempDir 本身也不是父目录，且确认是文件时才删除！
+          if (filePath.includes('/temp/') && !filePath.endsWith('/temp') && !filePath.endsWith('/temp/')) {
+            const fInfo = await FileSystem.getInfoAsync(filePath).catch(() => null);
+            if (fInfo && !fInfo.isDirectory) {
+              await FileSystem.deleteAsync(filePath, { idempotent: true }).catch(() => {});
+            }
+          }
+        }
       }
     }
 
-    // 2. 清空应用私有渲染临时目录
+    // 2. 清空内部高速渲染临时目录中的中间文件
     const localDir = LOCAL_CACHE_DIR();
-    const localNames = await FileSystem.readDirectoryAsync(localDir).catch(() => []);
-    for (const name of localNames) {
-      await FileSystem.deleteAsync(localDir + name, { idempotent: true }).catch(() => {});
+    const localInfo = await FileSystem.getInfoAsync(localDir).catch(() => null);
+    if (localInfo && localInfo.exists && localInfo.isDirectory) {
+      const localNames = await FileSystem.readDirectoryAsync(localDir).catch(() => []);
+      for (const name of localNames) {
+        const localFilePath = localDir + name;
+        if (!localFilePath.endsWith('/preview_cache') && !localFilePath.endsWith('/preview_cache/')) {
+          await FileSystem.deleteAsync(localFilePath, { idempotent: true }).catch(() => {});
+        }
+      }
+    }
+
+    // 3. 同时调用原生 PdfRenderer.clearCache() 释放光栅化生成的临时位图
+    if (NativeModules.PdfRenderer && typeof NativeModules.PdfRenderer.clearCache === 'function') {
+      NativeModules.PdfRenderer.clearCache().catch(() => {});
     }
   } catch (e) {
     console.warn('[cacheManager] clearCache error:', e);
