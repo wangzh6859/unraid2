@@ -16,6 +16,10 @@ import VmDetailsScreen from './screens/VmDetailsScreen';
 import StorageDetailsScreen from './screens/StorageDetailsScreen';
 import SmartDetailsScreen from './screens/SmartDetailsScreen';
 import FilesScreen from './screens/FilesScreen';
+import CpuDetailsScreen from './screens/CpuDetailsScreen';
+import MemoryDetailsScreen from './screens/MemoryDetailsScreen';
+import GpuDetailsScreen from './screens/GpuDetailsScreen';
+import NetworkDetailsScreen from './screens/NetworkDetailsScreen';
 
 // 💡 全局主题上下文
 import { ThemeProvider, useTheme } from './ThemeContext';
@@ -44,6 +48,10 @@ function HomeStack() {
       <Stack.Screen name="SMART详情" component={SmartDetailsScreen} options={{ title: 'S.M.A.R.T. 诊断' }} />
       <Stack.Screen name="Docker详情" component={DockerDetailsScreen} options={{ title: 'Docker 容器' }} />
       <Stack.Screen name="VM详情" component={VmDetailsScreen} options={{ title: '虚拟机' }} />
+      <Stack.Screen name="CpuDetails" component={CpuDetailsScreen} options={{ title: 'CPU 性能与进程' }} />
+      <Stack.Screen name="MemoryDetails" component={MemoryDetailsScreen} options={{ title: '内存监控与进程' }} />
+      <Stack.Screen name="GpuDetails" component={GpuDetailsScreen} options={{ title: 'GPU 显卡与负载' }} />
+      <Stack.Screen name="NetworkDetails" component={NetworkDetailsScreen} options={{ title: '网络流量与接口' }} />
     </Stack.Navigator>
   );
 }

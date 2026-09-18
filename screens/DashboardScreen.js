@@ -815,11 +815,16 @@ export default function DashboardScreen({ navigation }) {
       {/* 2. Bento 核心硬件区：CPU 与 RAM 并列卡片 */}
       <View style={styles.bentoRow}>
         {/* CPU 卡片 */}
-        <View style={styles.bentoCard}>
+        <TouchableOpacity
+          style={styles.bentoCard}
+          onPress={() => navigation.navigate('CpuDetails')}
+          activeOpacity={0.8}
+        >
           <View style={styles.bentoHeader}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Cpu size={15} color={colors.accent} style={{ marginRight: 6 }} />
               <Text style={styles.bentoTitle}>CPU</Text>
+              <ChevronRight size={13} color={colors.muted} style={{ marginLeft: 3 }} />
             </View>
             <View style={[styles.tempBadge, { backgroundColor: cpuTemp > 60 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(249, 115, 22, 0.15)' }]}>
               <Text style={[styles.tempBadgeText, { color: cpuTemp > 60 ? colors.red : colors.tempWarm }]}>
@@ -876,14 +881,19 @@ export default function DashboardScreen({ navigation }) {
               </View>
             ))}
           </View>
-        </View>
+        </TouchableOpacity>
 
         {/* RAM 卡片 */}
-        <View style={styles.bentoCard}>
+        <TouchableOpacity
+          style={styles.bentoCard}
+          onPress={() => navigation.navigate('MemoryDetails')}
+          activeOpacity={0.8}
+        >
           <View style={styles.bentoHeader}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Database size={15} color={colors.green} style={{ marginRight: 6 }} />
               <Text style={styles.bentoTitle}>RAM</Text>
+              <ChevronRight size={13} color={colors.muted} style={{ marginLeft: 3 }} />
             </View>
             <Text style={styles.bentoSubMeta}>{memVal}%</Text>
           </View>
@@ -924,13 +934,17 @@ export default function DashboardScreen({ navigation }) {
           <View style={styles.ramMetaBox}>
             <Text style={styles.ramMetaText}>{totalRamMetaText}</Text>
           </View>
-        </View>
+        </TouchableOpacity>
       </View>
 
       
       {/* 2.5 GPU 硬件加速卡片 (紧凑单行 Bento 磁贴) */}
       {gpu && gpu.name && gpu.name !== '未配置独立显卡' && gpu.name !== 'N/A' ? (
-        <View style={styles.miniGpuCard}>
+        <TouchableOpacity
+          style={styles.miniGpuCard}
+          onPress={() => navigation.navigate('GpuDetails')}
+          activeOpacity={0.8}
+        >
           <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
             <Zap size={14} color={colors.accent} style={{ marginRight: 6 }} />
             <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textStrong, marginRight: 6 }} numberOfLines={1}>
@@ -954,7 +968,7 @@ export default function DashboardScreen({ navigation }) {
             </View>
           </View>
 
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             {gpu.clock_mhz ? (
               <Text style={{ fontSize: 11, color: colors.sub, fontFamily: 'monospace' }}>
                 {gpu.clock_mhz} MHz
@@ -979,16 +993,22 @@ export default function DashboardScreen({ navigation }) {
                 {gpu.temp}°C
               </Text>
             ) : null}
+            <ChevronRight size={14} color={colors.muted} />
           </View>
-        </View>
+        </TouchableOpacity>
       ) : null}
 
       {/* 3. 实时网络吞吐卡片 (双轨平滑波浪曲线) */}
-      <View style={styles.card}>
+      <TouchableOpacity
+        style={styles.card}
+        onPress={() => navigation.navigate('NetworkDetails')}
+        activeOpacity={0.85}
+      >
         <View style={styles.cardHeaderRow}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <Wifi size={17} color={colors.networkDown} style={{ marginRight: 8 }} />
-            <Text style={styles.cardTitle}>网络运输度</Text>
+            <Text style={styles.cardTitle}>实时网络吞吐</Text>
+            <ChevronRight size={14} color={colors.muted} style={{ marginLeft: 4 }} />
           </View>
 
           {/* 实时下行与上行速率徽章 */}
@@ -1031,7 +1051,7 @@ export default function DashboardScreen({ navigation }) {
             {upWave.path ? <Path d={upWave.path} stroke={colors.networkUp} strokeWidth={2.0} fill="none" /> : null}
           </Svg>
         </View>
-      </View>
+      </TouchableOpacity>
 
       {/* 4. 存储阵列卡片 (多色段容量分布 + 磁盘温度胶囊) */}
       <TouchableOpacity

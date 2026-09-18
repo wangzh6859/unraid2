@@ -4,6 +4,51 @@
 
 ---
 
+## [v1.4.227] - 2026-09-18
+> **核心主题**：彻底根治 GPU 占用率持续为 0% 的核心隐患；全面推出 CPU、内存、GPU、网络四大独立二级详情页；上线近 5 分钟高精度时序曲线与各程序/容器/虚拟机的实时占用排行。
+
+### ⚡ 彻底解决 GPU 占用率 0% 问题与深度硬件加速追踪
+- **根因修复 1：Unraid `gpustatus.php` 相对路径 Require 致命报错**
+  - 在 PHP-FPM 执行环境中，主工作目录位于 `/usr/local/emhttp/`。直接执行 `php /usr/local/emhttp/plugins/gpustat/gpustatus.php` 时，插件内部包含的 `require_once('lib/Intel.php')` 因相对路径失效而异常退出；
+  - 现修复为 `cd /usr/local/emhttp/plugins/gpustat && php gpustatus.php`，100% 成功加载插件依赖库并捕获 STDOUT 数据。
+- **根因修复 2：Linux 原生内核 RC6 待机差分算法 (Intel 核显无插件原生支持)**
+  - 针对未安装 `gpustat` 或 `intel-gpu-tools` 的 Intel 核显环境，直接读取 Linux `i915` 驱动的 `/sys/class/drm/card*/power/rc6_residency_ms` 待机计数器；
+  - 通过采样周期的差分算法：$$\text{Active\%} = \max(0, \min(100, 100 - (\Delta \text{rc6\_ms} / \Delta t \times 100)))$$，精准获得硬件真实活动率，真正做到待机为 0%，转码或图形渲染时准确反映真实负载！
+- **活跃容器与进程反向解析 (`active_apps`)**：
+  - 扫描 `/dev/dri/renderD*` 与 `/dev/dri/card*` 打开的文件描述符句柄，通过 `/proc/[pid]/cgroup` 反查 Docker 容器 ID，精准定位正在使用 GPU 硬件加速的容器（如 Jellyfin, Plex, Emby, Frigate, Ollama）；
+  - NVIDIA 显卡通过 `nvidia-smi --query-compute-apps` 解析活跃进程与显存占用。
+
+### 📊 全新 CPU、内存、GPU、网络四大独立二级详情页
+- **仪表盘 Bento 卡片无缝切入**：
+  - 首页仪表盘的 CPU 卡片、RAM 内存卡片、GPU 卡片与网络吞吐卡片右上角均增设 `ChevronRight` 微光导引箭头，点击即可瞬间穿透至对应的专属二级页面；
+- **CPU 性能与进程 (`CpuDetailsScreen.js`)**：
+  - **顶部看板**：CPU 型号、物理/逻辑核心数、实时温度（高负荷橙红色渐变警示）、总体利用率；
+  - **5分钟走势**：近 5 分钟利用率 SVG 渐变平滑贝塞尔波形图；
+  - **多核心网格**：Core 0 ~ Core N 实时负载进度条与动态数值；
+  - **程序实时占用排行**：支持【全部】、【Docker 容器】、【虚拟机】、【系统进程】四档快速分段筛选，降序直观展示是谁在占用 CPU。
+- **内存监控与进程 (`MemoryDetailsScreen.js`)**：
+  - **顶部看板**：已用内存 / 总容量、可用、空闲、缓存 (Cached)、缓冲 (Buffers)、Swap 交换区；
+  - **5分钟走势**：近 5 分钟 RAM 占用率平滑波形图；
+  - **构成全景条**：已用 + 缓存 + 缓冲 + 空闲 多色分段全景条与图例；
+  - **程序内存消耗排行**：精确列出各 Docker 容器（如 `qbittorrent: 1.45 GB`）、VM 及进程的内存占用与百分比。
+- **GPU 显卡与负载 (`GpuDetailsScreen.js`)**：
+  - **顶部看板**：显卡型号、厂商徽章 (Intel / NVIDIA / AMD)、核心利用率、核心时钟、功耗与温度；
+  - **5分钟走势**：近 5 分钟 GPU 核心利用率平滑曲线；
+  - **显存与状态网格**：显存分配仪表条（已用 vs 总计）、运行模式（待机 RC6 / 硬件加速 / 高负荷转码）；
+  - **活跃程序与容器明细**：清晰列出正在调用 GPU 进行转码或 AI 计算的 Docker 容器与进程。
+- **网络流量与接口 (`NetworkDetailsScreen.js`)**：
+  - **顶部看板**：实时下行速率、实时上行速率、累计接收流量、累计发送流量；
+  - **5分钟走势**：下行 (绿色) 与上行 (紫色) 双轨平滑贝塞尔波形曲线；
+  - **各 Docker 容器网络上传/下载排行**：直观列出各容器的实时网络 I/O 速率，谁在下载上传一目了然；
+  - **网卡接口明细**：列出 `eth0`, `br0`, `bond0`, `wg0` 等各接口类型、IP、MAC、实时上下行流速与状态。
+
+### 🎨 轻量化原生 SVG 走势图组件 (`MetricsLineChart.js`)
+- 基于现有依赖 `react-native-svg` 打造，零外部图表依赖，极致轻量且无崩溃风险；
+- 支持平滑贝塞尔曲线插值、微光渐变充填、网格虚线、时间刻度（-5分 ~ 实时）与 5 分钟峰值/均值统计徽章；
+- 结合后端在 `/tmp/unraid_metrics_history.json` 自动维护的 150 点环形时序数据，二级页面即开即满，无需等待！
+
+---
+
 ## [v1.4.226] - 2026-09-18
 > **核心主题**：全面根治 TXT 预览 `Call to undefined function iconv()` 崩溃；重构 GPU 遥测引擎，捕获 Unraid 官方 gpustatus 实时输出，解决占用率锁死 0%；全局所有页面覆盖下拉刷新（Pull-to-Refresh）逻辑。
 

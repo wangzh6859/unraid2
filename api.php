@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.18.01
+ * Version: 2026.09.18.02
  * Release: 2026-09-18
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.18.01');
+define('UNRAID_API_VERSION', '2026.09.18.02');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -364,6 +364,10 @@ function get_mime_type($filename) {
 switch ($action) {
     case 'status':
         handle_status();
+        break;
+
+    case 'metrics_detail':
+        handle_metrics_detail();
         break;
 
     case 'reboot':
@@ -1318,7 +1322,7 @@ $disks[] = [
     }
     $runningVms = count(array_filter($vmsList, function($v) { return $v['status'] === 'running'; }));
 
-    // 7. Network rx/tx bytes
+    // 7. Network rx/tx bytes & differential speed
     $netRx = 0;
     $netTx = 0;
     $netLines = @file('/proc/net/dev');
@@ -1336,6 +1340,27 @@ $disks[] = [
             }
         }
     }
+
+    $rxBps = 0;
+    $txBps = 0;
+    $netRateFile = '/tmp/unraid_net_rate.json';
+    $nowFloat = microtime(true);
+    if (file_exists($netRateFile)) {
+        $lastNet = @json_decode(@file_get_contents($netRateFile), true);
+        if (is_array($lastNet) && isset($lastNet['t']) && isset($lastNet['rx']) && isset($lastNet['tx'])) {
+            $dt = $nowFloat - (float)$lastNet['t'];
+            if ($dt > 0.2 && $dt < 60.0) {
+                $rxDiff = $netRx - (float)$lastNet['rx'];
+                $txDiff = $netTx - (float)$lastNet['tx'];
+                if ($rxDiff >= 0) $rxBps = round($rxDiff / $dt);
+                if ($txDiff >= 0) $txBps = round($txDiff / $dt);
+            }
+        }
+    }
+    @file_put_contents($netRateFile, json_encode(['t' => $nowFloat, 'rx' => $netRx, 'tx' => $netTx]), LOCK_EX);
+
+    // Update 5-minute rolling metrics history
+    $metricsHistory = update_metrics_history($cpuUsage, $memUsage, isset($gpuData['usage']) ? $gpuData['usage'] : 0, $rxBps, $txBps);
 
     // 8. Array Parity Check Telemetry (var.ini & /proc/mdstat)
     $parityData = [
@@ -1456,8 +1481,11 @@ $disks[] = [
         'network' => [
             'rx_bytes' => $netRx,
             'tx_bytes' => $netTx,
+            'rx_bps' => $rxBps,
+            'tx_bps' => $txBps,
             'mac' => get_server_mac()
         ],
+        'history' => $metricsHistory,
         'parity' => $parityData,
         'csrf_token' => get_system_csrf_token()
     ]);
@@ -4291,7 +4319,9 @@ function get_gpu_telemetry() {
     $gpustatRaw = null;
     foreach ($gpustatScripts as $script) {
         if (file_exists($script)) {
-            $rawOut = @shell_exec("php " . escapeshellarg($script) . " 2>/dev/null");
+            $dir = dirname($script);
+            $base = basename($script);
+            $rawOut = @shell_exec("cd " . escapeshellarg($dir) . " && php " . escapeshellarg($base) . " 2>/dev/null");
             if (!empty($rawOut) && (strpos($rawOut, '{') !== false || strpos($rawOut, '[') !== false)) {
                 $gpustatRaw = $rawOut;
                 break;
@@ -4445,6 +4475,7 @@ function get_gpu_telemetry() {
                 if (isset($parts[6]) && is_numeric($parts[6])) $gpuData['clock_mhz'] = (int)$parts[6];
                 if (isset($parts[7]) && is_numeric($parts[7])) $gpuData['max_clock_mhz'] = (int)$parts[7];
                 $gpuData['driver'] = 'nvidia';
+                $gpuData['active_apps'] = get_gpu_active_apps();
                 return $gpuData;
             }
         }
@@ -4534,7 +4565,15 @@ function get_gpu_telemetry() {
                         }
                     }
 
-                    // If intel_gpu_top didn't return usage, check if gpustat has live usage
+                    // Native Linux kernel RC6 standby differential calculation
+                    $rc6Usage = get_intel_rc6_usage();
+                    if ($rc6Usage !== null) {
+                        if ($intelUsage === null || $rc6Usage > $intelUsage) {
+                            $intelUsage = $rc6Usage;
+                        }
+                    }
+
+                    // If intel_gpu_top and RC6 didn't return usage, check if gpustat has live usage
                     if ($intelUsage === null && $gpustatCand !== null && isset($gpustatCand['usage'])) {
                         $intelUsage = $gpustatCand['usage'];
                     }
@@ -4553,6 +4592,7 @@ function get_gpu_telemetry() {
                     $gpuData['vram_total'] = ($gpustatCand ? $gpustatCand['vram_total'] : null);
                     $gpuData['vram_pct'] = ($gpustatCand ? $gpustatCand['vram_pct'] : 0);
                     $gpuData['driver'] = 'i915';
+                    $gpuData['active_apps'] = get_gpu_active_apps();
                     return $gpuData;
                 }
             }
@@ -4603,6 +4643,7 @@ function get_gpu_telemetry() {
                     $gpuData['vram_total'] = ($vramTotal !== null) ? $vramTotal : ($gpustatCand ? $gpustatCand['vram_total'] : null);
                     $gpuData['vram_pct'] = ($gpuData['vram_total'] > 0) ? round(($gpuData['vram_used'] / $gpuData['vram_total']) * 100, 1) : ($gpustatCand ? $gpustatCand['vram_pct'] : 0);
                     $gpuData['driver'] = 'amdgpu';
+                    $gpuData['active_apps'] = get_gpu_active_apps();
                     return $gpuData;
                 }
             }
@@ -4611,6 +4652,7 @@ function get_gpu_telemetry() {
 
     // 5. If hardware direct probes found nothing but gpustat was present, return gpustat candidate
     if ($gpustatCand !== null) {
+        $gpustatCand['active_apps'] = get_gpu_active_apps();
         return $gpustatCand;
     }
 
@@ -4624,10 +4666,12 @@ function get_gpu_telemetry() {
             $gpuData['name'] = $model;
             $gpuData['vendor'] = $vendor;
             $gpuData['driver'] = 'generic';
+            $gpuData['active_apps'] = get_gpu_active_apps();
             return $gpuData;
         }
     }
 
+    $gpuData['active_apps'] = get_gpu_active_apps();
     return $gpuData;
 }
 
@@ -4716,5 +4760,570 @@ function handle_check_docker_updates() {
         'ready_count' => $readyCount,
         'new_version_count' => $newVersionCount,
         'output' => trim($out)
+    ]);
+}
+
+/**
+ * Parse string representations of byte sizes (e.g., "245.8MiB", "1.25 GB", "500kB")
+ */
+function parse_bytes_string($str) {
+    if (empty($str)) return 0;
+    $str = trim((string)$str);
+    if (!preg_match('/^([0-9.]+)\s*([a-zA-Z]*)$/', $str, $m)) return 0;
+    $val = (float)$m[1];
+    $unit = strtoupper(trim($m[2]));
+    switch ($unit) {
+        case 'TB':
+        case 'TIB':
+            return round($val * 1024 * 1024 * 1024 * 1024);
+        case 'GB':
+        case 'GIB':
+            return round($val * 1024 * 1024 * 1024);
+        case 'MB':
+        case 'MIB':
+            return round($val * 1024 * 1024);
+        case 'KB':
+        case 'KIB':
+            return round($val * 1024);
+        case 'B':
+        default:
+            return round($val);
+    }
+}
+
+/**
+ * Intel iGPU RC6 residency active percentage calculation
+ */
+function get_intel_rc6_usage() {
+    $rc6Files = [
+        '/sys/class/drm/card0/power/rc6_residency_ms',
+        '/sys/class/drm/card0/gt/gt0/rc6_residency_ms',
+        '/sys/class/drm/card1/power/rc6_residency_ms',
+        '/sys/class/drm/card1/gt/gt0/rc6_residency_ms',
+    ];
+    $rc6File = null;
+    foreach ($rc6Files as $f) {
+        if (file_exists($f)) {
+            $rc6File = $f;
+            break;
+        }
+    }
+    if (!$rc6File) return null;
+
+    $curRc6 = (float)trim(@file_get_contents($rc6File));
+    $now = microtime(true);
+    $stateFile = '/tmp/unraid_rc6_state.json';
+    $usage = null;
+
+    if (file_exists($stateFile)) {
+        $lastState = @json_decode(@file_get_contents($stateFile), true);
+        if (is_array($lastState) && isset($lastState['rc6_ms']) && isset($lastState['time'])) {
+            $dt_ms = ($now - (float)$lastState['time']) * 1000.0;
+            $drc6_ms = $curRc6 - (float)$lastState['rc6_ms'];
+            if ($dt_ms >= 100.0 && $dt_ms < 60000.0 && $drc6_ms >= 0) {
+                $sleepRatio = min(1.0, max(0.0, $drc6_ms / $dt_ms));
+                $usage = round((1.0 - $sleepRatio) * 100.0, 1);
+            }
+        }
+    }
+
+    @file_put_contents($stateFile, json_encode(['rc6_ms' => $curRc6, 'time' => $now]), LOCK_EX);
+    return $usage;
+}
+
+/**
+ * Find processes and Docker containers currently accessing the GPU
+ */
+function get_gpu_active_apps() {
+    $apps = [];
+    $pids = [];
+
+    // 1. Linux DRM /dev/dri clients (Intel QuickSync / AMD VA-API)
+    $fuserOut = @shell_exec('fuser /dev/dri/renderD* /dev/dri/card* 2>/dev/null');
+    if (!empty($fuserOut)) {
+        $rawPids = preg_split('/\s+/', trim($fuserOut));
+        foreach ($rawPids as $p) {
+            $p = trim($p);
+            if (is_numeric($p) && (int)$p > 0) {
+                $pids[(int)$p] = ['source' => 'dri', 'name' => '', 'vram' => ''];
+            }
+        }
+    }
+
+    // 2. NVIDIA compute applications
+    $nvidiaApps = @shell_exec('nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits 2>/dev/null');
+    if (!empty($nvidiaApps)) {
+        $lines = explode("\n", trim($nvidiaApps));
+        foreach ($lines as $line) {
+            $parts = array_map('trim', explode(',', $line));
+            if (count($parts) >= 2 && is_numeric($parts[0])) {
+                $pid = (int)$parts[0];
+                $pids[$pid] = [
+                    'source' => 'nvidia',
+                    'name' => $parts[1],
+                    'vram' => isset($parts[2]) ? $parts[2] . ' MB' : ''
+                ];
+            }
+        }
+    }
+
+    if (empty($pids)) return [];
+
+    // Resolve Docker container names
+    $containerMap = [];
+    $dockerPs = @shell_exec('docker ps --no-trunc --format "{{.ID}}\t{{.Names}}\t{{.Image}}" 2>/dev/null');
+    if (!empty($dockerPs)) {
+        $lines = explode("\n", trim($dockerPs));
+        foreach ($lines as $line) {
+            $cols = explode("\t", trim($line));
+            if (count($cols) >= 2) {
+                $longId = trim($cols[0]);
+                $shortId = substr($longId, 0, 12);
+                $cName = trim($cols[1]);
+                $cImg = isset($cols[2]) ? trim($cols[2]) : '';
+                $containerMap[$longId] = ['name' => $cName, 'image' => $cImg];
+                $containerMap[$shortId] = ['name' => $cName, 'image' => $cImg];
+            }
+        }
+    }
+
+    foreach ($pids as $pid => $meta) {
+        $procName = isset($meta['name']) ? $meta['name'] : '';
+        if (empty($procName) && file_exists("/proc/{$pid}/comm")) {
+            $procName = trim(@file_get_contents("/proc/{$pid}/comm"));
+        }
+        $cmdline = '';
+        if (file_exists("/proc/{$pid}/cmdline")) {
+            $cmdline = trim(str_replace("\0", " ", @file_get_contents("/proc/{$pid}/cmdline")));
+        }
+
+        $dockerId = null;
+        $cgroupFile = "/proc/{$pid}/cgroup";
+        if (file_exists($cgroupFile)) {
+            $cgroup = @file_get_contents($cgroupFile);
+            if (preg_match('/docker[/-]([a-f0-9]{12,64})/i', $cgroup, $cm)) {
+                $dockerId = $cm[1];
+            }
+        }
+
+        $appInfo = [
+            'pid' => $pid,
+            'name' => $procName ?: 'gpu_process',
+            'command' => substr($cmdline, 0, 100),
+            'vram' => isset($meta['vram']) ? $meta['vram'] : '',
+            'source' => $meta['source'],
+            'type' => 'process',
+            'container_name' => null,
+            'container_image' => null
+        ];
+
+        if ($dockerId) {
+            $matched = null;
+            if (isset($containerMap[$dockerId])) {
+                $matched = $containerMap[$dockerId];
+            } else {
+                $prefix = substr($dockerId, 0, 12);
+                if (isset($containerMap[$prefix])) {
+                    $matched = $containerMap[$prefix];
+                }
+            }
+            if ($matched) {
+                $appInfo['type'] = 'docker';
+                $appInfo['container_name'] = $matched['name'];
+                $appInfo['container_image'] = $matched['image'];
+            } else {
+                $appInfo['type'] = 'docker';
+                $appInfo['container_name'] = substr($dockerId, 0, 12);
+            }
+        } elseif (stripos($procName, 'qemu') !== false || stripos($cmdline, 'qemu') !== false) {
+            $appInfo['type'] = 'vm';
+        }
+
+        $apps[] = $appInfo;
+    }
+
+    return $apps;
+}
+
+/**
+ * Maintain rolling 5-minute telemetry history buffer in /tmp/
+ */
+function update_metrics_history($cpuUsage, $memUsage, $gpuUsage, $rxBps, $txBps) {
+    $histFile = '/tmp/unraid_metrics_history.json';
+    $history = [];
+    if (file_exists($histFile)) {
+        $data = @json_decode(@file_get_contents($histFile), true);
+        if (is_array($data)) $history = $data;
+    }
+    $now = time();
+    $history[] = [
+        't' => $now,
+        'cpu' => round((float)$cpuUsage, 1),
+        'mem' => round((float)$memUsage, 1),
+        'gpu' => round((float)$gpuUsage, 1),
+        'rx' => round((float)$rxBps, 1),
+        'tx' => round((float)$txBps, 1),
+    ];
+    if (count($history) > 150) {
+        $history = array_slice($history, -150);
+    }
+    @file_put_contents($histFile, json_encode($history), LOCK_EX);
+    return $history;
+}
+
+/**
+ * Handle action=metrics_detail for 4 drill-down pages
+ */
+function handle_metrics_detail() {
+    // 1. CPU
+    $cpuUsage = 0;
+    $cpuTemp = null;
+    $cores = [];
+    $cpuModel = 'x86_64 Processor';
+
+    $cpuinfo = @file_get_contents('/proc/cpuinfo');
+    if ($cpuinfo) {
+        if (preg_match('/model name\s*:\s*(.+)$/m', $cpuinfo, $cm)) {
+            $cpuModel = trim($cm[1]);
+        }
+    }
+
+    $zones = @glob('/sys/class/thermal/thermal_zone*/temp');
+    if ($zones) {
+        foreach ($zones as $z) {
+            $t = (int)trim(@file_get_contents($z));
+            if ($t > 1000) $t = round($t / 1000);
+            if ($t >= 20 && $t <= 110) {
+                $cpuTemp = $t;
+                break;
+            }
+        }
+    }
+
+    $statLines = @file('/proc/stat');
+    $coreStatFile = '/tmp/unraid_cpucore_last.json';
+    $now = microtime(true);
+    $currentCores = [];
+    if ($statLines) {
+        foreach ($statLines as $line) {
+            if (preg_match('/^cpu([0-9]+)\s+(.*)/', trim($line), $m)) {
+                $coreId = (int)$m[1];
+                $parts = preg_split('/\s+/', trim($m[2]));
+                $total = array_sum($parts);
+                $idle = isset($parts[3]) ? (float)$parts[3] : 0;
+                $currentCores[$coreId] = ['total' => $total, 'idle' => $idle];
+            }
+        }
+    }
+
+    $lastCores = null;
+    if (file_exists($coreStatFile)) {
+        $lastData = @json_decode(@file_get_contents($coreStatFile), true);
+        if (is_array($lastData) && isset($lastData['time']) && ($now - $lastData['time'] < 30)) {
+            $lastCores = $lastData['cores'];
+        }
+    }
+
+    if (!$lastCores && !empty($currentCores)) {
+        usleep(50000); // 50ms measurement on initial poll
+        $statLines2 = @file('/proc/stat');
+        $lastCores = $currentCores;
+        $currentCores = [];
+        if ($statLines2) {
+            foreach ($statLines2 as $line) {
+                if (preg_match('/^cpu([0-9]+)\s+(.*)/', trim($line), $m)) {
+                    $coreId = (int)$m[1];
+                    $parts = preg_split('/\s+/', trim($m[2]));
+                    $total = array_sum($parts);
+                    $idle = isset($parts[3]) ? (float)$parts[3] : 0;
+                    $currentCores[$coreId] = ['total' => $total, 'idle' => $idle];
+                }
+            }
+        }
+    }
+
+    if (!empty($currentCores)) {
+        @file_put_contents($coreStatFile, json_encode(['time' => $now, 'cores' => $currentCores]), LOCK_EX);
+        foreach ($currentCores as $cid => $cur) {
+            $u = 0;
+            if ($lastCores && isset($lastCores[$cid])) {
+                $dTotal = $cur['total'] - $lastCores[$cid]['total'];
+                $dIdle = $cur['idle'] - $lastCores[$cid]['idle'];
+                if ($dTotal > 0) {
+                    $u = round(100.0 * ($dTotal - $dIdle) / $dTotal, 1);
+                }
+            }
+            $cores[] = [
+                'id' => $cid,
+                'name' => "Core {$cid}",
+                'usage' => max(0, min(100, $u))
+            ];
+        }
+    }
+
+    if (!empty($cores)) {
+        $sumUsage = 0;
+        foreach ($cores as $c) { $sumUsage += $c['usage']; }
+        $cpuUsage = round($sumUsage / count($cores), 1);
+    }
+
+    $cpuProcs = [];
+    $psCpu = @shell_exec("ps -eo pid,user,%cpu,%mem,comm,args --sort=-%cpu 2>/dev/null | head -n 30");
+    if ($psCpu) {
+        $lines = explode("\n", trim($psCpu));
+        array_shift($lines);
+        foreach ($lines as $line) {
+            $parts = preg_split('/\s+/', trim($line), 6);
+            if (count($parts) >= 5) {
+                $comm = $parts[4];
+                if ($comm === 'ps' || $comm === 'head') continue;
+                $cpuProcs[] = [
+                    'pid' => (int)$parts[0],
+                    'user' => $parts[1],
+                    'cpu_pct' => (float)$parts[2],
+                    'mem_pct' => (float)$parts[3],
+                    'name' => $comm,
+                    'command' => isset($parts[5]) ? substr($parts[5], 0, 100) : $comm
+                ];
+            }
+        }
+    }
+
+    // 2. Memory
+    $meminfo = @file_get_contents('/proc/meminfo');
+    $memData = [
+        'total' => 0,
+        'used' => 0,
+        'free' => 0,
+        'available' => 0,
+        'buffers' => 0,
+        'cached' => 0,
+        'swap_total' => 0,
+        'swap_used' => 0,
+        'swap_free' => 0,
+        'usage_pct' => 0
+    ];
+    if ($meminfo) {
+        preg_match('/MemTotal:\s+(\d+)\s+kB/', $meminfo, $totalM);
+        preg_match('/MemAvailable:\s+(\d+)\s+kB/', $meminfo, $availM);
+        preg_match('/MemFree:\s+(\d+)\s+kB/', $meminfo, $freeM);
+        preg_match('/Buffers:\s+(\d+)\s+kB/', $meminfo, $bufM);
+        preg_match('/^Cached:\s+(\d+)\s+kB/m', $meminfo, $cacheM);
+        preg_match('/SwapTotal:\s+(\d+)\s+kB/', $meminfo, $swapTotM);
+        preg_match('/SwapFree:\s+(\d+)\s+kB/', $meminfo, $swapFreeM);
+
+        $totKb = isset($totalM[1]) ? (float)$totalM[1] : 0;
+        $availKb = isset($availM[1]) ? (float)$availM[1] : 0;
+        $freeKb = isset($freeM[1]) ? (float)$freeM[1] : 0;
+        $bufKb = isset($bufM[1]) ? (float)$bufM[1] : 0;
+        $cacheKb = isset($cacheM[1]) ? (float)$cacheM[1] : 0;
+        $swapTotKb = isset($swapTotM[1]) ? (float)$swapTotM[1] : 0;
+        $swapFreeKb = isset($swapFreeM[1]) ? (float)$swapFreeM[1] : 0;
+
+        if ($totKb > 0) {
+            if ($availKb === 0.0) $availKb = $freeKb + $bufKb + $cacheKb;
+            $memData['total'] = $totKb * 1024;
+            $memData['available'] = $availKb * 1024;
+            $memData['free'] = $freeKb * 1024;
+            $memData['buffers'] = $bufKb * 1024;
+            $memData['cached'] = $cacheKb * 1024;
+            $memData['used'] = max(0, $memData['total'] - $memData['available']);
+            $memData['usage_pct'] = round(($memData['used'] / $memData['total']) * 100, 1);
+            $memData['swap_total'] = $swapTotKb * 1024;
+            $memData['swap_free'] = $swapFreeKb * 1024;
+            $memData['swap_used'] = max(0, ($swapTotKb - $swapFreeKb) * 1024);
+        }
+    }
+
+    $memProcs = [];
+    $psMem = @shell_exec("ps -eo pid,user,%cpu,%mem,comm,args --sort=-%mem 2>/dev/null | head -n 30");
+    if ($psMem) {
+        $lines = explode("\n", trim($psMem));
+        array_shift($lines);
+        foreach ($lines as $line) {
+            $parts = preg_split('/\s+/', trim($line), 6);
+            if (count($parts) >= 5) {
+                $comm = $parts[4];
+                if ($comm === 'ps' || $comm === 'head') continue;
+                $memProcs[] = [
+                    'pid' => (int)$parts[0],
+                    'user' => $parts[1],
+                    'cpu_pct' => (float)$parts[2],
+                    'mem_pct' => (float)$parts[3],
+                    'name' => $comm,
+                    'command' => isset($parts[5]) ? substr($parts[5], 0, 100) : $comm
+                ];
+            }
+        }
+    }
+
+    // 3. GPU Telemetry
+    $gpuData = get_gpu_telemetry();
+
+    // 4. Docker Stats Breakdown
+    $dockerStats = [];
+    $statsCacheFile = '/tmp/unraid_docker_stats.json';
+    $cached = false;
+    if (file_exists($statsCacheFile) && (time() - filemtime($statsCacheFile) < 3)) {
+        $cJson = @json_decode(@file_get_contents($statsCacheFile), true);
+        if (is_array($cJson)) {
+            $dockerStats = $cJson;
+            $cached = true;
+        }
+    }
+    if (!$cached) {
+        $statsOut = @shell_exec('timeout 3s docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}\t{{.ID}}" 2>/dev/null');
+        if (!empty($statsOut)) {
+            $lines = explode("\n", trim($statsOut));
+            foreach ($lines as $line) {
+                $cols = explode("\t", trim($line));
+                if (count($cols) >= 5) {
+                    $name = trim($cols[0]);
+                    $cpuRaw = str_replace('%', '', trim($cols[1]));
+                    $memRaw = trim($cols[2]);
+                    $memPctRaw = str_replace('%', '', trim($cols[3]));
+                    $netIoRaw = trim($cols[4]);
+                    $blockIo = isset($cols[5]) ? trim($cols[5]) : '';
+                    $cid = isset($cols[6]) ? trim($cols[6]) : '';
+
+                    $memParts = explode('/', $memRaw);
+                    $memUsedBytes = parse_bytes_string(trim($memParts[0]));
+                    $memTotalBytes = isset($memParts[1]) ? parse_bytes_string(trim($memParts[1])) : 0;
+
+                    $netParts = explode('/', $netIoRaw);
+                    $netRxBytes = isset($netParts[0]) ? parse_bytes_string(trim($netParts[0])) : 0;
+                    $netTxBytes = isset($netParts[1]) ? parse_bytes_string(trim($netParts[1])) : 0;
+
+                    $dockerStats[] = [
+                        'name' => $name,
+                        'cpu_pct' => (float)$cpuRaw,
+                        'mem_usage_str' => $memRaw,
+                        'mem_used_bytes' => $memUsedBytes,
+                        'mem_total_bytes' => $memTotalBytes,
+                        'mem_pct' => (float)$memPctRaw,
+                        'net_io_str' => $netIoRaw,
+                        'net_rx_bytes' => $netRxBytes,
+                        'net_tx_bytes' => $netTxBytes,
+                        'block_io' => $blockIo,
+                        'id' => $cid
+                    ];
+                }
+            }
+            @file_put_contents($statsCacheFile, json_encode($dockerStats), LOCK_EX);
+        }
+    }
+
+    // 5. VMs List
+    $vmsList = [];
+    $virshOut = @shell_exec('virsh list --all 2>/dev/null');
+    if ($virshOut) {
+        $lines = explode("\n", trim($virshOut));
+        if (count($lines) >= 3) {
+            array_shift($lines);
+            array_shift($lines);
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if (!$line) continue;
+                $parts = preg_split('/\s+/', $line, 3);
+                if (count($parts) >= 3) {
+                    $vmsList[] = [
+                        'id' => $parts[0] !== '-' ? (int)$parts[0] : null,
+                        'name' => $parts[1],
+                        'state' => $parts[2]
+                    ];
+                }
+            }
+        }
+    }
+
+    // 6. Network Interfaces
+    $interfaces = [];
+    $totalRx = 0;
+    $totalTx = 0;
+    $netDevLines = @file('/proc/net/dev');
+    $nowFloat = microtime(true);
+    $lastIfaceFile = '/tmp/unraid_ifaces_last.json';
+    $lastIfaces = [];
+    if (file_exists($lastIfaceFile)) {
+        $lastIfaces = @json_decode(@file_get_contents($lastIfaceFile), true) ?: [];
+    }
+    $newIfaceData = ['time' => $nowFloat, 'ifaces' => []];
+
+    if ($netDevLines) {
+        foreach ($netDevLines as $nLine) {
+            if (strpos($nLine, ':') === false) continue;
+            $parts = explode(':', $nLine);
+            $ifname = trim($parts[0]);
+            if ($ifname === 'lo') continue;
+
+            $vals = preg_split('/\s+/', trim($parts[1]));
+            $rx = (float)$vals[0];
+            $tx = (float)$vals[8];
+            $newIfaceData['ifaces'][$ifname] = ['rx' => $rx, 'tx' => $tx];
+
+            $rxBps = 0;
+            $txBps = 0;
+            if (isset($lastIfaces['ifaces'][$ifname]) && isset($lastIfaces['time'])) {
+                $dt = $nowFloat - (float)$lastIfaces['time'];
+                if ($dt > 0.2 && $dt < 60.0) {
+                    $dRx = $rx - (float)$lastIfaces['ifaces'][$ifname]['rx'];
+                    $dTx = $tx - (float)$lastIfaces['ifaces'][$ifname]['tx'];
+                    if ($dRx >= 0) $rxBps = round($dRx / $dt);
+                    if ($dTx >= 0) $txBps = round($dTx / $dt);
+                }
+            }
+
+            $isPhysical = (strpos($ifname, 'eth') === 0 || strpos($ifname, 'en') === 0);
+            $operState = @trim(@file_get_contents("/sys/class/net/{$ifname}/operstate")) ?: 'unknown';
+            $macAddr = @trim(@file_get_contents("/sys/class/net/{$ifname}/address")) ?: '';
+
+            $interfaces[] = [
+                'name' => $ifname,
+                'rx_bytes' => $rx,
+                'tx_bytes' => $tx,
+                'rx_bps' => $rxBps,
+                'tx_bps' => $txBps,
+                'state' => $operState,
+                'mac' => $macAddr,
+                'is_physical' => $isPhysical
+            ];
+
+            if ($isPhysical || $ifname === 'br0' || $ifname === 'bond0') {
+                $totalRx += $rx;
+                $totalTx += $tx;
+            }
+        }
+    }
+    @file_put_contents($lastIfaceFile, json_encode($newIfaceData), LOCK_EX);
+
+    // 7. History
+    $historyFile = '/tmp/unraid_metrics_history.json';
+    $history = [];
+    if (file_exists($historyFile)) {
+        $history = @json_decode(@file_get_contents($historyFile), true) ?: [];
+    }
+
+    json_output([
+        'status' => 'success',
+        'api_version' => UNRAID_API_VERSION,
+        'cpu' => [
+            'usage' => $cpuUsage,
+            'temp' => $cpuTemp,
+            'model' => $cpuModel,
+            'cores' => $cores,
+            'top_processes' => $cpuProcs
+        ],
+        'memory' => array_merge($memData, [
+            'top_processes' => $memProcs
+        ]),
+        'gpu' => $gpuData,
+        'network' => [
+            'total_rx_bytes' => $totalRx,
+            'total_tx_bytes' => $totalTx,
+            'interfaces' => $interfaces
+        ],
+        'dockers' => $dockerStats,
+        'vms' => $vmsList,
+        'history' => $history
     ]);
 }
