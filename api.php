@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.18.05
+ * Version: 2026.09.18.06
  * Release: 2026-09-18
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.18.05');
+define('UNRAID_API_VERSION', '2026.09.18.06');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -5039,6 +5039,196 @@ function update_metrics_history($cpuUsage, $memUsage, $gpuUsage, $rxBps, $txBps)
 }
 
 /**
+ * Calculate host aggregate RX and TX bytes without double-counting bridged or bonded NICs
+ */
+function calculate_host_net_totals($ifaceMap) {
+    $totalRx = 0;
+    $totalTx = 0;
+    $bridgedSlaves = [];
+    if (is_dir('/sys/class/net/br0/brif')) {
+        $slaves = @scandir('/sys/class/net/br0/brif');
+        if ($slaves) {
+            foreach ($slaves as $s) {
+                if ($s !== '.' && $s !== '..') $bridgedSlaves[$s] = true;
+            }
+        }
+    }
+    if (is_dir('/sys/class/net/bond0/bonding')) {
+        $bSlaves = @file_get_contents('/sys/class/net/bond0/bonding/slaves');
+        if ($bSlaves) {
+            foreach (preg_split('/\s+/', trim($bSlaves)) as $bs) {
+                if ($bs) $bridgedSlaves[$bs] = true;
+            }
+        }
+    }
+
+    if (isset($ifaceMap['br0'])) {
+        $totalRx += $ifaceMap['br0']['rx'];
+        $totalTx += $ifaceMap['br0']['tx'];
+        foreach ($ifaceMap as $ifname => $idata) {
+            if ($ifname !== 'br0' && !empty($idata['is_physical']) && empty($bridgedSlaves[$ifname])) {
+                $totalRx += $idata['rx'];
+                $totalTx += $idata['tx'];
+            }
+        }
+    } elseif (isset($ifaceMap['bond0'])) {
+        $totalRx += $ifaceMap['bond0']['rx'];
+        $totalTx += $ifaceMap['bond0']['tx'];
+        foreach ($ifaceMap as $ifname => $idata) {
+            if ($ifname !== 'bond0' && !empty($idata['is_physical']) && empty($bridgedSlaves[$ifname])) {
+                $totalRx += $idata['rx'];
+                $totalTx += $idata['tx'];
+            }
+        }
+    } else {
+        foreach ($ifaceMap as $ifname => $idata) {
+            if (!empty($idata['is_physical'])) {
+                $totalRx += $idata['rx'];
+                $totalTx += $idata['tx'];
+            }
+        }
+    }
+
+    if ($totalRx == 0 && !empty($ifaceMap)) {
+        foreach ($ifaceMap as $ifname => $idata) {
+            if ($ifname !== 'lo' && $idata['rx'] > $totalRx) {
+                $totalRx = $idata['rx'];
+                $totalTx = $idata['tx'];
+            }
+        }
+    }
+    return ['rx' => $totalRx, 'tx' => $totalTx];
+}
+
+/**
+ * Rolling 24-hour network traffic telemetry accumulator for Host, Dockers, VMs, and Processes
+ */
+function update_24h_net_telemetry(&$hostNetwork, &$dockerStats, &$vmsList, &$netProcs) {
+    $now = time();
+    $cacheFile = '/tmp/unraid_net_24h.json';
+    $data = [];
+    if (file_exists($cacheFile)) {
+        $data = @json_decode(@file_get_contents($cacheFile), true);
+    }
+    if (!is_array($data)) $data = [];
+    if (!isset($data['entities']) || !is_array($data['entities'])) {
+        $data['entities'] = [];
+    }
+
+    $updateEntity = function(&$entities, $key, $currRx, $currTx) use ($now) {
+        $currRx = max(0, (float)$currRx);
+        $currTx = max(0, (float)$currTx);
+
+        if (!isset($entities[$key])) {
+            $entities[$key] = [
+                'last_rx' => $currRx,
+                'last_tx' => $currTx,
+                'mono_rx' => $currRx,
+                'mono_tx' => $currTx,
+                'samples' => [
+                    ['t' => $now, 'rx' => 0, 'tx' => 0]
+                ]
+            ];
+            return ['rx_24h' => $currRx, 'tx_24h' => $currTx];
+        }
+
+        $ent = &$entities[$key];
+        // Calculate deltas, handling counter wraps or restarts
+        $dRx = ($currRx >= $ent['last_rx']) ? ($currRx - $ent['last_rx']) : $currRx;
+        $dTx = ($currTx >= $ent['last_tx']) ? ($currTx - $ent['last_tx']) : $currTx;
+
+        $ent['mono_rx'] = (float)$ent['mono_rx'] + $dRx;
+        $ent['mono_tx'] = (float)$ent['mono_tx'] + $dTx;
+        $ent['last_rx'] = $currRx;
+        $ent['last_tx'] = $currTx;
+
+        if (!isset($ent['samples']) || !is_array($ent['samples']) || empty($ent['samples'])) {
+            $ent['samples'] = [['t' => $now, 'rx' => $ent['mono_rx'], 'tx' => $ent['mono_tx']]];
+        } else {
+            // Append sample at most every 5 minutes (300s)
+            $lastSample = end($ent['samples']);
+            if (($now - (int)$lastSample['t']) >= 300) {
+                $ent['samples'][] = ['t' => $now, 'rx' => $ent['mono_rx'], 'tx' => $ent['mono_tx']];
+            }
+        }
+
+        // Prune samples older than 24 hours (86400s)
+        $cutoff = $now - 86400;
+        while (count($ent['samples']) > 1 && $ent['samples'][0]['t'] < $cutoff) {
+            array_shift($ent['samples']);
+        }
+
+        // Calculate 24h delta
+        $baseline = $ent['samples'][0];
+        $rx24h = max(0, $ent['mono_rx'] - (float)$baseline['rx']);
+        $tx24h = max(0, $ent['mono_tx'] - (float)$baseline['tx']);
+
+        // If tracking just started (< 280 samples = < 24h), blend with lifetime cumulative bytes
+        if (count($ent['samples']) < 280) {
+            $rx24h = max($rx24h, $currRx);
+            $tx24h = max($tx24h, $currTx);
+        }
+
+        return ['rx_24h' => $rx24h, 'tx_24h' => $tx24h];
+    };
+
+    // 1. Host
+    $hostRx = isset($hostNetwork['total_rx_bytes']) ? $hostNetwork['total_rx_bytes'] : 0;
+    $hostTx = isset($hostNetwork['total_tx_bytes']) ? $hostNetwork['total_tx_bytes'] : 0;
+    $host24h = $updateEntity($data['entities'], 'host', $hostRx, $hostTx);
+    $hostNetwork['rx_24h_bytes'] = $host24h['rx_24h'];
+    $hostNetwork['tx_24h_bytes'] = $host24h['tx_24h'];
+
+    // 2. Dockers
+    if (is_array($dockerStats)) {
+        foreach ($dockerStats as &$d) {
+            $dName = isset($d['name']) ? $d['name'] : '';
+            if (!$dName) continue;
+            $dRx = isset($d['net_rx_bytes']) ? $d['net_rx_bytes'] : 0;
+            $dTx = isset($d['net_tx_bytes']) ? $d['net_tx_bytes'] : 0;
+            $res = $updateEntity($data['entities'], "docker:{$dName}", $dRx, $dTx);
+            $d['rx_24h_bytes'] = $res['rx_24h'];
+            $d['tx_24h_bytes'] = $res['tx_24h'];
+        }
+        unset($d);
+    }
+
+    // 3. VMs
+    if (is_array($vmsList)) {
+        foreach ($vmsList as &$v) {
+            $vName = isset($v['name']) ? $v['name'] : '';
+            if (!$vName) continue;
+            $vRx = isset($v['net_rx_bytes']) ? $v['net_rx_bytes'] : 0;
+            $vTx = isset($v['net_tx_bytes']) ? $v['net_tx_bytes'] : 0;
+            $res = $updateEntity($data['entities'], "vm:{$vName}", $vRx, $vTx);
+            $v['rx_24h_bytes'] = $res['rx_24h'];
+            $v['tx_24h_bytes'] = $res['tx_24h'];
+        }
+        unset($v);
+    }
+
+    // 4. Processes
+    if (is_array($netProcs)) {
+        foreach ($netProcs as &$p) {
+            $pName = isset($p['name']) ? $p['name'] : (isset($p['pid']) ? "pid_{$p['pid']}" : 'proc');
+            $pRx = isset($p['net_rx_bytes']) ? $p['net_rx_bytes'] : 0;
+            $pTx = isset($p['net_tx_bytes']) ? $p['net_tx_bytes'] : 0;
+            $res = $updateEntity($data['entities'], "proc:{$pName}", $pRx, $pTx);
+            $p['rx_24h_bytes'] = $res['rx_24h'];
+            $p['tx_24h_bytes'] = $res['tx_24h'];
+        }
+        unset($p);
+    }
+
+    // Write back throttled (at most once every 2 seconds)
+    $lastSave = isset($data['last_save']) ? (int)$data['last_save'] : 0;
+    if (($now - $lastSave) >= 2) {
+        $data['last_save'] = $now;
+        @file_put_contents($cacheFile, json_encode($data), LOCK_EX);
+    }
+}
+
+/**
  * Handle action=metrics_detail for 4 drill-down pages
  */
 function handle_metrics_detail() {
@@ -5050,8 +5240,7 @@ function handle_metrics_detail() {
         // Fast path for NetworkDetailsScreen (< 150ms execution time)
         // 1. Interfaces & host RX/TX rates
         $interfaces = [];
-        $totalRx = 0;
-        $totalTx = 0;
+        $ifaceMap = [];
         $netDevLines = @file('/proc/net/dev');
         $lastIfaceFile = '/tmp/unraid_ifaces_last.json';
         $lastIfaces = [];
@@ -5098,14 +5287,15 @@ function handle_metrics_detail() {
                     'mac' => $macAddr,
                     'is_physical' => $isPhysical
                 ];
-
-                if ($isPhysical || $ifname === 'br0' || $ifname === 'bond0') {
-                    $totalRx += $rx;
-                    $totalTx += $tx;
-                }
+                $ifaceMap[$ifname] = ['rx' => $rx, 'tx' => $tx, 'is_physical' => $isPhysical];
             }
         }
         @file_put_contents($lastIfaceFile, json_encode($newIfaceData), LOCK_EX);
+
+        // Calculate host total RX & TX without double counting bridged/bonded physical NICs
+        $hostTotals = calculate_host_net_totals($ifaceMap);
+        $totalRx = $hostTotals['rx'];
+        $totalTx = $hostTotals['tx'];
 
         // Calculate host real-time rate
         $hostRxBps = 0;
@@ -5282,6 +5472,13 @@ function handle_metrics_detail() {
         // 4. Network top processes
         $netProcs = get_network_top_processes();
 
+        // 4.5 Accumulate 24-hour rolling network telemetry for host, dockers, vms, and processes
+        $hostNetData = [
+            'total_rx_bytes' => $totalRx,
+            'total_tx_bytes' => $totalTx,
+        ];
+        update_24h_net_telemetry($hostNetData, $dockerStats, $vmsList, $netProcs);
+
         // 5. Update metrics history with host network rates
         $history = update_metrics_history(null, null, null, $hostRxBps, $hostTxBps);
 
@@ -5293,6 +5490,8 @@ function handle_metrics_detail() {
                 'total_tx_bytes' => $totalTx,
                 'rx_bytes' => $totalRx,
                 'tx_bytes' => $totalTx,
+                'rx_24h_bytes' => isset($hostNetData['rx_24h_bytes']) ? $hostNetData['rx_24h_bytes'] : 0,
+                'tx_24h_bytes' => isset($hostNetData['tx_24h_bytes']) ? $hostNetData['tx_24h_bytes'] : 0,
                 'rx_bps' => $hostRxBps,
                 'tx_bps' => $hostTxBps,
                 'interfaces' => $interfaces,
@@ -5652,8 +5851,7 @@ function handle_metrics_detail() {
 
     // 6. Network Interfaces
     $interfaces = [];
-    $totalRx = 0;
-    $totalTx = 0;
+    $ifaceMap = [];
     $netDevLines = @file('/proc/net/dev');
     $lastIfaceFile = '/tmp/unraid_ifaces_last.json';
     $lastIfaces = [];
@@ -5700,14 +5898,15 @@ function handle_metrics_detail() {
                 'mac' => $macAddr,
                 'is_physical' => $isPhysical
             ];
-
-            if ($isPhysical || $ifname === 'br0' || $ifname === 'bond0') {
-                $totalRx += $rx;
-                $totalTx += $tx;
-            }
+            $ifaceMap[$ifname] = ['rx' => $rx, 'tx' => $tx, 'is_physical' => $isPhysical];
         }
     }
     @file_put_contents($lastIfaceFile, json_encode($newIfaceData), LOCK_EX);
+
+    // Calculate host total RX & TX without double counting bridged/bonded physical NICs
+    $hostTotals = calculate_host_net_totals($ifaceMap);
+    $totalRx = $hostTotals['rx'];
+    $totalTx = $hostTotals['tx'];
 
     // Calculate host-level real-time network speed differential
     $hostRxBps = 0;
@@ -5729,6 +5928,13 @@ function handle_metrics_detail() {
 
     // 6.5 Top Network Processes with live rates
     $netProcs = get_network_top_processes();
+
+    // 6.8 Accumulate 24-hour rolling network telemetry for host, dockers, vms, and processes
+    $hostNetData = [
+        'total_rx_bytes' => $totalRx,
+        'total_tx_bytes' => $totalTx,
+    ];
+    update_24h_net_telemetry($hostNetData, $dockerStats, $vmsList, $netProcs);
 
     // 7. Update 5-minute rolling metrics history
     $history = update_metrics_history($cpuUsage, isset($memData['usage_pct']) ? $memData['usage_pct'] : 0, isset($gpuData['usage']) ? $gpuData['usage'] : (isset($gpuData['utilization']) ? $gpuData['utilization'] : 0), $hostRxBps, $hostTxBps);
@@ -5752,6 +5958,8 @@ function handle_metrics_detail() {
             'total_tx_bytes' => $totalTx,
             'rx_bytes' => $totalRx,
             'tx_bytes' => $totalTx,
+            'rx_24h_bytes' => isset($hostNetData['rx_24h_bytes']) ? $hostNetData['rx_24h_bytes'] : 0,
+            'tx_24h_bytes' => isset($hostNetData['tx_24h_bytes']) ? $hostNetData['tx_24h_bytes'] : 0,
             'rx_bps' => $hostRxBps,
             'tx_bps' => $hostTxBps,
             'interfaces' => $interfaces,

@@ -104,24 +104,31 @@ export default function MetricsLineChart({
   const result1 = useMemo(() => pathGen1(chartWidth), [pathGen1, chartWidth]);
   const result2 = useMemo(() => (pathGen2 ? pathGen2(chartWidth) : null), [pathGen2, chartWidth]);
 
-  // Statistical calculations
+  // Statistical calculations computed strictly from raw valid data points (no padding distortion)
   const stats1 = useMemo(() => {
-    if (normalizedData1.length === 0) return { current: 0, max: 0, avg: 0 };
-    const curr = normalizedData1[normalizedData1.length - 1] || 0;
-    const max = Math.max(...normalizedData1);
-    const sum = normalizedData1.reduce((acc, v) => acc + v, 0);
-    const avg = sum / normalizedData1.length;
+    const rawList = (Array.isArray(data) ? data : [])
+      .map(v => (typeof v === 'number' ? v : (typeof v?.value === 'number' ? v.value : Number(v))))
+      .filter(v => typeof v === 'number' && !isNaN(v) && isFinite(v));
+    if (rawList.length === 0) return { current: 0, max: 0, avg: 0 };
+    const curr = rawList[rawList.length - 1] || 0;
+    const max = Math.max(...rawList);
+    const sum = rawList.reduce((acc, v) => acc + v, 0);
+    const avg = sum / rawList.length;
     return { current: curr, max, avg };
-  }, [normalizedData1]);
+  }, [data]);
 
   const stats2 = useMemo(() => {
-    if (!normalizedData2 || normalizedData2.length === 0) return null;
-    const curr = normalizedData2[normalizedData2.length - 1] || 0;
-    const max = Math.max(...normalizedData2);
-    const sum = normalizedData2.reduce((acc, v) => acc + v, 0);
-    const avg = sum / normalizedData2.length;
+    if (!data2) return null;
+    const rawList = (Array.isArray(data2) ? data2 : [])
+      .map(v => (typeof v === 'number' ? v : (typeof v?.value === 'number' ? v.value : Number(v))))
+      .filter(v => typeof v === 'number' && !isNaN(v) && isFinite(v));
+    if (rawList.length === 0) return { current: 0, max: 0, avg: 0 };
+    const curr = rawList[rawList.length - 1] || 0;
+    const max = Math.max(...rawList);
+    const sum = rawList.reduce((acc, v) => acc + v, 0);
+    const avg = sum / rawList.length;
     return { current: curr, max, avg };
-  }, [normalizedData2]);
+  }, [data2]);
 
   const formatText = (num) => {
     if (formatValue) return formatValue(num);

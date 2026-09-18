@@ -49,14 +49,20 @@ export default function NetworkDetailsScreen({ navigation, route }) {
   const [refreshing, setRefreshing] = useState(false);
   const [filterTab, setFilterTab] = useState('all'); // 'all' | 'docker' | 'vm' | 'process'
 
-  const [currentSpeeds, setCurrentSpeeds] = useState({
-    rx: initialNetSpeed?.down || initialNetSpeed?.rx || 0,
-    tx: initialNetSpeed?.up || initialNetSpeed?.tx || 0,
+  const [currentSpeeds, setCurrentSpeeds] = useState(() => {
+    let rx = initialNetSpeed?.rx ?? initialNetSpeed?.down ?? 0;
+    let tx = initialNetSpeed?.tx ?? initialNetSpeed?.up ?? 0;
+    return {
+      rx: typeof rx === 'number' ? rx : Number(rx) || 0,
+      tx: typeof tx === 'number' ? tx : Number(tx) || 0,
+    };
   });
 
   const [networkData, setNetworkData] = useState({
     total_rx_bytes: 0,
     total_tx_bytes: 0,
+    rx_24h_bytes: 0,
+    tx_24h_bytes: 0,
     interfaces: [],
     top_processes: [],
   });
@@ -115,6 +121,8 @@ export default function NetworkDetailsScreen({ navigation, route }) {
           ...json.network,
           total_rx_bytes: json.network.total_rx_bytes ?? json.network.rx_bytes ?? prev.total_rx_bytes,
           total_tx_bytes: json.network.total_tx_bytes ?? json.network.tx_bytes ?? prev.total_tx_bytes,
+          rx_24h_bytes: json.network.rx_24h_bytes ?? prev.rx_24h_bytes ?? 0,
+          tx_24h_bytes: json.network.tx_24h_bytes ?? prev.tx_24h_bytes ?? 0,
           interfaces: Array.isArray(json.network.interfaces) ? json.network.interfaces : prev.interfaces,
           top_processes: Array.isArray(json.network.top_processes) ? json.network.top_processes : prev.top_processes,
         }));
@@ -212,6 +220,9 @@ export default function NetworkDetailsScreen({ navigation, route }) {
       txBps = typeof txBps === 'number' && !isNaN(txBps) && isFinite(txBps) ? Math.max(0, txBps) : 0;
       newMap[id] = { rx: rxBytes, tx: txBytes, time: now };
 
+      const rx24h = typeof d.rx_24h_bytes === 'number' ? d.rx_24h_bytes : rxBytes;
+      const tx24h = typeof d.tx_24h_bytes === 'number' ? d.tx_24h_bytes : txBytes;
+
       list.push({
         type: 'docker',
         id,
@@ -221,8 +232,10 @@ export default function NetworkDetailsScreen({ navigation, route }) {
         total_bps: rxBps + txBps,
         total_rx: rxBytes,
         total_tx: txBytes,
+        rx_24h: rx24h,
+        tx_24h: tx24h,
         rawStr: d.net_io_str || `${formatBytes(rxBytes)} / ${formatBytes(txBytes)}`,
-        sub: `容器 · 累计: 接收 ${formatBytes(rxBytes)} · 发送 ${formatBytes(txBytes)}`,
+        sub: `总累计: ↓ ${formatBytes(rxBytes)} · ↑ ${formatBytes(txBytes)}`,
         raw: d,
       });
     });
@@ -250,7 +263,10 @@ export default function NetworkDetailsScreen({ navigation, route }) {
       txBps = typeof txBps === 'number' && !isNaN(txBps) && isFinite(txBps) ? Math.max(0, txBps) : 0;
       newMap[id] = { rx: rxBytes, tx: txBytes, time: now };
 
+      const rx24h = typeof v.rx_24h_bytes === 'number' ? v.rx_24h_bytes : rxBytes;
+      const tx24h = typeof v.tx_24h_bytes === 'number' ? v.tx_24h_bytes : txBytes;
       const isRunning = v.state === 'running';
+
       list.push({
         type: 'vm',
         id,
@@ -260,8 +276,10 @@ export default function NetworkDetailsScreen({ navigation, route }) {
         total_bps: isRunning ? (rxBps + txBps) : 0,
         total_rx: rxBytes,
         total_tx: txBytes,
+        rx_24h: rx24h,
+        tx_24h: tx24h,
         rawStr: `${formatBytes(rxBytes)} / ${formatBytes(txBytes)}`,
-        sub: `虚拟机 (${isRunning ? '运行中' : '已关机'}) · 累计: 接收 ${formatBytes(rxBytes)} · 发送 ${formatBytes(txBytes)}`,
+        sub: `总累计: ↓ ${formatBytes(rxBytes)} · ↑ ${formatBytes(txBytes)} · ${isRunning ? '运行中' : '已关机'}`,
         raw: v,
       });
     });
@@ -289,6 +307,9 @@ export default function NetworkDetailsScreen({ navigation, route }) {
       txBps = typeof txBps === 'number' && !isNaN(txBps) && isFinite(txBps) ? Math.max(0, txBps) : 0;
       newMap[id] = { rx: rxBytes, tx: txBytes, time: now };
 
+      const rx24h = typeof p.rx_24h_bytes === 'number' ? p.rx_24h_bytes : rxBytes;
+      const tx24h = typeof p.tx_24h_bytes === 'number' ? p.tx_24h_bytes : txBytes;
+
       list.push({
         type: 'process',
         id,
@@ -299,8 +320,10 @@ export default function NetworkDetailsScreen({ navigation, route }) {
         total_bps: rxBps + txBps,
         total_rx: rxBytes,
         total_tx: txBytes,
+        rx_24h: rx24h,
+        tx_24h: tx24h,
         rawStr: `${formatBytes(rxBytes)} / ${formatBytes(txBytes)}`,
-        sub: `进程 PID ${p.pid || 'N/A'} · ${p.conns || 1} 个活跃连接 · ${p.command || p.name || '未知命令'}`,
+        sub: `总I/O: ↓ ${formatBytes(rxBytes)} · ↑ ${formatBytes(txBytes)} · PID ${p.pid || 'N/A'}${p.command ? ` · ${p.command}` : ''}`,
         raw: p,
       });
     });
@@ -355,7 +378,7 @@ export default function NetworkDetailsScreen({ navigation, route }) {
             <View style={{ marginLeft: 10 }}>
               <Text style={styles.cardTitle}>实时网络吞吐</Text>
               <Text style={styles.cardSub}>
-                累计接收 {formatBytes(networkData.total_rx_bytes)} · 累计发送 {formatBytes(networkData.total_tx_bytes)}
+                物理网卡与桥接聚合 · 自动避免双重计数
               </Text>
             </View>
           </View>
@@ -385,6 +408,42 @@ export default function NetworkDetailsScreen({ navigation, route }) {
             <Text style={[styles.speedNumber, { color: colors.networkUp }]}>
               {formatSpeed(currentSpeeds.tx)}
             </Text>
+          </View>
+        </View>
+
+        {/* Dedicated Cumulative Traffic Badges */}
+        <View style={styles.cumulativeSection}>
+          <View style={styles.cumulativeHeader}>
+            <Text style={styles.cumulativeSectionTitle}>流量统计</Text>
+            {(networkData.rx_24h_bytes > 0 || networkData.tx_24h_bytes > 0) && (
+              <Text style={styles.cumulative24hBadge}>
+                24h: ↓ {formatBytes(networkData.rx_24h_bytes)} · ↑ {formatBytes(networkData.tx_24h_bytes)}
+              </Text>
+            )}
+          </View>
+
+          <View style={styles.cumulativeRow}>
+            {/* Cumulative Download */}
+            <View style={[styles.cumulativePill, { backgroundColor: isDark ? 'rgba(34, 197, 94, 0.08)' : 'rgba(34, 197, 94, 0.06)' }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <ArrowDown size={12} color={colors.networkDown} style={{ marginRight: 4 }} />
+                <Text style={[styles.cumulativePillLabel, { color: colors.sub }]}>累计接收 (下载)</Text>
+              </View>
+              <Text style={[styles.cumulativePillValue, { color: colors.networkDown }]}>
+                {formatBytes(networkData.total_rx_bytes)}
+              </Text>
+            </View>
+
+            {/* Cumulative Upload */}
+            <View style={[styles.cumulativePill, { backgroundColor: isDark ? 'rgba(168, 85, 247, 0.08)' : 'rgba(168, 85, 247, 0.06)' }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <ArrowUp size={12} color={colors.networkUp} style={{ marginRight: 4 }} />
+                <Text style={[styles.cumulativePillLabel, { color: colors.sub }]}>累计发送 (上传)</Text>
+              </View>
+              <Text style={[styles.cumulativePillValue, { color: colors.networkUp }]}>
+                {formatBytes(networkData.total_tx_bytes)}
+              </Text>
+            </View>
           </View>
         </View>
       </View>
@@ -523,6 +582,19 @@ export default function NetworkDetailsScreen({ navigation, route }) {
                     <View style={[styles.liveSpeedBarFill, { width: barWidth, backgroundColor: colors.networkDown }]} />
                   </View>
                 )}
+
+                {/* 24-Hour Rolling Cumulative Traffic */}
+                <View style={styles.cumTrafficRow}>
+                  <View style={styles.cumBadge}>
+                    <Text style={styles.cumBadgeLabel}>24h累计</Text>
+                  </View>
+                  <Text style={styles.cumTrafficText}>
+                    ↓ {formatBytes(item.rx_24h)}   ↑ {formatBytes(item.tx_24h)}
+                  </Text>
+                  <Text style={styles.cumTrafficTotal}>
+                    (合计 {formatBytes((item.rx_24h || 0) + (item.tx_24h || 0))})
+                  </Text>
+                </View>
 
                 {/* Subtitle Information */}
                 <Text style={styles.itemSub} numberOfLines={1}>
@@ -664,6 +736,52 @@ function createStyles(colors, isDark) {
       fontWeight: '900',
       fontFamily: 'monospace',
     },
+    cumulativeSection: {
+      marginTop: 14,
+      paddingTop: 12,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.divider,
+    },
+    cumulativeHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 8,
+    },
+    cumulativeSectionTitle: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.textStrong,
+    },
+    cumulative24hBadge: {
+      fontSize: 11,
+      fontWeight: '600',
+      color: colors.networkDown,
+      fontFamily: 'monospace',
+    },
+    cumulativeRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      marginHorizontal: -4,
+    },
+    cumulativePill: {
+      flex: 1,
+      padding: 10,
+      borderRadius: 10,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.divider,
+      marginHorizontal: 4,
+    },
+    cumulativePillLabel: {
+      fontSize: 11,
+      fontWeight: '600',
+    },
+    cumulativePillValue: {
+      fontSize: 15,
+      fontWeight: '800',
+      fontFamily: 'monospace',
+      marginTop: 4,
+    },
     sectionHeader: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -787,6 +905,36 @@ function createStyles(colors, isDark) {
     liveSpeedBarFill: {
       height: '100%',
       borderRadius: 2,
+    },
+    cumTrafficRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: 7,
+      flexWrap: 'wrap',
+    },
+    cumBadge: {
+      backgroundColor: isDark ? 'rgba(59, 130, 246, 0.16)' : 'rgba(59, 130, 246, 0.10)',
+      paddingHorizontal: 5,
+      paddingVertical: 1.5,
+      borderRadius: 4,
+      marginRight: 6,
+    },
+    cumBadgeLabel: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: colors.accent,
+    },
+    cumTrafficText: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: colors.textStrong,
+      fontFamily: 'monospace',
+    },
+    cumTrafficTotal: {
+      fontSize: 10,
+      color: colors.muted,
+      marginLeft: 6,
+      fontFamily: 'monospace',
     },
     itemSub: {
       fontSize: 10,
