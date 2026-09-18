@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import {
-  StyleSheet, Text, View, ScrollView, ActivityIndicator, TouchableOpacity,
+  StyleSheet, Text, View, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity,
   TextInput, Platform
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -18,6 +18,7 @@ export default function VmDetailsScreen() {
 
   const [vms, setVms] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [operatingVm, setOperatingVm] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'running' | 'stopped'
@@ -75,6 +76,17 @@ export default function VmDetailsScreen() {
       console.log('获取 VM 失败', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await fetchVmData();
+    } catch (e) {
+      console.log('VM onRefresh err:', e);
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -279,6 +291,14 @@ export default function VmDetailsScreen() {
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.accent}
+            colors={[colors.accent]}
+          />
+        }
       >
         {filteredVms.map((vm, index) => {
           const isRunning = vm.status === 'running';

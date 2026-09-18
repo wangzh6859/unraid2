@@ -23,6 +23,7 @@ export default function DockerDetailsScreen({ route }) {
 
   const [dockers, setDockers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'running' | 'stopped'
   const [sortRule, setSortRule] = useState('name'); // 'name' | 'status' | 'cpu' // 'status' | 'name' | 'cpu'
@@ -160,6 +161,21 @@ export default function DockerDetailsScreen({ route }) {
     setProxyConfig(pCfg);
     setDockerAliases(aliases || {});
     setServerUrl(savedUrl || '');
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        fetchDockerData(),
+        fetchComposeProjects(),
+        loadProxyData(),
+      ]);
+    } catch (e) {
+      console.log('Docker onRefresh err:', e);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   
@@ -1019,6 +1035,14 @@ export default function DockerDetailsScreen({ route }) {
           <ScrollView
             contentContainerStyle={styles.content}
             showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor={colors.accent}
+                colors={[colors.accent]}
+              />
+            }
           >
             {filteredComposeProjects.map((project, idx) => {
               const isRunning = project.status === 'running';
@@ -1295,6 +1319,14 @@ export default function DockerDetailsScreen({ route }) {
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.accent}
+            colors={[colors.accent]}
+          />
+        }
       >
         {processedDockers.map((docker, index) => {
           const rawMem = String(docker.memory || docker.mem || '');

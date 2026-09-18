@@ -4,6 +4,48 @@
 
 ---
 
+## [v1.4.226] - 2026-09-18
+> **核心主题**：全面根治 TXT 预览 `Call to undefined function iconv()` 崩溃；重构 GPU 遥测引擎，捕获 Unraid 官方 gpustatus 实时输出，解决占用率锁死 0%；全局所有页面覆盖下拉刷新（Pull-to-Refresh）逻辑。
+
+### 📚 彻底根治 TXT 文本预览 `Call to undefined function iconv()` 500 异常
+- **用户反馈**：
+  - 用户反馈：「部分txt文件预览失败，如图所示」，图片显示读取 650KB 中文小说《淫荡女友筱夕》时报错：`文本读取未响应，读取文本异常: Call to undefined function iconv()`。
+- **根因分析**：
+  - Unraid Slackware 原生 PHP 环境多以精简模块编译，未包含/未开启可选的 `iconv` 扩展；
+  - 在 `api.php` 的 `handle_file_read()` 中，对 `GB18030//IGNORE` 与 `BIG5//IGNORE` 的转码直接调用了 `@iconv(...)`。在 PHP 中，`@` 仅抑制 Warning/Notice，对「未定义函数」会抛出无法抑制的致命 Error，导致 HTTP 500。
+- **修复方案**：
+  - 构建健壮的高容错转码体系 `safe_convert_encoding` 与 `safe_scrub_utf8`：
+    - 优先采用 PHP 8+ 标配且 100% 内置的 `mb_convert_encoding($content, 'UTF-8', ['GB18030', 'GBK', 'CP936', 'BIG5', 'EUC-CN', 'ISO-8859-1'])`；
+    - 对所有 `iconv` 调用全面施加 `function_exists('iconv')` 前置条件保护，即使系统完全无 iconv 扩展也绝不崩溃；
+    - 结合尾部边界残缺字节智能回退探测，大文本与各编码小说即点即开。
+
+### ⚡ 重构 GPU 遥测引擎（捕获 gpustatus 实时 STDOUT，根治 0% 占用率）
+- **用户反馈**：
+  - 用户反馈：「还有一个问题，现在GPU占用情况获取不到了，一直是0%」。
+- **根因剖析**：
+  - Unraid 官方 GPU Statistics 插件（`gpustatus.php`）在执行时直接向 **标准输出 (STDOUT)** 打印包含 `util`、`temp`、`clock`、`memused`、`memtotal`、`power` 的 JSON 数据；此前代码执行了 `>/dev/null 2>&1`，将新鲜出炉的实时监控数据全部丢弃；
+  - `/tmp/gpustat.json` 文件此前施加了过严的 `fileAge <= 5` 秒判断，一旦稍有延迟即被丢弃；
+  - 在 Intel 核显分支中，执行 `timeout 1s intel_gpu_top -J -s 120` 时未传入 `-n 2` 参数，`intel_gpu_top` 在无限循环中被 SIGTERM 硬杀，导致输出的 JSON 流在末尾被截断，`json_decode` 语法解析失败返回 `null`，进而无脑执行 `return $gpuData`（$usage 为 0），将正常可用的 gpustat 数据彻底屏蔽！
+- **修复方案**：
+  - **直接捕获实时 STDOUT**：`php gpustatus.php 2>/dev/null` 直接接管输出，提取 JSON 结构体中的 `util`、`gpu`、`usage`、`load`、`3drender` 等全系利用率指标及温度、时钟、显存；
+  - **Intel GPU TOP 规范双采样退出**：引入 `-n 2`（采样 1 建立基线，采样 2 计算增量负载），到期自动输出合法的 JSON 数组并自然退出，杜绝输出截断；
+  - **多源智能互补与融合**：当直接硬件探测未激活时，自动无缝提取 `gpustat` 的利用率与显存数据，绝不在有真实负载时输出 0%。
+
+### 🔄 全局所有页面全面覆盖下拉刷新（Pull-to-Refresh）逻辑
+- **用户需求**：
+  - 用户要求：「所有页面都要加上一个下拉刷新信息的逻辑。」
+- **覆盖落地**：
+  - **仪表盘 (DashboardScreen)**：已配置实时下下拉刷新，触发 CPU/RAM/GPU/网络及阵列状态全量更新；
+  - **文件管理 (FilesScreen)**：已配置下拉刷新，触发当前目录重新扫描与面包屑状态同步；
+  - **SMART 诊断 (SmartDetailsScreen)**：已配置下拉刷新，强制绕过缓存拉取最新磁盘健康度与属性；
+  - **Docker 与 Compose (DockerDetailsScreen)**：容器列表与 Compose 堆栈两大赛道均注入 `RefreshControl`，下拉同步刷新容器列表、Compose 堆栈与反代配置；
+  - **虚拟机管理 (VmDetailsScreen)**：注入 `RefreshControl`，下拉即时同步各 VM 状态与统计看板；
+  - **存储与阵列 (StorageDetailsScreen)**：注入 `RefreshControl`，下拉即时拉取各磁盘扇区读写、温度、缓存池与奇偶校验状态；
+  - **系统设置 (SettingsScreen)**：注入 `RefreshControl`，下拉即时重新加载存储授权、缓存用量统计与后端 API 版本检测。
+  - 全局统一主题色（`colors.accent`），手感顺滑自然。
+
+---
+
 ## [v1.4.225] - 2026-09-18
 > **核心主题**：重构 Android 原生 SafCache 模块（基于 DocumentFile），彻底解决缓存落盘在下载根目录的问题；实施严密的 temp/ 隔离保护，清空缓存仅清理 temp 内部文件，绝对保护 temp 文件夹、下载目录及用户正式下载文件！
 

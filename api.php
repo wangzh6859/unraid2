@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.17.08
- * Release: 2026-09-17
+ * Version: 2026.09.18.01
+ * Release: 2026-09-18
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.17.08');
+define('UNRAID_API_VERSION', '2026.09.18.01');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -570,6 +570,44 @@ switch ($action) {
 }
 
 // -------------------------------------------------------------
+// Safe Encoding & Scrubbing Helpers (Zero dependency on optional iconv extension)
+// -------------------------------------------------------------
+function safe_convert_encoding($str, $to = 'UTF-8', $from = ['GB18030', 'GBK', 'CP936', 'BIG5', 'EUC-CN', 'ISO-8859-1']) {
+    if (!is_string($str) || $str === '') return $str;
+    if (function_exists('mb_convert_encoding')) {
+        $converted = @mb_convert_encoding($str, $to, $from);
+        if ($converted !== false && strlen($converted) > 0) {
+            return $converted;
+        }
+    }
+    if (function_exists('iconv')) {
+        $fromList = is_array($from) ? $from : [$from];
+        foreach ($fromList as $enc) {
+            $converted = @iconv($enc . '//IGNORE', $to, $str);
+            if ($converted !== false && strlen($converted) > 0) {
+                return $converted;
+            }
+        }
+    }
+    return $str;
+}
+
+function safe_scrub_utf8($str) {
+    if (!is_string($str) || $str === '') return $str;
+    if (function_exists('mb_scrub')) {
+        return @mb_scrub($str, 'UTF-8');
+    }
+    if (function_exists('mb_convert_encoding')) {
+        return @mb_convert_encoding($str, 'UTF-8', 'UTF-8');
+    }
+    if (function_exists('iconv')) {
+        $res = @iconv('UTF-8', 'UTF-8//IGNORE', $str);
+        if ($res !== false) return $res;
+    }
+    return $str;
+}
+
+// -------------------------------------------------------------
 // Helper Output Function
 // -------------------------------------------------------------
 function json_output($data, $code = 200) {
@@ -580,25 +618,10 @@ function json_output($data, $code = 200) {
     // Recursively guarantee all string values are valid UTF-8 without throwing ValueError in PHP 8
     array_walk_recursive($data, function(&$val) {
         if (is_string($val)) {
+            $val = safe_scrub_utf8($val);
             if (function_exists('mb_check_encoding') && !mb_check_encoding($val, 'UTF-8')) {
-                if (function_exists('mb_scrub')) {
-                    $scrubbed = @mb_scrub($val, 'UTF-8');
-                    if ($scrubbed !== false && is_string($scrubbed)) {
-                        $val = $scrubbed;
-                    }
-                }
-                if (!mb_check_encoding($val, 'UTF-8')) {
-                    $converted = false;
-                    if (function_exists('mb_convert_encoding')) {
-                        // In PHP 8+, argument 3 must be an array of encodings, never comma-separated string!
-                        $converted = @mb_convert_encoding($val, 'UTF-8', ['GB18030', 'GBK', 'BIG5', 'CP936', 'ISO-8859-1', 'UTF-8']);
-                    }
-                    if ($converted !== false && strlen($converted) > 0) {
-                        $val = $converted;
-                    } elseif (function_exists('iconv')) {
-                        $val = @iconv('UTF-8', 'UTF-8//IGNORE', $val);
-                    }
-                }
+                $val = safe_convert_encoding($val, 'UTF-8', ['GB18030', 'GBK', 'BIG5', 'CP936', 'ISO-8859-1', 'UTF-8']);
+                $val = safe_scrub_utf8($val);
             }
         }
     });
@@ -3246,19 +3269,13 @@ function handle_file_read() {
         $detectedEncoding = 'UTF-8';
 
         if ($requestedEncoding === 'gbk' || $requestedEncoding === 'gb2312' || $requestedEncoding === 'gb18030') {
-            $converted = @iconv('GB18030//IGNORE', 'UTF-8', $content);
+            $converted = safe_convert_encoding($content, 'UTF-8', ['GB18030', 'GBK', 'CP936']);
             if ($converted !== false && strlen($converted) > 0) {
                 $content = $converted;
                 $detectedEncoding = 'GB18030';
-            } else {
-                $converted = @mb_convert_encoding($content, 'UTF-8', ['GB18030', 'GBK', 'CP936']);
-                if ($converted !== false && strlen($converted) > 0) {
-                    $content = $converted;
-                    $detectedEncoding = 'GBK';
-                }
             }
         } elseif ($requestedEncoding === 'big5') {
-            $converted = @iconv('BIG5//IGNORE', 'UTF-8', $content);
+            $converted = safe_convert_encoding($content, 'UTF-8', ['BIG5']);
             if ($converted !== false && strlen($converted) > 0) {
                 $content = $converted;
                 $detectedEncoding = 'BIG5';
@@ -3274,10 +3291,10 @@ function handle_file_read() {
                 $content = substr($content, 3);
                 $detectedEncoding = 'UTF-8 (BOM)';
             } elseif (substr($content, 0, 2) === "\xFF\xFE") {
-                $content = @mb_convert_encoding(substr($content, 2), 'UTF-8', 'UTF-16LE');
+                $content = safe_convert_encoding(substr($content, 2), 'UTF-8', ['UTF-16LE']);
                 $detectedEncoding = 'UTF-16LE';
             } elseif (substr($content, 0, 2) === "\xFE\xFF") {
-                $content = @mb_convert_encoding(substr($content, 2), 'UTF-8', 'UTF-16BE');
+                $content = safe_convert_encoding(substr($content, 2), 'UTF-8', ['UTF-16BE']);
                 $detectedEncoding = 'UTF-16BE';
             } else {
                 // Safety: if string was truncated, test a sub-slice omitting the last 4 bytes to avoid false negatives
@@ -3285,20 +3302,11 @@ function handle_file_read() {
                 $isUtf8 = function_exists('mb_check_encoding') ? @mb_check_encoding($probe, 'UTF-8') : (preg_match('//u', $probe) === 1);
 
                 if (!$isUtf8) {
-                    // Not UTF-8! Try GB18030 / GBK / BIG5
-                    $converted = @iconv('GB18030//IGNORE', 'UTF-8', $content);
+                    // Not UTF-8! Try GB18030 / GBK / BIG5 safely
+                    $converted = safe_convert_encoding($content, 'UTF-8', ['GB18030', 'GBK', 'CP936', 'BIG5', 'EUC-CN']);
                     if ($converted !== false && strlen($converted) > 0) {
                         $content = $converted;
-                        $detectedEncoding = 'GB18030';
-                    } else {
-                        $detected = function_exists('mb_detect_encoding') ? @mb_detect_encoding($probe, ['CP936', 'GB18030', 'GBK', 'BIG5', 'EUC-CN'], true) : false;
-                        if ($detected) {
-                            $converted = @mb_convert_encoding($content, 'UTF-8', $detected);
-                            if ($converted !== false && strlen($converted) > 0) {
-                                $content = $converted;
-                                $detectedEncoding = $detected;
-                            }
-                        }
+                        $detectedEncoding = 'GB18030/GBK';
                     }
                 } else {
                     $detectedEncoding = 'UTF-8';
@@ -3318,11 +3326,7 @@ function handle_file_read() {
         }
 
         // Final scrubbing to guarantee UTF-8 validity
-        if (function_exists('mb_scrub')) {
-            $content = @mb_scrub($content, 'UTF-8');
-        } elseif (function_exists('iconv')) {
-            $content = @iconv('UTF-8', 'UTF-8//IGNORE', $content);
-        }
+        $content = safe_scrub_utf8($content);
 
         json_output([
             'status' => 'success',
@@ -4273,53 +4277,143 @@ function get_gpu_telemetry() {
         'driver' => 'N/A'
     ];
 
-    $gpustatFallback = null;
+    $gpustatCand = null;
 
-    // 1. Check Unraid GPU Statistics plugin (gpustatus.php or /tmp/gpustat.json)
+    // 1. Check Unraid GPU Statistics plugin (gpustatus.php / gpustatusmulti.php)
+    // CRITICAL: In Unraid, gpustatus.php outputs live JSON metrics directly to STDOUT!
     $gpustatScripts = [
         '/usr/local/emhttp/plugins/gpustat/gpustatus.php',
         '/usr/local/emhttp/plugins/gpustat/gpustatusmulti.php',
+        '/usr/local/emhttp/plugins/gpustat/gpustatusmoveablemulti.php',
         '/usr/local/emhttp/plugins/gpustat/scripts/gpustat.php',
     ];
-    $gpustatFile = '/tmp/gpustat.json';
 
-    // Proactively trigger gpustatus script if available to get fresh data
+    $gpustatRaw = null;
     foreach ($gpustatScripts as $script) {
         if (file_exists($script)) {
-            @shell_exec("php " . escapeshellarg($script) . " >/dev/null 2>&1");
-            break;
+            $rawOut = @shell_exec("php " . escapeshellarg($script) . " 2>/dev/null");
+            if (!empty($rawOut) && (strpos($rawOut, '{') !== false || strpos($rawOut, '[') !== false)) {
+                $gpustatRaw = $rawOut;
+                break;
+            }
         }
     }
 
-    if (file_exists($gpustatFile)) {
-        clearstatcache(true, $gpustatFile);
-        $raw = @file_get_contents($gpustatFile);
-        if ($raw) {
-            $json = @json_decode($raw, true);
-            if (is_array($json) && !empty($json)) {
-                $firstGpu = isset($json[0]) ? $json[0] : (isset($json['gpus'][0]) ? $json['gpus'][0] : $json);
-                if (!empty($firstGpu['model']) || !empty($firstGpu['name'])) {
-                    $mName = !empty($firstGpu['model']) ? $firstGpu['model'] : $firstGpu['name'];
-                    $cand = $gpuData;
-                    $cand['name'] = $mName;
-                    $cand['vendor'] = !empty($firstGpu['vendor']) ? $firstGpu['vendor'] : (stripos($mName, 'NVIDIA') !== false ? 'NVIDIA' : (stripos($mName, 'Intel') !== false ? 'Intel' : 'AMD'));
-                    $cand['usage'] = isset($firstGpu['util']) ? (float)$firstGpu['util'] : (isset($firstGpu['usage']) ? (float)$firstGpu['usage'] : (isset($firstGpu['gpu']) ? (float)$firstGpu['gpu'] : 0));
-                    $cand['temp'] = isset($firstGpu['temp']) ? (int)$firstGpu['temp'] : null;
-                    if (isset($firstGpu['memused']) && isset($firstGpu['memtotal'])) {
-                        $cand['vram_used'] = (int)$firstGpu['memused'];
-                        $cand['vram_total'] = (int)$firstGpu['memtotal'];
-                        $cand['vram_pct'] = $cand['vram_total'] > 0 ? round(($cand['vram_used'] / $cand['vram_total']) * 100, 1) : 0;
+    // Fallback: check /tmp/gpustat*.json if direct script output was empty
+    if (empty($gpustatRaw)) {
+        $tmpFiles = glob('/tmp/gpustat*.json');
+        if (!empty($tmpFiles)) {
+            foreach ($tmpFiles as $tf) {
+                if (file_exists($tf)) {
+                    $c = @file_get_contents($tf);
+                    if (!empty($c) && (strpos($c, '{') !== false || strpos($c, '[') !== false)) {
+                        $gpustatRaw = $c;
+                        break;
                     }
-                    if (isset($firstGpu['power'])) $cand['power_w'] = (float)$firstGpu['power'];
-                    if (isset($firstGpu['clock'])) $cand['clock_mhz'] = (int)$firstGpu['clock'];
-                    $cand['driver'] = 'gpustat';
+                }
+            }
+        }
+    }
 
-                    // If file was updated recently, return it
-                    $fileAge = time() - @filemtime($gpustatFile);
-                    if ($fileAge <= 5) {
-                        return $cand;
-                    } else {
-                        $gpustatFallback = $cand;
+    if (!empty($gpustatRaw)) {
+        if (preg_match('/(\[[\s\S]*\]|\{[\s\S]*\})/s', trim($gpustatRaw), $m)) {
+            $parsed = @json_decode($m[1], true);
+            if (is_array($parsed) && !empty($parsed)) {
+                $firstGpu = isset($parsed[0]) ? $parsed[0] : (isset($parsed['gpus'][0]) ? $parsed['gpus'][0] : $parsed);
+                if (is_array($firstGpu)) {
+                    $mName = !empty($firstGpu['model']) ? $firstGpu['model'] : (!empty($firstGpu['name']) ? $firstGpu['name'] : '');
+                    if (!empty($mName) || !empty($firstGpu['vendor'])) {
+                        $gName = !empty($mName) ? $mName : 'GPU';
+                        $gVendor = !empty($firstGpu['vendor']) ? $firstGpu['vendor'] : (stripos($gName, 'NVIDIA') !== false ? 'NVIDIA' : (stripos($gName, 'Intel') !== false ? 'Intel' : 'AMD'));
+
+                        // Extract usage from any supported key
+                        $uVal = null;
+                        foreach (['util', 'gpu', 'usage', 'load', '3drender', 'render', 'utilization'] as $k) {
+                            if (isset($firstGpu[$k]) && $firstGpu[$k] !== '' && $firstGpu[$k] !== 'N/A') {
+                                $clean = preg_replace('/[^0-9.]/', '', (string)$firstGpu[$k]);
+                                if ($clean !== '') {
+                                    $uVal = (float)$clean;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Extract temperature
+                        $tVal = null;
+                        foreach (['temp', 'temperature'] as $k) {
+                            if (isset($firstGpu[$k]) && $firstGpu[$k] !== '' && $firstGpu[$k] !== 'N/A') {
+                                $clean = preg_replace('/[^0-9]/', '', (string)$firstGpu[$k]);
+                                if ($clean !== '') {
+                                    $tVal = (int)$clean;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Extract clock
+                        $cVal = null;
+                        foreach (['clock', 'cur_clock', 'clock_mhz'] as $k) {
+                            if (isset($firstGpu[$k]) && $firstGpu[$k] !== '' && $firstGpu[$k] !== 'N/A') {
+                                $clean = preg_replace('/[^0-9]/', '', (string)$firstGpu[$k]);
+                                if ($clean !== '') {
+                                    $cVal = (int)$clean;
+                                    break;
+                                }
+                            }
+                        }
+                        $maxCVal = null;
+                        foreach (['clockmax', 'max_clock', 'max_clock_mhz'] as $k) {
+                            if (isset($firstGpu[$k]) && $firstGpu[$k] !== '' && $firstGpu[$k] !== 'N/A') {
+                                $clean = preg_replace('/[^0-9]/', '', (string)$firstGpu[$k]);
+                                if ($clean !== '') {
+                                    $maxCVal = (int)$clean;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Extract power
+                        $pVal = null;
+                        foreach (['power', 'power_w', 'power_draw'] as $k) {
+                            if (isset($firstGpu[$k]) && $firstGpu[$k] !== '' && $firstGpu[$k] !== 'N/A') {
+                                $clean = preg_replace('/[^0-9.]/', '', (string)$firstGpu[$k]);
+                                if ($clean !== '') {
+                                    $pVal = (float)$clean;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Extract VRAM
+                        $vUsed = null;
+                        $vTotal = null;
+                        $vPct = 0;
+                        if (isset($firstGpu['memused']) && $firstGpu['memused'] !== '' && $firstGpu['memused'] !== 'N/A') {
+                            $vUsed = (int)preg_replace('/[^0-9]/', '', (string)$firstGpu['memused']);
+                        }
+                        if (isset($firstGpu['memtotal']) && $firstGpu['memtotal'] !== '' && $firstGpu['memtotal'] !== 'N/A') {
+                            $vTotal = (int)preg_replace('/[^0-9]/', '', (string)$firstGpu['memtotal']);
+                        }
+                        if ($vUsed !== null && $vTotal !== null && $vTotal > 0) {
+                            $vPct = round(($vUsed / $vTotal) * 100, 1);
+                        } elseif (isset($firstGpu['memutil']) && $firstGpu['memutil'] !== '' && $firstGpu['memutil'] !== 'N/A') {
+                            $cleanMem = preg_replace('/[^0-9.]/', '', (string)$firstGpu['memutil']);
+                            if ($cleanMem !== '') $vPct = (float)$cleanMem;
+                        }
+
+                        $gpustatCand = [
+                            'name' => $gName,
+                            'vendor' => $gVendor,
+                            'usage' => ($uVal !== null) ? max(0, min(100, $uVal)) : 0,
+                            'temp' => $tVal,
+                            'vram_used' => $vUsed,
+                            'vram_total' => $vTotal,
+                            'vram_pct' => $vPct,
+                            'power_w' => $pVal,
+                            'clock_mhz' => $cVal,
+                            'max_clock_mhz' => $maxCVal,
+                            'driver' => 'gpustat'
+                        ];
                     }
                 }
             }
@@ -4356,7 +4450,7 @@ function get_gpu_telemetry() {
         }
     }
 
-    // 3. Check Intel iGPU (QuickSync / i915) via sysfs, intel_gpu_top and lspci
+    // 3. Check Intel iGPU (QuickSync / i915 / Xe) via sysfs, intel_gpu_top and lspci
     $drmCards = glob('/sys/class/drm/card*');
     if ($drmCards) {
         foreach ($drmCards as $card) {
@@ -4368,7 +4462,6 @@ function get_gpu_telemetry() {
                     $intelName = '';
                     $lspci = @shell_exec("lspci -nn -d 8086: 2>/dev/null | grep -iE 'vga|display|3d'");
                     if ($lspci) {
-                        // Priority 1: Extract model in square brackets e.g. [UHD Graphics 770] or [Iris Xe Graphics]
                         if (preg_match('/\[([^\]]*(?:Graphics|Iris|HD|UHD|Arc)[^\]]*)\]/i', $lspci, $subM)) {
                             $intelName = 'Intel® ' . trim($subM[1]);
                         } elseif (preg_match('/:\s*Intel Corporation\s+(.+?)(?:\s*\(rev|\s*\[[0-9a-f]{4}:|$)/i', $lspci, $m)) {
@@ -4380,13 +4473,13 @@ function get_gpu_telemetry() {
                             $intelName = 'Intel® ' . trim($cleanL);
                         }
                     }
-                    if (!$intelName) $intelName = 'Intel® 核芯显卡 (iGPU)';
-                    $gpuData['clean_name'] = $intelName;
+                    if (!$intelName) {
+                        $intelName = ($gpustatCand && stripos($gpustatCand['name'], 'Intel') !== false) ? $gpustatCand['name'] : 'Intel® 核芯显卡 (iGPU)';
+                    }
 
-                    // Read dynamic frequency (gt_act_freq_mhz is the live operating frequency)
+                    // Read dynamic frequency
                     $curFreq = 0;
                     $maxFreq = 0;
-                    $minFreq = 0;
                     $freqFiles = [
                         "{$card}/gt_act_freq_mhz",
                         "{$card}/gt_cur_freq_mhz",
@@ -4406,34 +4499,8 @@ function get_gpu_telemetry() {
                     foreach ($maxFreqFiles as $ff) {
                         if (file_exists($ff)) { $maxFreq = (int)trim(@file_get_contents($ff)); break; }
                     }
-                    $minFreqFiles = [
-                        "{$card}/gt_min_freq_mhz",
-                        "{$card}/device/drm/{$card}/gt_min_freq_mhz",
-                    ];
-                    foreach ($minFreqFiles as $ff) {
-                        if (file_exists($ff)) { $minFreq = (int)trim(@file_get_contents($ff)); break; }
-                    }
 
-                    // Live engine usage query via intel_gpu_top (JSON sampling mode)
-                    $usage = 0;
-                    $topOut = @shell_exec('timeout 1s intel_gpu_top -J -s 120 2>/dev/null');
-                    if (!empty($topOut)) {
-                        $topData = @json_decode($topOut, true);
-                        if (is_array($topData) && isset($topData['engines']) && is_array($topData['engines'])) {
-                            $maxEngineBusy = 0;
-                            foreach ($topData['engines'] as $engName => $eng) {
-                                if (isset($eng['busy']) && is_numeric($eng['busy'])) {
-                                    $b = (float)$eng['busy'];
-                                    if ($b > $maxEngineBusy) $maxEngineBusy = $b;
-                                }
-                            }
-                            $usage = round(max(0, min(100, $maxEngineBusy)), 1);
-                        }
-                    }
-
-                    // CRITICAL: If no active engine busy was measured, usage is 0 (idle), NEVER 95%!
-                    // Clock frequency is accurately reported in clock_mhz.
-
+                    // Temperature
                     $temp = null;
                     $hwmon = glob("{$card}/device/hwmon/hwmon*/temp1_input");
                     if ($hwmon && file_exists($hwmon[0])) {
@@ -4441,12 +4508,50 @@ function get_gpu_telemetry() {
                         if ($tRaw > 0) $temp = round($tRaw / 1000);
                     }
 
+                    // Live engine usage query via intel_gpu_top (-n 2 outputs 2 samples and exits cleanly)
+                    $intelUsage = null;
+                    $topOut = @shell_exec('timeout 2s intel_gpu_top -J -s 100 -n 2 2>/dev/null');
+                    if (!empty($topOut)) {
+                        $topData = @json_decode(trim($topOut), true);
+                        if (!is_array($topData)) {
+                            if (preg_match_all('/\{[^{}]*"engines"\s*:\s*\{[\s\S]*?\}\s*\}/s', $topOut, $allMatches)) {
+                                $lastMatch = end($allMatches[0]);
+                                $topData = @json_decode($lastMatch, true);
+                            }
+                        }
+                        if (is_array($topData)) {
+                            $sample = isset($topData[1]) ? $topData[1] : (isset($topData[0]) ? $topData[0] : $topData);
+                            if (isset($sample['engines']) && is_array($sample['engines'])) {
+                                $maxEngineBusy = 0;
+                                foreach ($sample['engines'] as $engName => $eng) {
+                                    if (isset($eng['busy']) && is_numeric($eng['busy'])) {
+                                        $b = (float)$eng['busy'];
+                                        if ($b > $maxEngineBusy) $maxEngineBusy = $b;
+                                    }
+                                }
+                                $intelUsage = round(max(0, min(100, $maxEngineBusy)), 1);
+                            }
+                        }
+                    }
+
+                    // If intel_gpu_top didn't return usage, check if gpustat has live usage
+                    if ($intelUsage === null && $gpustatCand !== null && isset($gpustatCand['usage'])) {
+                        $intelUsage = $gpustatCand['usage'];
+                    }
+                    if ($intelUsage === null) {
+                        $intelUsage = 0;
+                    }
+
                     $gpuData['name'] = $intelName;
                     $gpuData['vendor'] = 'Intel';
-                    $gpuData['usage'] = $usage;
-                    $gpuData['temp'] = $temp;
-                    $gpuData['clock_mhz'] = $curFreq > 0 ? $curFreq : null;
-                    $gpuData['max_clock_mhz'] = $maxFreq > 0 ? $maxFreq : null;
+                    $gpuData['usage'] = $intelUsage;
+                    $gpuData['temp'] = ($temp !== null) ? $temp : ($gpustatCand ? $gpustatCand['temp'] : null);
+                    $gpuData['clock_mhz'] = $curFreq > 0 ? $curFreq : ($gpustatCand ? $gpustatCand['clock_mhz'] : null);
+                    $gpuData['max_clock_mhz'] = $maxFreq > 0 ? $maxFreq : ($gpustatCand ? $gpustatCand['max_clock_mhz'] : null);
+                    $gpuData['power_w'] = ($gpustatCand ? $gpustatCand['power_w'] : null);
+                    $gpuData['vram_used'] = ($gpustatCand ? $gpustatCand['vram_used'] : null);
+                    $gpuData['vram_total'] = ($gpustatCand ? $gpustatCand['vram_total'] : null);
+                    $gpuData['vram_pct'] = ($gpustatCand ? $gpustatCand['vram_pct'] : 0);
                     $gpuData['driver'] = 'i915';
                     return $gpuData;
                 }
@@ -4472,7 +4577,7 @@ function get_gpu_telemetry() {
                     if (!$amdName) $amdName = 'AMD Radeon™ 显卡';
 
                     $busyFile = "{$card}/device/gpu_busy_percent";
-                    $usage = file_exists($busyFile) ? (float)trim(@file_get_contents($busyFile)) : 0;
+                    $usage = file_exists($busyFile) ? (float)trim(@file_get_contents($busyFile)) : ($gpustatCand ? $gpustatCand['usage'] : 0);
 
                     $temp = null;
                     $hwmon = glob("{$card}/device/hwmon/hwmon*/temp1_input");
@@ -4493,10 +4598,10 @@ function get_gpu_telemetry() {
                     $gpuData['name'] = $amdName;
                     $gpuData['vendor'] = 'AMD';
                     $gpuData['usage'] = max(0, min(100, $usage));
-                    $gpuData['temp'] = $temp;
-                    $gpuData['vram_used'] = $vramUsed;
-                    $gpuData['vram_total'] = $vramTotal;
-                    $gpuData['vram_pct'] = ($vramTotal > 0) ? round(($vramUsed / $vramTotal) * 100, 1) : 0;
+                    $gpuData['temp'] = ($temp !== null) ? $temp : ($gpustatCand ? $gpustatCand['temp'] : null);
+                    $gpuData['vram_used'] = ($vramUsed !== null) ? $vramUsed : ($gpustatCand ? $gpustatCand['vram_used'] : null);
+                    $gpuData['vram_total'] = ($vramTotal !== null) ? $vramTotal : ($gpustatCand ? $gpustatCand['vram_total'] : null);
+                    $gpuData['vram_pct'] = ($gpuData['vram_total'] > 0) ? round(($gpuData['vram_used'] / $gpuData['vram_total']) * 100, 1) : ($gpustatCand ? $gpustatCand['vram_pct'] : 0);
                     $gpuData['driver'] = 'amdgpu';
                     return $gpuData;
                 }
@@ -4504,9 +4609,9 @@ function get_gpu_telemetry() {
         }
     }
 
-    // 5. If hardware direct probes found nothing but gpustat was present, return cached gpustat
-    if ($gpustatFallback !== null) {
-        return $gpustatFallback;
+    // 5. If hardware direct probes found nothing but gpustat was present, return gpustat candidate
+    if ($gpustatCand !== null) {
+        return $gpustatCand;
     }
 
     // 6. Generic display fallback via lspci

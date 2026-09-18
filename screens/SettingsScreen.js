@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   StyleSheet, Text, View, TouchableOpacity, ActivityIndicator,
-  ScrollView, Switch, Modal, TextInput, KeyboardAvoidingView, Platform,
+  ScrollView, RefreshControl, Switch, Modal, TextInput, KeyboardAvoidingView, Platform,
   Pressable, Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
@@ -130,6 +130,7 @@ export default function SettingsScreen({ navigation }) {
 
   // Power action state
   const [powerLoading, setPowerLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Wake-on-LAN (WOL) state
   const [wolMac, setWolMac] = useState('');
@@ -498,6 +499,20 @@ export default function SettingsScreen({ navigation }) {
       fetchServerApiVersion();
     }, [unraidUrl, apiToken])
   );
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        loadSettings(),
+        fetchServerApiVersion(unraidUrl, apiToken),
+      ]);
+    } catch (e) {
+      console.log('Settings onRefresh err:', e);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   // Download directory permissions via SAF
   const chooseDownloadDir = async () => {
@@ -931,7 +946,18 @@ export default function SettingsScreen({ navigation }) {
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor={colors.accent}
+          colors={[colors.accent]}
+        />
+      }
+    >
       <View style={styles.header}>
         <SettingsIcon color={colors.accent} size={48} style={{ marginBottom: 12 }} />
         <Text style={styles.title}>系统控制与设置</Text>

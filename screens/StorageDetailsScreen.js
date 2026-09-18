@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef } from 'react';
-import { StyleSheet, Text, View, ScrollView, ActivityIndicator, TouchableOpacity,
+import { StyleSheet, Text, View, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity,
   Platform
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -18,6 +18,7 @@ export default function StorageDetailsScreen({ navigation }) {
   const prevDiskIo = useRef({});
   const [diskSpeeds, setDiskSpeeds] = useState({});
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [parityLoading, setParityLoading] = useState(false);
   const [parity, setParity] = useState({
     status: 'idle',
@@ -116,6 +117,17 @@ export default function StorageDetailsScreen({ navigation }) {
     }
   };
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await fetchStorageData();
+    } catch (e) {
+      console.log('Storage onRefresh err:', e);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   useFocusEffect(
     useCallback(() => {
       fetchStorageData();
@@ -204,6 +216,14 @@ export default function StorageDetailsScreen({ navigation }) {
       style={styles.container}
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor={colors.accent}
+          colors={[colors.accent]}
+        />
+      }
     >
       {/* 1. 顶部存储阵列概览全景卡片 */}
       <View style={styles.heroCard}>
