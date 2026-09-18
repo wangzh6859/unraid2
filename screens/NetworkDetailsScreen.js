@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,10 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Wifi, ArrowDown, ArrowUp, Box, Globe, Shield, Activity, Layers, Network } from 'lucide-react-native';
+import {
+  Wifi, ArrowDown, ArrowUp, Box, Globe, Shield, Activity,
+  Layers, Network, Monitor, Terminal, ChevronRight
+} from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import MetricsLineChart from '../components/MetricsLineChart';
 import { apiFetchJson } from '../utils/apiClient';
@@ -42,14 +45,18 @@ export default function NetworkDetailsScreen({ navigation, route }) {
 
   const [loading, setLoading] = useState(!initialNetSpeed);
   const [refreshing, setRefreshing] = useState(false);
+  const [filterTab, setFilterTab] = useState('all'); // 'all' | 'docker' | 'vm' | 'process'
 
   const [networkData, setNetworkData] = useState({
     total_rx_bytes: 0,
     total_tx_bytes: 0,
     interfaces: [],
+    top_processes: [],
   });
   const [dockers, setDockers] = useState([]);
+  const [vms, setVms] = useState([]);
   const [history, setHistory] = useState(() => (Array.isArray(initialHistory) ? initialHistory : []));
+  const prevNetRef = useRef({});
 
   const fetchData = useCallback(async (isSilent = false) => {
     try {
@@ -71,10 +78,18 @@ export default function NetworkDetailsScreen({ navigation, route }) {
       }
 
       if (json?.network) {
-        setNetworkData(json.network);
+        setNetworkData(prev => ({
+          ...prev,
+          ...json.network,
+          interfaces: Array.isArray(json.network.interfaces) ? json.network.interfaces : prev.interfaces,
+          top_processes: Array.isArray(json.network.top_processes) ? json.network.top_processes : prev.top_processes,
+        }));
       }
       if (Array.isArray(json?.dockers)) {
         setDockers(json.dockers);
+      }
+      if (Array.isArray(json?.vms)) {
+        setVms(json.vms);
       }
       if (Array.isArray(json?.history) && json.history.length > 0) {
         setHistory(json.history);
@@ -148,23 +163,140 @@ export default function NetworkDetailsScreen({ navigation, route }) {
     return history.map(h => (typeof h.tx === 'number' ? h.tx : 0));
   }, [history, currentSpeeds.tx]);
 
-  // Ranked Docker containers by network traffic
-  const rankedContainers = useMemo(() => {
-    const list = [...dockers];
-    return list
-      .map(d => {
-        const totalBytes = (d.net_rx_bytes || 0) + (d.net_tx_bytes || 0);
-        return {
-          name: d.name,
-          rx: d.net_rx_bytes || 0,
-          tx: d.net_tx_bytes || 0,
-          total: totalBytes,
-          rawStr: d.net_io_str || '0B / 0B',
-          id: d.id,
-        };
-      })
-      .sort((a, b) => b.total - a.total);
-  }, [dockers]);
+  // Combine and sort Docker containers, VMs, and processes by live real-time network speed
+  const rankedItems = useMemo(() => {
+    const list = [];
+    const now = Date.now();
+    const prevMap = prevNetRef.current || {};
+    const newMap = {};
+
+    // 1. Docker Containers
+    dockers.forEach(d => {
+      const id = `docker-${d.name}`;
+      const rxBytes = d.net_rx_bytes || 0;
+      const txBytes = d.net_tx_bytes || 0;
+
+      let rxBps = d.net_rx_bps || 0;
+      let txBps = d.net_tx_bps || 0;
+
+      if (prevMap[id]) {
+        const dt = (now - prevMap[id].time) / 1000.0;
+        if (dt >= 0.5 && dt <= 30.0) {
+          const dRx = rxBytes - prevMap[id].rx;
+          const dTx = txBytes - prevMap[id].tx;
+          if (dRx >= 0 && (!rxBps || dRx > 0)) rxBps = Math.round(dRx / dt);
+          if (dTx >= 0 && (!txBps || dTx > 0)) txBps = Math.round(dTx / dt);
+        }
+      }
+      newMap[id] = { rx: rxBytes, tx: txBytes, time: now };
+
+      list.push({
+        type: 'docker',
+        id,
+        name: d.name,
+        rx_bps: rxBps,
+        tx_bps: txBps,
+        total_bps: rxBps + txBps,
+        total_rx: rxBytes,
+        total_tx: txBytes,
+        rawStr: d.net_io_str || `${formatBytes(rxBytes)} / ${formatBytes(txBytes)}`,
+        sub: `容器 · 累计: 接收 ${formatBytes(rxBytes)} · 发送 ${formatBytes(txBytes)}`,
+        raw: d,
+      });
+    });
+
+    // 2. VMs
+    vms.forEach(v => {
+      const id = `vm-${v.name}`;
+      const rxBytes = v.net_rx_bytes || 0;
+      const txBytes = v.net_tx_bytes || 0;
+
+      let rxBps = v.net_rx_bps || 0;
+      let txBps = v.net_tx_bps || 0;
+
+      if (prevMap[id]) {
+        const dt = (now - prevMap[id].time) / 1000.0;
+        if (dt >= 0.5 && dt <= 30.0) {
+          const dRx = rxBytes - prevMap[id].rx;
+          const dTx = txBytes - prevMap[id].tx;
+          if (dRx >= 0 && (!rxBps || dRx > 0)) rxBps = Math.round(dRx / dt);
+          if (dTx >= 0 && (!txBps || dTx > 0)) txBps = Math.round(dTx / dt);
+        }
+      }
+      newMap[id] = { rx: rxBytes, tx: txBytes, time: now };
+
+      const isRunning = v.state === 'running';
+      list.push({
+        type: 'vm',
+        id,
+        name: v.name,
+        rx_bps: isRunning ? rxBps : 0,
+        tx_bps: isRunning ? txBps : 0,
+        total_bps: isRunning ? (rxBps + txBps) : 0,
+        total_rx: rxBytes,
+        total_tx: txBytes,
+        rawStr: `${formatBytes(rxBytes)} / ${formatBytes(txBytes)}`,
+        sub: `虚拟机 (${isRunning ? '运行中' : '已关机'}) · 累计: 接收 ${formatBytes(rxBytes)} · 发送 ${formatBytes(txBytes)}`,
+        raw: v,
+      });
+    });
+
+    // 3. System Processes
+    (networkData.top_processes || []).forEach(p => {
+      const id = `proc-${p.pid}-${p.name}`;
+      const rxBytes = p.net_rx_bytes || 0;
+      const txBytes = p.net_tx_bytes || 0;
+
+      let rxBps = p.rx_bps || 0;
+      let txBps = p.tx_bps || 0;
+
+      if (prevMap[id]) {
+        const dt = (now - prevMap[id].time) / 1000.0;
+        if (dt >= 0.5 && dt <= 30.0) {
+          const dRx = rxBytes - prevMap[id].rx;
+          const dTx = txBytes - prevMap[id].tx;
+          if (dRx >= 0 && (!rxBps || dRx > 0)) rxBps = Math.round(dRx / dt);
+          if (dTx >= 0 && (!txBps || dTx > 0)) txBps = Math.round(dTx / dt);
+        }
+      }
+      newMap[id] = { rx: rxBytes, tx: txBytes, time: now };
+
+      list.push({
+        type: 'process',
+        id,
+        name: p.name,
+        pid: p.pid,
+        rx_bps: rxBps,
+        tx_bps: txBps,
+        total_bps: rxBps + txBps,
+        total_rx: rxBytes,
+        total_tx: txBytes,
+        rawStr: `${formatBytes(rxBytes)} / ${formatBytes(txBytes)}`,
+        sub: `进程 PID ${p.pid} · ${p.conns || 1} 个活跃连接 · ${p.command || p.name}`,
+        raw: p,
+      });
+    });
+
+    prevNetRef.current = newMap;
+
+    // Filter
+    let filtered = list;
+    if (filterTab === 'docker') filtered = list.filter(i => i.type === 'docker');
+    else if (filterTab === 'vm') filtered = list.filter(i => i.type === 'vm');
+    else if (filterTab === 'process') filtered = list.filter(i => i.type === 'process');
+
+    // Sort: highest live rate first! Secondary sort by cumulative traffic
+    return filtered.sort((a, b) => {
+      if (b.total_bps !== a.total_bps) {
+        return b.total_bps - a.total_bps;
+      }
+      return (b.total_rx + b.total_tx) - (a.total_rx + a.total_tx);
+    });
+  }, [dockers, vms, networkData.top_processes, filterTab]);
+
+  const maxTotalBps = useMemo(() => {
+    return Math.max(...rankedItems.map(i => i.total_bps), 1024);
+  }, [rankedItems]);
 
   return (
     <ScrollView
@@ -234,52 +366,131 @@ export default function NetworkDetailsScreen({ navigation, route }) {
         height={165}
       />
 
-      {/* Per-Container Network Breakdown */}
-      <View style={{ marginTop: 18 }}>
+      {/* Program / Container / VM Live Network Breakdown */}
+      <View style={{ marginTop: 20 }}>
         <View style={styles.sectionHeader}>
-          <Box size={16} color={colors.accent} style={{ marginRight: 6 }} />
-          <Text style={styles.sectionTitle}>各 Docker 容器网络上传与下载</Text>
-          <Text style={styles.sectionCount}>({rankedContainers.length})</Text>
+          <Layers size={16} color={colors.networkDown} style={{ marginRight: 6 }} />
+          <Text style={styles.sectionTitle}>程序与容器当前实时网络占用</Text>
+          <Text style={styles.sectionCount}>({rankedItems.length})</Text>
         </View>
 
-        {rankedContainers.length === 0 ? (
+        {/* Segmented Filter Tabs */}
+        <View style={styles.tabsRow}>
+          {[
+            { key: 'all', label: '全部' },
+            { key: 'docker', label: 'Docker 容器' },
+            { key: 'vm', label: '虚拟机' },
+            { key: 'process', label: '系统进程' },
+          ].map(tab => (
+            <TouchableOpacity
+              key={tab.key}
+              style={[
+                styles.tabBtn,
+                filterTab === tab.key && styles.tabBtnActive,
+              ]}
+              onPress={() => setFilterTab(tab.key)}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.tabBtnText,
+                  filterTab === tab.key && styles.tabBtnTextActive,
+                ]}
+              >
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {rankedItems.length === 0 ? (
           <View style={styles.emptyCard}>
-            <Text style={styles.emptyText}>当前暂无容器网络流速统计</Text>
+            <Text style={styles.emptyText}>当前分类暂无活跃网络占用程序</Text>
           </View>
         ) : (
-          rankedContainers.map((c, idx) => (
-            <View key={c.id || idx} style={styles.containerCard}>
-              <View style={styles.containerHeaderRow}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
-                  <View style={styles.cIconBox}>
-                    <Box size={13} color="#38bdf8" />
+          rankedItems.map((item, idx) => {
+            const isDocker = item.type === 'docker';
+            const isVm = item.type === 'vm';
+            const hasRate = item.total_bps > 0;
+            const barWidth = hasRate
+              ? `${Math.min(100, Math.max(6, (item.total_bps / maxTotalBps) * 100))}%`
+              : '0%';
+
+            return (
+              <View key={item.id || idx} style={styles.itemCard}>
+                <View style={styles.itemHeaderRow}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                    <View style={[styles.typeIconBox, {
+                      backgroundColor: isDocker ? 'rgba(56, 189, 248, 0.15)' :
+                                       isVm ? 'rgba(168, 85, 247, 0.15)' :
+                                       'rgba(16, 185, 129, 0.15)'
+                    }]}>
+                      {isDocker ? <Box size={13} color="#38bdf8" /> :
+                       isVm ? <Monitor size={13} color="#a855f7" /> :
+                       <Terminal size={13} color="#10b981" />}
+                    </View>
+                    <Text style={styles.itemName} numberOfLines={1}>
+                      {item.name}
+                    </Text>
+                    <View style={[styles.typeBadge, {
+                      backgroundColor: isDocker ? 'rgba(56, 189, 248, 0.12)' :
+                                       isVm ? 'rgba(168, 85, 247, 0.12)' :
+                                       'rgba(16, 185, 129, 0.12)'
+                    }]}>
+                      <Text style={[styles.typeBadgeText, {
+                        color: isDocker ? '#38bdf8' :
+                               isVm ? '#a855f7' :
+                               '#10b981'
+                      }]}>
+                        {isDocker ? 'Docker' : isVm ? '虚拟机' : '系统进程'}
+                      </Text>
+                    </View>
                   </View>
-                  <Text style={styles.containerName} numberOfLines={1}>
-                    {c.name}
-                  </Text>
+
+                  {/* Combined Live Speed Pill */}
+                  <View style={[styles.speedPill, {
+                    backgroundColor: hasRate ? 'rgba(34, 197, 94, 0.14)' : (isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)')
+                  }]}>
+                    <Text style={[styles.speedPillText, {
+                      color: hasRate ? colors.networkDown : colors.sub
+                    }]}>
+                      {formatSpeed(item.total_bps)}
+                    </Text>
+                  </View>
                 </View>
 
-                {/* Net IO Text */}
-                <Text style={styles.netIoBadge}>{c.rawStr}</Text>
-              </View>
+                {/* Dual Speeds: Live Download & Live Upload */}
+                <View style={styles.liveSpeedsRow}>
+                  <View style={styles.liveSpeedCol}>
+                    <ArrowDown size={11} color={item.rx_bps > 0 ? colors.networkDown : colors.muted} style={{ marginRight: 3 }} />
+                    <Text style={[styles.liveSpeedLabel, { color: colors.sub }]}>实时下载:</Text>
+                    <Text style={[styles.liveSpeedVal, { color: item.rx_bps > 0 ? colors.networkDown : colors.sub }]}>
+                      {formatSpeed(item.rx_bps)}
+                    </Text>
+                  </View>
+                  <View style={[styles.liveSpeedCol, { marginLeft: 12 }]}>
+                    <ArrowUp size={11} color={item.tx_bps > 0 ? colors.networkUp : colors.muted} style={{ marginRight: 3 }} />
+                    <Text style={[styles.liveSpeedLabel, { color: colors.sub }]}>实时上传:</Text>
+                    <Text style={[styles.liveSpeedVal, { color: item.tx_bps > 0 ? colors.networkUp : colors.sub }]}>
+                      {formatSpeed(item.tx_bps)}
+                    </Text>
+                  </View>
+                </View>
 
-              {/* Sub Down / Up stats */}
-              <View style={styles.netDetailRow}>
-                <View style={styles.netDetailCol}>
-                  <ArrowDown size={11} color={colors.networkDown} style={{ marginRight: 3 }} />
-                  <Text style={[styles.netDetailVal, { color: colors.networkDown }]}>
-                    接收: {formatBytes(c.rx)}
-                  </Text>
-                </View>
-                <View style={[styles.netDetailCol, { marginLeft: 14 }]}>
-                  <ArrowUp size={11} color={colors.networkUp} style={{ marginRight: 3 }} />
-                  <Text style={[styles.netDetailVal, { color: colors.networkUp }]}>
-                    发送: {formatBytes(c.tx)}
-                  </Text>
-                </View>
+                {/* Live Activity Progress Bar */}
+                {hasRate && (
+                  <View style={styles.liveSpeedBarTrack}>
+                    <View style={[styles.liveSpeedBarFill, { width: barWidth, backgroundColor: colors.networkDown }]} />
+                  </View>
+                )}
+
+                {/* Subtitle Information */}
+                <Text style={styles.itemSub} numberOfLines={1}>
+                  {item.sub}
+                </Text>
               </View>
-            </View>
-          ))
+            );
+          })
         )}
       </View>
 
@@ -427,7 +638,38 @@ function createStyles(colors, isDark) {
       color: colors.muted,
       marginLeft: 4,
     },
-    containerCard: {
+    tabsRow: {
+      flexDirection: 'row',
+      marginBottom: 10,
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)',
+      borderRadius: 10,
+      padding: 3,
+    },
+    tabBtn: {
+      flex: 1,
+      paddingVertical: 6,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 8,
+    },
+    tabBtnActive: {
+      backgroundColor: colors.card,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.1,
+      shadowRadius: 2,
+      elevation: 1,
+    },
+    tabBtnText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.sub,
+    },
+    tabBtnTextActive: {
+      color: colors.networkDown,
+      fontWeight: '700',
+    },
+    itemCard: {
       backgroundColor: colors.card,
       borderRadius: 14,
       padding: 12,
@@ -435,48 +677,79 @@ function createStyles(colors, isDark) {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.divider,
     },
-    containerHeaderRow: {
+    itemHeaderRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
     },
-    cIconBox: {
+    typeIconBox: {
       width: 24,
       height: 24,
       borderRadius: 6,
-      backgroundColor: 'rgba(56, 189, 248, 0.15)',
       justifyContent: 'center',
       alignItems: 'center',
       marginRight: 8,
     },
-    containerName: {
+    itemName: {
       fontSize: 13,
       fontWeight: '700',
       color: colors.textStrong,
-      flex: 1,
+      flexShrink: 1,
     },
-    netIoBadge: {
-      fontSize: 11,
+    typeBadge: {
+      marginLeft: 6,
+      paddingHorizontal: 5,
+      paddingVertical: 1.5,
+      borderRadius: 4,
+    },
+    typeBadgeText: {
+      fontSize: 10,
       fontWeight: '700',
-      fontFamily: 'monospace',
-      color: colors.text,
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
-      paddingHorizontal: 7,
+    },
+    speedPill: {
+      paddingHorizontal: 8,
       paddingVertical: 3,
       borderRadius: 6,
     },
-    netDetailRow: {
+    speedPillText: {
+      fontSize: 11,
+      fontWeight: '700',
+      fontFamily: 'monospace',
+    },
+    liveSpeedsRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      marginTop: 6,
+      marginTop: 8,
     },
-    netDetailCol: {
+    liveSpeedCol: {
       flexDirection: 'row',
       alignItems: 'center',
     },
-    netDetailVal: {
+    liveSpeedLabel: {
       fontSize: 11,
       fontWeight: '600',
+      marginRight: 4,
+    },
+    liveSpeedVal: {
+      fontSize: 11,
+      fontWeight: '700',
+      fontFamily: 'monospace',
+    },
+    liveSpeedBarTrack: {
+      height: 3,
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
+      borderRadius: 2,
+      overflow: 'hidden',
+      marginTop: 8,
+    },
+    liveSpeedBarFill: {
+      height: '100%',
+      borderRadius: 2,
+    },
+    itemSub: {
+      fontSize: 10,
+      color: colors.muted,
+      marginTop: 6,
       fontFamily: 'monospace',
     },
     ifaceCard: {

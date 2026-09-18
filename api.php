@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.18.03
+ * Version: 2026.09.18.04
  * Release: 2026-09-18
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.18.03');
+define('UNRAID_API_VERSION', '2026.09.18.04');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -5228,6 +5228,13 @@ function handle_metrics_detail() {
     if (!$cached) {
         $statsOut = @shell_exec('timeout 3s docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}\t{{.ID}}" 2>/dev/null');
         if (!empty($statsOut)) {
+            $lastDockerNetFile = '/tmp/unraid_dockers_net_last.json';
+            $lastDockerNet = [];
+            if (file_exists($lastDockerNetFile)) {
+                $lastDockerNet = @json_decode(@file_get_contents($lastDockerNetFile), true) ?: [];
+            }
+            $newDockerNet = ['time' => $nowFloat, 'containers' => []];
+
             $lines = explode("\n", trim($statsOut));
             foreach ($lines as $line) {
                 $cols = explode("\t", trim($line));
@@ -5248,6 +5255,19 @@ function handle_metrics_detail() {
                     $netRxBytes = isset($netParts[0]) ? parse_bytes_string(trim($netParts[0])) : 0;
                     $netTxBytes = isset($netParts[1]) ? parse_bytes_string(trim($netParts[1])) : 0;
 
+                    $newDockerNet['containers'][$name] = ['rx' => $netRxBytes, 'tx' => $netTxBytes];
+                    $rxBps = 0;
+                    $txBps = 0;
+                    if (isset($lastDockerNet['containers'][$name]) && isset($lastDockerNet['time'])) {
+                        $dt = $nowFloat - (float)$lastDockerNet['time'];
+                        if ($dt > 0.2 && $dt < 60.0) {
+                            $dRx = $netRxBytes - (float)$lastDockerNet['containers'][$name]['rx'];
+                            $dTx = $netTxBytes - (float)$lastDockerNet['containers'][$name]['tx'];
+                            if ($dRx >= 0) $rxBps = round($dRx / $dt);
+                            if ($dTx >= 0) $txBps = round($dTx / $dt);
+                        }
+                    }
+
                     $dockerStats[] = [
                         'name' => $name,
                         'cpu_pct' => (float)$cpuRaw,
@@ -5258,18 +5278,28 @@ function handle_metrics_detail() {
                         'net_io_str' => $netIoRaw,
                         'net_rx_bytes' => $netRxBytes,
                         'net_tx_bytes' => $netTxBytes,
+                        'net_rx_bps' => $rxBps,
+                        'net_tx_bps' => $txBps,
                         'block_io' => $blockIo,
                         'id' => $cid
                     ];
                 }
             }
+            @file_put_contents($lastDockerNetFile, json_encode($newDockerNet), LOCK_EX);
             @file_put_contents($statsCacheFile, json_encode($dockerStats), LOCK_EX);
         }
     }
 
-    // 5. VMs List
+    // 5. VMs List with Live Network Speeds
     $vmsList = [];
     $virshOut = @shell_exec('virsh list --all 2>/dev/null');
+    $lastVmNetFile = '/tmp/unraid_vms_net_last.json';
+    $lastVmNet = [];
+    if (file_exists($lastVmNetFile)) {
+        $lastVmNet = @json_decode(@file_get_contents($lastVmNetFile), true) ?: [];
+    }
+    $newVmNet = ['time' => $nowFloat, 'vms' => []];
+
     if ($virshOut) {
         $lines = explode("\n", trim($virshOut));
         if (count($lines) >= 3) {
@@ -5280,22 +5310,69 @@ function handle_metrics_detail() {
                 if (!$line) continue;
                 $parts = preg_split('/\s+/', $line, 3);
                 if (count($parts) >= 3) {
+                    $vmId = $parts[0] !== '-' ? (int)$parts[0] : null;
+                    $vmName = $parts[1];
+                    $vmState = $parts[2];
+
+                    $vmRx = 0;
+                    $vmTx = 0;
+                    $vmRxBps = 0;
+                    $vmTxBps = 0;
+
+                    if ($vmState === 'running') {
+                        $domif = @shell_exec("virsh domiflist " . escapeshellarg($vmName) . " 2>/dev/null");
+                        if ($domif) {
+                            $difLines = explode("\n", trim($domif));
+                            if (count($difLines) >= 3) {
+                                array_shift($difLines);
+                                array_shift($difLines);
+                                foreach ($difLines as $difLine) {
+                                    $difCols = preg_split('/\s+/', trim($difLine));
+                                    if (!empty($difCols[0])) {
+                                        $vIface = $difCols[0];
+                                        $rF = "/sys/class/net/{$vIface}/statistics/rx_bytes";
+                                        $tF = "/sys/class/net/{$vIface}/statistics/tx_bytes";
+                                        if (file_exists($rF) && file_exists($tF)) {
+                                            $vmRx += (float)trim(@file_get_contents($tF));
+                                            $vmTx += (float)trim(@file_get_contents($rF));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        $newVmNet['vms'][$vmName] = ['rx' => $vmRx, 'tx' => $vmTx];
+                        if (isset($lastVmNet['vms'][$vmName]) && isset($lastVmNet['time'])) {
+                            $dt = $nowFloat - (float)$lastVmNet['time'];
+                            if ($dt > 0.2 && $dt < 60.0) {
+                                $dRx = $vmRx - (float)$lastVmNet['vms'][$vmName]['rx'];
+                                $dTx = $vmTx - (float)$lastVmNet['vms'][$vmName]['tx'];
+                                if ($dRx >= 0) $vmRxBps = round($dRx / $dt);
+                                if ($dTx >= 0) $vmTxBps = round($dTx / $dt);
+                            }
+                        }
+                    }
+
                     $vmsList[] = [
-                        'id' => $parts[0] !== '-' ? (int)$parts[0] : null,
-                        'name' => $parts[1],
-                        'state' => $parts[2]
+                        'id' => $vmId,
+                        'name' => $vmName,
+                        'state' => $vmState,
+                        'net_rx_bytes' => $vmRx,
+                        'net_tx_bytes' => $vmTx,
+                        'net_rx_bps' => $vmRxBps,
+                        'net_tx_bps' => $vmTxBps
                     ];
                 }
             }
         }
     }
+    @file_put_contents($lastVmNetFile, json_encode($newVmNet), LOCK_EX);
 
     // 6. Network Interfaces
     $interfaces = [];
     $totalRx = 0;
     $totalTx = 0;
     $netDevLines = @file('/proc/net/dev');
-    $nowFloat = microtime(true);
     $lastIfaceFile = '/tmp/unraid_ifaces_last.json';
     $lastIfaces = [];
     if (file_exists($lastIfaceFile)) {
@@ -5350,6 +5427,9 @@ function handle_metrics_detail() {
     }
     @file_put_contents($lastIfaceFile, json_encode($newIfaceData), LOCK_EX);
 
+    // 6.5 Top Network Processes with live rates
+    $netProcs = get_network_top_processes();
+
     // 7. History
     $historyFile = '/tmp/unraid_metrics_history.json';
     $history = [];
@@ -5374,12 +5454,129 @@ function handle_metrics_detail() {
         'network' => [
             'total_rx_bytes' => $totalRx,
             'total_tx_bytes' => $totalTx,
-            'interfaces' => $interfaces
+            'interfaces' => $interfaces,
+            'top_processes' => $netProcs
         ],
         'dockers' => $dockerStats,
         'vms' => $vmsList,
         'history' => $history
     ]);
+}
+
+/**
+ * Detect network-active processes and calculate live RX/TX rates
+ */
+function get_network_top_processes() {
+    $procs = [];
+    $ssOut = @shell_exec('export PATH=$PATH:/sbin:/usr/sbin:/usr/local/sbin:/usr/local/bin; ss -ntu -p 2>/dev/null');
+    if (empty($ssOut)) {
+        $ssOut = @shell_exec('netstat -ntu -p 2>/dev/null');
+    }
+
+    $pidMap = [];
+    if (!empty($ssOut)) {
+        $lines = explode("\n", trim($ssOut));
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (!$line) continue;
+            if (preg_match('/users:\(\("([^"]+)",pid=(\d+)/i', $line, $m)) {
+                $pName = $m[1];
+                $pid = (int)$m[2];
+                if (!isset($pidMap[$pid])) {
+                    $pidMap[$pid] = ['name' => $pName, 'conns' => 0];
+                }
+                $pidMap[$pid]['conns']++;
+            } elseif (preg_match('/(\d+)\/([^\s]+)/', $line, $m)) {
+                $pid = (int)$m[1];
+                $pName = $m[2];
+                if (!isset($pidMap[$pid])) {
+                    $pidMap[$pid] = ['name' => $pName, 'conns' => 0];
+                }
+                $pidMap[$pid]['conns']++;
+            }
+        }
+    }
+
+    // Read differential I/O from /proc/[pid]/io for network active processes
+    $now = microtime(true);
+    $lastProcIoFile = '/tmp/unraid_proc_net_io.json';
+    $lastIo = [];
+    if (file_exists($lastProcIoFile)) {
+        $lastIo = @json_decode(@file_get_contents($lastProcIoFile), true) ?: [];
+    }
+    $newIo = ['time' => $now, 'pids' => []];
+
+    // If pidMap is small, include top I/O processes from ps
+    if (count($pidMap) < 5) {
+        $psNet = @shell_exec("ps -eo pid,comm --sort=-%cpu 2>/dev/null | head -n 25");
+        if ($psNet) {
+            $plines = explode("\n", trim($psNet));
+            array_shift($plines);
+            foreach ($plines as $pl) {
+                $pParts = preg_split('/\s+/', trim($pl));
+                if (count($pParts) >= 2 && is_numeric($pParts[0])) {
+                    $pPid = (int)$pParts[0];
+                    if (!isset($pidMap[$pPid])) {
+                        $pidMap[$pPid] = ['name' => $pParts[1], 'conns' => 1];
+                    }
+                }
+            }
+        }
+    }
+
+    foreach ($pidMap as $pid => $info) {
+        $ioFile = "/proc/{$pid}/io";
+        $rBytes = 0;
+        $wBytes = 0;
+        if (file_exists($ioFile)) {
+            $ioContent = @file_get_contents($ioFile);
+            if ($ioContent) {
+                if (preg_match('/read_bytes:\s*(\d+)/', $ioContent, $rm)) $rBytes = (float)$rm[1];
+                if (preg_match('/write_bytes:\s*(\d+)/', $ioContent, $wm)) $wBytes = (float)$wm[1];
+                if ($rBytes === 0.0 && preg_match('/rchar:\s*(\d+)/', $ioContent, $rcm)) $rBytes = (float)$rcm[1];
+                if ($wBytes === 0.0 && preg_match('/wchar:\s*(\d+)/', $ioContent, $wcm)) $wBytes = (float)$wcm[1];
+            }
+        }
+
+        $newIo['pids'][$pid] = ['r' => $rBytes, 'w' => $wBytes];
+
+        $rxBps = 0;
+        $txBps = 0;
+        if (isset($lastIo['pids'][$pid]) && isset($lastIo['time'])) {
+            $dt = $now - (float)$lastIo['time'];
+            if ($dt > 0.2 && $dt < 60.0) {
+                $dRx = $rBytes - (float)$lastIo['pids'][$pid]['r'];
+                $dTx = $wBytes - (float)$lastIo['pids'][$pid]['w'];
+                if ($dRx >= 0) $rxBps = round($dRx / $dt);
+                if ($dTx >= 0) $txBps = round($dTx / $dt);
+            }
+        }
+
+        $cmd = @file_get_contents("/proc/{$pid}/cmdline");
+        $cmdStr = $cmd ? str_replace("\0", " ", trim($cmd)) : $info['name'];
+
+        $procs[] = [
+            'pid' => $pid,
+            'name' => $info['name'],
+            'command' => substr($cmdStr, 0, 80),
+            'conns' => $info['conns'],
+            'rx_bps' => $rxBps,
+            'tx_bps' => $txBps,
+            'total_bps' => $rxBps + $txBps,
+            'net_rx_bytes' => $rBytes,
+            'net_tx_bytes' => $wBytes
+        ];
+    }
+    @file_put_contents($lastProcIoFile, json_encode($newIo), LOCK_EX);
+
+    usort($procs, function($a, $b) {
+        if ($b['total_bps'] != $a['total_bps']) {
+            return $b['total_bps'] <=> $a['total_bps'];
+        }
+        return $b['conns'] <=> $a['conns'];
+    });
+
+    return array_slice($procs, 0, 30);
 }
 
 /**
