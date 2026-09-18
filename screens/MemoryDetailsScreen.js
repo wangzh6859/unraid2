@@ -12,6 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Database, Box, Monitor, Terminal, Zap, Layers, HardDrive } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import MetricsLineChart from '../components/MetricsLineChart';
+import { apiFetchJson } from '../utils/apiClient';
 
 function formatBytes(bytes) {
   if (!bytes || bytes <= 0) return '0 B';
@@ -23,58 +24,79 @@ function formatBytes(bytes) {
   return `${kb.toFixed(0)} KB`;
 }
 
-export default function MemoryDetailsScreen({ navigation }) {
+export default function MemoryDetailsScreen({ navigation, route }) {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
-  const [loading, setLoading] = useState(true);
+  const initialStats = route?.params?.initialStats;
+  const initialHistory = route?.params?.initialHistory;
+
+  const [loading, setLoading] = useState(!initialStats);
   const [refreshing, setRefreshing] = useState(false);
   const [filterTab, setFilterTab] = useState('all'); // 'all' | 'docker' | 'vm' | 'process'
 
-  const [memData, setMemData] = useState({
-    total: 0,
-    used: 0,
-    available: 0,
+  const [memData, setMemData] = useState(() => ({
+    total: initialStats?.mem_total || 0,
+    used: initialStats?.mem_used || 0,
+    available: (initialStats?.mem_total && initialStats?.mem_used) ? (initialStats.mem_total - initialStats.mem_used) : 0,
     free: 0,
     cached: 0,
     buffers: 0,
     swap_total: 0,
     swap_used: 0,
-    usage_pct: 0,
+    usage_pct: initialStats?.memory || 0,
     top_processes: [],
-  });
+  }));
   const [dockers, setDockers] = useState([]);
   const [vms, setVms] = useState([]);
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState(() => (Array.isArray(initialHistory) ? initialHistory : []));
 
   const fetchData = useCallback(async (isSilent = false) => {
     try {
       if (!isSilent) setLoading(true);
-      const host = await AsyncStorage.getItem('server_host');
-      const token = await AsyncStorage.getItem('api_token');
+      const host = (await AsyncStorage.getItem('@server_url')) || (await AsyncStorage.getItem('server_host'));
+      const token = (await AsyncStorage.getItem('@api_token')) || (await AsyncStorage.getItem('api_token'));
       if (!host) return;
 
       const cleanHost = host.replace(/\/+$/, '');
-      const url = `${cleanHost}/api.php?action=metrics_detail&token=${encodeURIComponent(token || '')}`;
+      const detailUrl = `${cleanHost}/api.php?action=metrics_detail&token=${encodeURIComponent(token || '')}`;
 
-      const res = await fetch(url, { headers: { Accept: 'application/json' } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-
-      if (json.memory) {
-        setMemData(json.memory);
+      let json = null;
+      try {
+        json = await apiFetchJson(detailUrl, {}, 5000, 1);
+      } catch (err) {
+        // Fallback to action=status
+        const fallbackUrl = `${cleanHost}/api.php?action=status&token=${encodeURIComponent(token || '')}`;
+        json = await apiFetchJson(fallbackUrl, {}, 5000, 1);
       }
-      if (Array.isArray(json.dockers)) {
+
+      if (json?.memory) {
+        setMemData(prev => ({
+          ...prev,
+          ...json.memory,
+          usage_pct: typeof json.memory.usage_pct === 'number' ? json.memory.usage_pct : (json.memory_usage || prev.usage_pct),
+        }));
+      } else if (json?.memory_usage !== undefined || json?.mem_total !== undefined) {
+        setMemData(prev => ({
+          ...prev,
+          total: json.mem_total || prev.total,
+          used: json.mem_used || prev.used,
+          usage_pct: typeof json.memory_usage === 'number' ? json.memory_usage : prev.usage_pct,
+        }));
+      }
+
+      if (Array.isArray(json?.dockers)) {
         setDockers(json.dockers);
       }
-      if (Array.isArray(json.vms)) {
+      if (Array.isArray(json?.vms)) {
         setVms(json.vms);
       }
-      if (Array.isArray(json.history) && json.history.length > 0) {
+      if (Array.isArray(json?.history) && json.history.length > 0) {
         setHistory(json.history);
-      } else if (json.memory?.usage_pct !== undefined) {
+      } else if (json?.memory?.usage_pct !== undefined || json?.memory_usage !== undefined) {
+        const u = json.memory?.usage_pct !== undefined ? json.memory.usage_pct : json.memory_usage;
         setHistory(prev => {
-          const next = [...prev, { t: Date.now(), mem: json.memory.usage_pct }];
+          const next = [...prev, { t: Date.now(), mem: u }];
           return next.slice(-150);
         });
       }
@@ -88,10 +110,10 @@ export default function MemoryDetailsScreen({ navigation }) {
 
   useFocusEffect(
     useCallback(() => {
-      fetchData();
+      fetchData(true);
       const timer = setInterval(() => {
         fetchData(true);
-      }, 2500);
+      }, 2000);
       return () => clearInterval(timer);
     }, [fetchData])
   );

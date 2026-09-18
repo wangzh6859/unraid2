@@ -13,56 +13,77 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Cpu, Box, Monitor, Terminal, Zap, ChevronRight, Layers } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import MetricsLineChart from '../components/MetricsLineChart';
+import { apiFetchJson } from '../utils/apiClient';
 
-export default function CpuDetailsScreen({ navigation }) {
+export default function CpuDetailsScreen({ navigation, route }) {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
-  const [loading, setLoading] = useState(true);
+  const initialStats = route?.params?.initialStats;
+  const initialHistory = route?.params?.initialHistory;
+
+  const [loading, setLoading] = useState(!initialStats);
   const [refreshing, setRefreshing] = useState(false);
   const [filterTab, setFilterTab] = useState('all'); // 'all' | 'docker' | 'vm' | 'process'
 
-  const [cpuData, setCpuData] = useState({
-    usage: 0,
-    temp: null,
-    model: 'CPU 处理器',
+  const [cpuData, setCpuData] = useState(() => ({
+    usage: initialStats?.cpu || 0,
+    temp: initialStats?.cpu_temp || null,
+    model: initialStats?.cpu_model || 'CPU 处理器',
     cores: [],
     top_processes: [],
-  });
+  }));
   const [dockers, setDockers] = useState([]);
   const [vms, setVms] = useState([]);
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState(() => (Array.isArray(initialHistory) ? initialHistory : []));
 
   // Fetch metrics detail from backend
   const fetchData = useCallback(async (isSilent = false) => {
     try {
       if (!isSilent) setLoading(true);
-      const host = await AsyncStorage.getItem('server_host');
-      const token = await AsyncStorage.getItem('api_token');
+      const host = (await AsyncStorage.getItem('@server_url')) || (await AsyncStorage.getItem('server_host'));
+      const token = (await AsyncStorage.getItem('@api_token')) || (await AsyncStorage.getItem('api_token'));
       if (!host) return;
 
       const cleanHost = host.replace(/\/+$/, '');
-      const url = `${cleanHost}/api.php?action=metrics_detail&token=${encodeURIComponent(token || '')}`;
+      const detailUrl = `${cleanHost}/api.php?action=metrics_detail&token=${encodeURIComponent(token || '')}`;
 
-      const res = await fetch(url, { headers: { Accept: 'application/json' } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-
-      if (json.cpu) {
-        setCpuData(json.cpu);
+      let json = null;
+      try {
+        json = await apiFetchJson(detailUrl, {}, 5000, 1);
+      } catch (err) {
+        // Fallback to action=status
+        const fallbackUrl = `${cleanHost}/api.php?action=status&token=${encodeURIComponent(token || '')}`;
+        json = await apiFetchJson(fallbackUrl, {}, 5000, 1);
       }
-      if (Array.isArray(json.dockers)) {
+
+      if (json?.cpu) {
+        setCpuData(prev => ({
+          ...prev,
+          ...json.cpu,
+          usage: typeof json.cpu.usage === 'number' ? json.cpu.usage : (json.cpu_usage || prev.usage),
+          temp: json.cpu.temp !== undefined ? json.cpu.temp : (json.cpu_temp || prev.temp),
+        }));
+      } else if (json?.cpu_usage !== undefined || json?.cpu_temp !== undefined) {
+        setCpuData(prev => ({
+          ...prev,
+          usage: typeof json.cpu_usage === 'number' ? json.cpu_usage : prev.usage,
+          temp: json.cpu_temp !== undefined ? json.cpu_temp : prev.temp,
+        }));
+      }
+
+      if (Array.isArray(json?.dockers)) {
         setDockers(json.dockers);
       }
-      if (Array.isArray(json.vms)) {
+      if (Array.isArray(json?.vms)) {
         setVms(json.vms);
       }
-      if (Array.isArray(json.history) && json.history.length > 0) {
+      if (Array.isArray(json?.history) && json.history.length > 0) {
         setHistory(json.history);
-      } else if (json.cpu?.usage !== undefined) {
-        // Fallback: append current point to local history
+      } else if (json?.cpu?.usage !== undefined || json?.cpu_usage !== undefined) {
+        const u = json.cpu?.usage !== undefined ? json.cpu.usage : json.cpu_usage;
         setHistory(prev => {
-          const next = [...prev, { t: Date.now(), cpu: json.cpu.usage }];
+          const next = [...prev, { t: Date.now(), cpu: u }];
           return next.slice(-150);
         });
       }
@@ -76,10 +97,10 @@ export default function CpuDetailsScreen({ navigation }) {
 
   useFocusEffect(
     useCallback(() => {
-      fetchData();
+      fetchData(true);
       const timer = setInterval(() => {
         fetchData(true);
-      }, 2500);
+      }, 2000);
       return () => clearInterval(timer);
     }, [fetchData])
   );

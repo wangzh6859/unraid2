@@ -12,17 +12,34 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Zap, Box, Terminal, Monitor, Activity, ShieldCheck, Layers, Gauge } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import MetricsLineChart from '../components/MetricsLineChart';
+import { apiFetchJson } from '../utils/apiClient';
 
-export default function GpuDetailsScreen({ navigation }) {
+export default function GpuDetailsScreen({ navigation, route }) {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
-  const [loading, setLoading] = useState(true);
+  const initialGpu = route?.params?.initialGpu;
+  const initialHistory = route?.params?.initialHistory;
+
+  const [loading, setLoading] = useState(!initialGpu);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [gpu, setGpu] = useState({
-    name: '未检测到独立显卡',
-    vendor: 'N/A',
+  const [gpu, setGpu] = useState(() => (initialGpu && initialGpu.name ? {
+    name: initialGpu.clean_name || initialGpu.name,
+    vendor: initialGpu.vendor || 'GPU',
+    usage: initialGpu.usage || 0,
+    temp: initialGpu.temp || null,
+    vram_used: initialGpu.vram_used || null,
+    vram_total: initialGpu.vram_total || null,
+    vram_pct: initialGpu.vram_pct || 0,
+    power_w: initialGpu.power_w || null,
+    clock_mhz: initialGpu.clock_mhz || null,
+    max_clock_mhz: initialGpu.max_clock_mhz || null,
+    driver: initialGpu.driver || 'GPU',
+    active_apps: initialGpu.active_apps || [],
+  } : {
+    name: '显卡 / GPU 检测中...',
+    vendor: 'GPU',
     usage: 0,
     temp: null,
     vram_used: null,
@@ -33,29 +50,43 @@ export default function GpuDetailsScreen({ navigation }) {
     max_clock_mhz: null,
     driver: 'N/A',
     active_apps: [],
-  });
-  const [history, setHistory] = useState([]);
+  }));
+  const [history, setHistory] = useState(() => (Array.isArray(initialHistory) ? initialHistory : []));
 
   const fetchData = useCallback(async (isSilent = false) => {
     try {
       if (!isSilent) setLoading(true);
-      const host = await AsyncStorage.getItem('server_host');
-      const token = await AsyncStorage.getItem('api_token');
+      const host = (await AsyncStorage.getItem('@server_url')) || (await AsyncStorage.getItem('server_host'));
+      const token = (await AsyncStorage.getItem('@api_token')) || (await AsyncStorage.getItem('api_token'));
       if (!host) return;
 
       const cleanHost = host.replace(/\/+$/, '');
-      const url = `${cleanHost}/api.php?action=metrics_detail&token=${encodeURIComponent(token || '')}`;
+      const detailUrl = `${cleanHost}/api.php?action=metrics_detail&token=${encodeURIComponent(token || '')}`;
 
-      const res = await fetch(url, { headers: { Accept: 'application/json' } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-
-      if (json.gpu) {
-        setGpu(json.gpu);
+      let json = null;
+      try {
+        json = await apiFetchJson(detailUrl, {}, 5000, 1);
+      } catch (err) {
+        // Fallback to action=status
+        const fallbackUrl = `${cleanHost}/api.php?action=status&token=${encodeURIComponent(token || '')}`;
+        json = await apiFetchJson(fallbackUrl, {}, 5000, 1);
       }
-      if (Array.isArray(json.history) && json.history.length > 0) {
+
+      if (json?.gpu) {
+        setGpu(prev => ({
+          ...prev,
+          ...json.gpu,
+          name: json.gpu.name || prev.name,
+          vendor: json.gpu.vendor || prev.vendor,
+          usage: typeof json.gpu.usage === 'number' ? json.gpu.usage : prev.usage,
+          temp: json.gpu.temp !== undefined ? json.gpu.temp : prev.temp,
+          driver: json.gpu.driver || prev.driver,
+        }));
+      }
+
+      if (Array.isArray(json?.history) && json.history.length > 0) {
         setHistory(json.history);
-      } else if (json.gpu?.usage !== undefined) {
+      } else if (json?.gpu?.usage !== undefined) {
         setHistory(prev => {
           const next = [...prev, { t: Date.now(), gpu: json.gpu.usage }];
           return next.slice(-150);
@@ -71,10 +102,10 @@ export default function GpuDetailsScreen({ navigation }) {
 
   useFocusEffect(
     useCallback(() => {
-      fetchData();
+      fetchData(true);
       const timer = setInterval(() => {
         fetchData(true);
-      }, 2500);
+      }, 2000);
       return () => clearInterval(timer);
     }, [fetchData])
   );

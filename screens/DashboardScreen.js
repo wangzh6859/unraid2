@@ -616,6 +616,21 @@ export default function DashboardScreen({ navigation }) {
   const ramTrackPath = describeArc(50, 50, 38, 140, 400);
   const ramProgPath = describeArc(50, 50, 38, 140, 140 + (memVal / 100) * 260);
 
+  // GPU 260° 仪表弧线与参数计算
+  const gpuVal = Math.min(Math.max(gpu?.usage || 0, 0), 100);
+  const gpuTrackPath = describeArc(50, 50, 38, 140, 400);
+  const gpuProgPath = describeArc(50, 50, 38, 140, 140 + (gpuVal / 100) * 260);
+  const gpuVendorStr = (gpu?.vendor || '').toUpperCase();
+  const gpuVendorColor = gpuVendorStr.includes('NVIDIA')
+    ? '#22c55e'
+    : (gpuVendorStr.includes('INTEL') ? '#38bdf8' : (gpuVendorStr.includes('AMD') ? '#ef4444' : colors.accent));
+  const gpuVendorBadgeBg = gpuVendorStr.includes('NVIDIA')
+    ? 'rgba(34, 197, 94, 0.15)'
+    : (gpuVendorStr.includes('INTEL') ? 'rgba(56, 189, 248, 0.15)' : (gpuVendorStr.includes('AMD') ? 'rgba(239, 68, 68, 0.15)' : 'rgba(56, 189, 248, 0.12)'));
+  const gpuDisplayModel = (gpu?.clean_name || gpu?.name) && gpu.name !== 'N/A' && gpu.name !== '未配置独立显卡'
+    ? (gpu.clean_name || gpu.name)
+    : '核芯显卡 / GPU';
+
   // 实际物理内存容量动态计算 (从 /proc/meminfo 获取精确字节)
   const memTotalBytes = stats.mem_total || 0;
   const memUsedBytes = stats.mem_used || (memTotalBytes > 0 ? (memTotalBytes * (memVal / 100)) : 0);
@@ -643,9 +658,11 @@ export default function DashboardScreen({ navigation }) {
     ? `总计 ${formatRamTotal(memTotalBytes)} 物理内存`
     : `物理内存已用 ${memVal}%`;
 
-  // 网络波形曲线 SVG 计算 (宽 320, 高 50)
+  // 网络波形曲线 SVG 计算 (宽 320, 高 50) 及紧凑 Bento 曲线 (宽 130, 高 52)
   const downWave = generateSmoothWave(downWaveHistory, 320, 50, 8, 4);
   const upWave = generateSmoothWave(upWaveHistory, 320, 50, 8, 4);
+  const compactDownWave = generateSmoothWave(downWaveHistory, 130, 52, 5, 2);
+  const compactUpWave = generateSmoothWave(upWaveHistory, 130, 52, 5, 2);
 
   // 存储容量多色段计算
   const storagePct = storage.percentage || 0;
@@ -812,12 +829,12 @@ export default function DashboardScreen({ navigation }) {
         </View>
       )}
 
-      {/* 2. Bento 核心硬件区：CPU 与 RAM 并列卡片 */}
+      {/* 2. Bento 核心硬件区：第一行 CPU 与 RAM 并列卡片 */}
       <View style={styles.bentoRow}>
         {/* CPU 卡片 */}
         <TouchableOpacity
           style={styles.bentoCard}
-          onPress={() => navigation.navigate('CpuDetails')}
+          onPress={() => navigation.navigate('CpuDetails', { initialStats: stats })}
           activeOpacity={0.8}
         >
           <View style={styles.bentoHeader}>
@@ -886,7 +903,7 @@ export default function DashboardScreen({ navigation }) {
         {/* RAM 卡片 */}
         <TouchableOpacity
           style={styles.bentoCard}
-          onPress={() => navigation.navigate('MemoryDetails')}
+          onPress={() => navigation.navigate('MemoryDetails', { initialStats: stats })}
           activeOpacity={0.8}
         >
           <View style={styles.bentoHeader}>
@@ -937,121 +954,148 @@ export default function DashboardScreen({ navigation }) {
         </TouchableOpacity>
       </View>
 
-      
-      {/* 2.5 GPU 硬件加速卡片 (紧凑单行 Bento 磁贴) */}
-      {gpu && gpu.name && gpu.name !== '未配置独立显卡' && gpu.name !== 'N/A' ? (
+      {/* 2.2 Bento 第二行：GPU 与网络吞吐并列卡片 (尺寸与 CPU / RAM 完全一致) */}
+      <View style={styles.bentoRow}>
+        {/* GPU 卡片 */}
         <TouchableOpacity
-          style={styles.miniGpuCard}
-          onPress={() => navigation.navigate('GpuDetails')}
+          style={styles.bentoCard}
+          onPress={() => navigation.navigate('GpuDetails', { initialGpu: gpu })}
           activeOpacity={0.8}
         >
-          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
-            <Zap size={14} color={colors.accent} style={{ marginRight: 6 }} />
-            <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textStrong, marginRight: 6 }} numberOfLines={1}>
-              {gpu.clean_name || gpu.name}
-            </Text>
-            <View style={[styles.gpuMiniBadge, {
-              backgroundColor: gpu.vendor === 'NVIDIA' ? 'rgba(34, 197, 94, 0.15)' :
-                               gpu.vendor === 'INTEL' ? 'rgba(56, 189, 248, 0.15)' :
-                               gpu.vendor === 'AMD' ? 'rgba(239, 68, 68, 0.15)' :
-                               'rgba(148, 163, 184, 0.15)'
-            }]}>
-              <Text style={{
-                fontSize: 10,
-                fontWeight: '700',
-                color: gpu.vendor === 'NVIDIA' ? '#22c55e' :
-                       gpu.vendor === 'INTEL' ? '#38bdf8' :
-                       gpu.vendor === 'AMD' ? '#ef4444' : colors.sub
-              }}>
-                {gpu.vendor || 'GPU'}
-              </Text>
-            </View>
-          </View>
-
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            {gpu.clock_mhz ? (
-              <Text style={{ fontSize: 11, color: colors.sub, fontFamily: 'monospace' }}>
-                {gpu.clock_mhz} MHz
-              </Text>
-            ) : null}
+          <View style={styles.bentoHeader}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Text style={{ fontSize: 11, color: colors.sub, marginRight: 4 }}>负载</Text>
-              <Text style={{ fontSize: 12, fontWeight: '700', color: colors.accent, fontFamily: 'monospace' }}>
-                {(gpu.usage || 0).toFixed(0)}%
-              </Text>
+              <Zap size={15} color={gpuVendorColor} style={{ marginRight: 6 }} />
+              <Text style={styles.bentoTitle}>GPU</Text>
+              <ChevronRight size={13} color={colors.muted} style={{ marginLeft: 3 }} />
             </View>
-            {Boolean(gpu.vram_pct && gpu.vram_pct > 0) && (
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Text style={{ fontSize: 11, color: colors.sub, marginRight: 4 }}>显存</Text>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: colors.accent, fontFamily: 'monospace' }}>
-                  {(gpu.vram_pct).toFixed(0)}%
+            {gpu && gpu.temp !== null && gpu.temp !== undefined ? (
+              <View style={[styles.tempBadge, { backgroundColor: gpu.temp > 65 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(249, 115, 22, 0.15)' }]}>
+                <Text style={[styles.tempBadgeText, { color: gpu.temp > 65 ? colors.red : colors.tempWarm }]}>
+                  {gpu.temp}°C
+                </Text>
+              </View>
+            ) : (
+              <View style={[styles.tempBadge, { backgroundColor: gpuVendorBadgeBg }]}>
+                <Text style={[styles.tempBadgeText, { color: gpuVendorColor, fontSize: 10 }]}>
+                  {gpu?.vendor || 'GPU'}
                 </Text>
               </View>
             )}
-            {gpu.temp !== null && gpu.temp !== undefined ? (
-              <Text style={{ fontSize: 11, fontWeight: '600', color: gpu.temp > 75 ? colors.tempWarm : colors.sub, fontFamily: 'monospace' }}>
-                {gpu.temp}°C
-              </Text>
-            ) : null}
-            <ChevronRight size={14} color={colors.muted} />
+          </View>
+
+          {/* SVG 仪表环 */}
+          <View style={styles.gaugeContainer}>
+            <Svg width={100} height={100} viewBox="0 0 100 100">
+              <Defs>
+                <LinearGradient id="gpuGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <Stop offset="0%" stopColor={gpuVendorColor} />
+                  <Stop offset="100%" stopColor={colors.accent} />
+                </LinearGradient>
+              </Defs>
+              <Path
+                d={gpuTrackPath}
+                stroke={colors.ringBg}
+                strokeWidth={7.5}
+                strokeLinecap="round"
+                fill="none"
+              />
+              {gpuProgPath ? (
+                <Path
+                  d={gpuProgPath}
+                  stroke="url(#gpuGrad)"
+                  strokeWidth={7.5}
+                  strokeLinecap="round"
+                  fill="none"
+                />
+              ) : null}
+            </Svg>
+            <View style={styles.gaugeCenterText}>
+              <Text style={styles.gaugeBigNum}>{Math.round(gpuVal)}%</Text>
+              <Text style={styles.gaugeUnitText}>负载率</Text>
+            </View>
+          </View>
+
+          {/* GPU 型号信息 */}
+          <View style={styles.ramMetaBox}>
+            <Text style={styles.ramMetaText} numberOfLines={1}>
+              {gpuDisplayModel}
+            </Text>
           </View>
         </TouchableOpacity>
-      ) : null}
 
-      {/* 3. 实时网络吞吐卡片 (双轨平滑波浪曲线) */}
-      <TouchableOpacity
-        style={styles.card}
-        onPress={() => navigation.navigate('NetworkDetails')}
-        activeOpacity={0.85}
-      >
-        <View style={styles.cardHeaderRow}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Wifi size={17} color={colors.networkDown} style={{ marginRight: 8 }} />
-            <Text style={styles.cardTitle}>实时网络吞吐</Text>
-            <ChevronRight size={14} color={colors.muted} style={{ marginLeft: 4 }} />
-          </View>
-
-          {/* 实时下行与上行速率徽章 */}
-          <View style={styles.netBadgesRow}>
-            <View style={styles.netRateItem}>
-              <ArrowDown size={13} color={colors.networkDown} style={{ marginRight: 3 }} />
-              <Text style={[styles.netRateText, { color: colors.networkDown }]}>
+        {/* 网络吞吐卡片 (缩小为 Bento 规格，与 GPU 并列) */}
+        <TouchableOpacity
+          style={styles.bentoCard}
+          onPress={() => navigation.navigate('NetworkDetails', { initialNetSpeed: netSpeed })}
+          activeOpacity={0.8}
+        >
+          <View style={styles.bentoHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Wifi size={15} color={colors.networkDown} style={{ marginRight: 6 }} />
+              <Text style={styles.bentoTitle}>网络</Text>
+              <ChevronRight size={13} color={colors.muted} style={{ marginLeft: 3 }} />
+            </View>
+            <View style={styles.compactNetSpeedBadge}>
+              <ArrowDown size={11} color={colors.networkDown} style={{ marginRight: 2 }} />
+              <Text style={[styles.compactNetSpeedText, { color: colors.networkDown }]} numberOfLines={1}>
                 {formatSpeed(netSpeed.down)}
               </Text>
             </View>
-            <View style={[styles.netRateItem, { marginLeft: 12 }]}>
-              <ArrowUp size={13} color={colors.networkUp} style={{ marginRight: 3 }} />
-              <Text style={[styles.netRateText, { color: colors.networkUp }]}>
-                {formatSpeed(netSpeed.up)}
-              </Text>
+          </View>
+
+          {/* 紧凑双轨贝塞尔波形图 + 实时速率 */}
+          <View style={styles.gaugeContainer}>
+            <View style={styles.compactWaveBox}>
+              <Svg width="100%" height={52} viewBox="0 0 130 52">
+                <Defs>
+                  <LinearGradient id="cDownGrad" x1="0" y1="0" x2="0" y2="1">
+                    <Stop offset="0%" stopColor={colors.networkDown} stopOpacity={0.28} />
+                    <Stop offset="100%" stopColor={colors.networkDown} stopOpacity={0.0} />
+                  </LinearGradient>
+                  <LinearGradient id="cUpGrad" x1="0" y1="0" x2="0" y2="1">
+                    <Stop offset="0%" stopColor={colors.networkUp} stopOpacity={0.22} />
+                    <Stop offset="100%" stopColor={colors.networkUp} stopOpacity={0.0} />
+                  </LinearGradient>
+                </Defs>
+                {compactDownWave.area ? <Path d={compactDownWave.area} fill="url(#cDownGrad)" /> : null}
+                {compactDownWave.path ? <Path d={compactDownWave.path} stroke={colors.networkDown} strokeWidth={2.0} fill="none" /> : null}
+                {compactUpWave.area ? <Path d={compactUpWave.area} fill="url(#cUpGrad)" /> : null}
+                {compactUpWave.path ? <Path d={compactUpWave.path} stroke={colors.networkUp} strokeWidth={1.8} fill="none" /> : null}
+              </Svg>
+            </View>
+
+            {/* 下方双向速率 */}
+            <View style={styles.compactNetRow}>
+              <View style={styles.compactNetCol}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <ArrowDown size={10} color={colors.networkDown} style={{ marginRight: 2 }} />
+                  <Text style={[styles.compactNetRateLabel, { color: colors.sub }]}>下行</Text>
+                </View>
+                <Text style={[styles.compactNetRateValue, { color: colors.networkDown }]} numberOfLines={1}>
+                  {formatSpeed(netSpeed.down)}
+                </Text>
+              </View>
+
+              <View style={[styles.compactNetCol, { alignItems: 'flex-end' }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <ArrowUp size={10} color={colors.networkUp} style={{ marginRight: 2 }} />
+                  <Text style={[styles.compactNetRateLabel, { color: colors.sub }]}>上行</Text>
+                </View>
+                <Text style={[styles.compactNetRateValue, { color: colors.networkUp }]} numberOfLines={1}>
+                  {formatSpeed(netSpeed.up)}
+                </Text>
+              </View>
             </View>
           </View>
-        </View>
 
-        {/* SVG 双轨平滑贝塞尔波形图 */}
-        <View style={styles.waveSvgContainer}>
-          <Svg width="100%" height={50} viewBox="0 0 320 50">
-            <Defs>
-              <LinearGradient id="downGrad" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0%" stopColor={colors.networkDown} stopOpacity={0.25} />
-                <Stop offset="100%" stopColor={colors.networkDown} stopOpacity={0.0} />
-              </LinearGradient>
-              <LinearGradient id="upGrad" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0%" stopColor={colors.networkUp} stopOpacity={0.20} />
-                <Stop offset="100%" stopColor={colors.networkUp} stopOpacity={0.0} />
-              </LinearGradient>
-            </Defs>
-
-            {/* 下行面积与曲线 */}
-            {downWave.area ? <Path d={downWave.area} fill="url(#downGrad)" /> : null}
-            {downWave.path ? <Path d={downWave.path} stroke={colors.networkDown} strokeWidth={2.2} fill="none" /> : null}
-
-            {/* 上行面积与曲线 */}
-            {upWave.area ? <Path d={upWave.area} fill="url(#upGrad)" /> : null}
-            {upWave.path ? <Path d={upWave.path} stroke={colors.networkUp} strokeWidth={2.0} fill="none" /> : null}
-          </Svg>
-        </View>
-      </TouchableOpacity>
+          {/* 状态文字 */}
+          <View style={styles.ramMetaBox}>
+            <Text style={styles.ramMetaText} numberOfLines={1}>
+              实时吞吐量监控
+            </Text>
+          </View>
+        </TouchableOpacity>
+      </View>
 
       {/* 4. 存储阵列卡片 (多色段容量分布 + 磁盘温度胶囊) */}
       <TouchableOpacity
@@ -1807,6 +1851,46 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   ramMetaText: {
     fontSize: 11,
     color: colors.sub,
+  },
+  compactNetSpeedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: 'rgba(34, 197, 94, 0.12)',
+    maxWidth: 90,
+  },
+  compactNetSpeedText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    fontFamily: 'monospace',
+  },
+  compactWaveBox: {
+    width: '100%',
+    height: 52,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  compactNetRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    paddingHorizontal: 2,
+    marginTop: 6,
+  },
+  compactNetCol: {
+    flex: 1,
+  },
+  compactNetRateLabel: {
+    fontSize: 9,
+    fontWeight: '600',
+  },
+  compactNetRateValue: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    fontFamily: 'monospace',
+    marginTop: 1,
   },
 
   // Standard Card Style

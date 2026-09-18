@@ -12,6 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Wifi, ArrowDown, ArrowUp, Box, Globe, Shield, Activity, Layers, Network } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import MetricsLineChart from '../components/MetricsLineChart';
+import { apiFetchJson } from '../utils/apiClient';
 
 function formatSpeed(bytesPerSec) {
   if (!bytesPerSec || bytesPerSec <= 0) return '0 KB/s';
@@ -32,11 +33,14 @@ function formatBytes(bytes) {
   return `${kb.toFixed(0)} KB`;
 }
 
-export default function NetworkDetailsScreen({ navigation }) {
+export default function NetworkDetailsScreen({ navigation, route }) {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
-  const [loading, setLoading] = useState(true);
+  const initialNetSpeed = route?.params?.initialNetSpeed;
+  const initialHistory = route?.params?.initialHistory;
+
+  const [loading, setLoading] = useState(!initialNetSpeed);
   const [refreshing, setRefreshing] = useState(false);
 
   const [networkData, setNetworkData] = useState({
@@ -45,30 +49,42 @@ export default function NetworkDetailsScreen({ navigation }) {
     interfaces: [],
   });
   const [dockers, setDockers] = useState([]);
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState(() => (Array.isArray(initialHistory) ? initialHistory : []));
 
   const fetchData = useCallback(async (isSilent = false) => {
     try {
       if (!isSilent) setLoading(true);
-      const host = await AsyncStorage.getItem('server_host');
-      const token = await AsyncStorage.getItem('api_token');
+      const host = (await AsyncStorage.getItem('@server_url')) || (await AsyncStorage.getItem('server_host'));
+      const token = (await AsyncStorage.getItem('@api_token')) || (await AsyncStorage.getItem('api_token'));
       if (!host) return;
 
       const cleanHost = host.replace(/\/+$/, '');
-      const url = `${cleanHost}/api.php?action=metrics_detail&token=${encodeURIComponent(token || '')}`;
+      const detailUrl = `${cleanHost}/api.php?action=metrics_detail&token=${encodeURIComponent(token || '')}`;
 
-      const res = await fetch(url, { headers: { Accept: 'application/json' } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
+      let json = null;
+      try {
+        json = await apiFetchJson(detailUrl, {}, 5000, 1);
+      } catch (err) {
+        // Fallback to action=status
+        const fallbackUrl = `${cleanHost}/api.php?action=status&token=${encodeURIComponent(token || '')}`;
+        json = await apiFetchJson(fallbackUrl, {}, 5000, 1);
+      }
 
-      if (json.network) {
+      if (json?.network) {
         setNetworkData(json.network);
       }
-      if (Array.isArray(json.dockers)) {
+      if (Array.isArray(json?.dockers)) {
         setDockers(json.dockers);
       }
-      if (Array.isArray(json.history) && json.history.length > 0) {
+      if (Array.isArray(json?.history) && json.history.length > 0) {
         setHistory(json.history);
+      } else if (json?.network_speed) {
+        const rx = json.network_speed.down || json.network_speed.rx || 0;
+        const tx = json.network_speed.up || json.network_speed.tx || 0;
+        setHistory(prev => {
+          const next = [...prev, { t: Date.now(), rx, tx }];
+          return next.slice(-150);
+        });
       }
     } catch (e) {
       console.warn('[NetworkDetailsScreen] Fetch error:', e);
@@ -80,10 +96,10 @@ export default function NetworkDetailsScreen({ navigation }) {
 
   useFocusEffect(
     useCallback(() => {
-      fetchData();
+      fetchData(true);
       const timer = setInterval(() => {
         fetchData(true);
-      }, 2500);
+      }, 2000);
       return () => clearInterval(timer);
     }, [fetchData])
   );
@@ -97,10 +113,12 @@ export default function NetworkDetailsScreen({ navigation }) {
   const currentSpeeds = useMemo(() => {
     if (history.length > 0) {
       const last = history[history.length - 1];
-      return {
-        rx: last.rx || 0,
-        tx: last.tx || 0,
-      };
+      if (last.rx !== undefined || last.tx !== undefined) {
+        return {
+          rx: last.rx || 0,
+          tx: last.tx || 0,
+        };
+      }
     }
     // Sum interfaces
     let rx = 0;
@@ -111,8 +129,14 @@ export default function NetworkDetailsScreen({ navigation }) {
         tx += iface.tx_bps || 0;
       }
     });
+    if (rx === 0 && tx === 0 && initialNetSpeed) {
+      return {
+        rx: initialNetSpeed.down || initialNetSpeed.rx || 0,
+        tx: initialNetSpeed.up || initialNetSpeed.tx || 0,
+      };
+    }
     return { rx, tx };
-  }, [history, networkData.interfaces]);
+  }, [history, networkData.interfaces, initialNetSpeed]);
 
   const rxPoints = useMemo(() => {
     if (history.length === 0) return [currentSpeeds.rx];

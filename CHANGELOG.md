@@ -4,6 +4,48 @@
 
 ---
 
+## [v1.4.228] - 2026-09-18
+> **核心主题**：彻底根治二级页面（CPU/内存/GPU/网络）数据为零与不刷新故障；首页重构为 2x2 黄金比例 Bento 仪表网格（Row 1: CPU + 内存，Row 2: GPU + 紧凑网络并列）；全面升级 GPU 显卡型号识别与二级页面实时动态刷新机制。
+
+### ⚡ 彻底根治二级页面全零与无数据故障 (AsyncStorage 存储键与双路容灾)
+- **根因分析**：
+  - 在 `CpuDetailsScreen.js`、`MemoryDetailsScreen.js`、`GpuDetailsScreen.js`、`NetworkDetailsScreen.js` 中，原逻辑查询了 `server_host` 与 `api_token`，而 App 全局实际持久化保存的键名为 `@server_url` 与 `@api_token`；
+  - 导致所有二级页面在挂载时直接读取到 `null`，网络请求在第一行直接被中断退出，页面永久冻结在初始的 "0" 与 "未检测到独立显卡 N/A"；
+- **全量修复**：
+  - 统一四套二级页面的存储键解析逻辑：优先读取 `@server_url` 与 `@api_token`，并兼顾容错兼容；
+  - 接入统一的 `apiFetchJson` 容灾请求客户端，提供超时保护与网络重连机制；
+  - **首屏秒开无缝衔接**：从首页点击卡片进入二级页面时，通过 `route.params` 瞬时传递当前已有的实时数据（`initialStats` / `initialGpu` / `initialNetSpeed`），彻底消除进入二级页面时的空白或闪烁；
+  - **双路兜底机制**：请求 `action=metrics_detail` 出现异常或字段缺损时，毫秒级自动回退至 `action=status`，100% 确保硬件指标、利用率和状态正常呈现；
+  - **实时刷新率升级**：由旧版 2500ms 轮询提升至 2000ms 持续刷新，并保留下拉刷新（Pull-to-Refresh）手动立即拉取能力。
+
+### 🎨 首页仪表盘重构：2x2 黄金比例 Bento 硬件矩阵
+- **用户需求**：将首页的网络占用框缩小，同时将 GPU 信息变成和 CPU/内存一样的框，并将其与网络占用情况的框并排放置；
+- **Bento 2x2 矩阵重构**：
+  - **第一行 (Row 1)**：`[ CPU Bento 卡片 (50%) ]` 与 `[ RAM 内存 Bento 卡片 (50%) ]` 并排；
+  - **第二行 (Row 2)**：`[ GPU Bento 卡片 (50%) ]` 与 `[ 网络吞吐 Bento 卡片 (50%) ]` 并排；
+- **全新 GPU Bento 仪表卡片**：
+  - 采用与 CPU/RAM 完全一致的规格、圆角、背景和阴影；
+  - 拥有 260° 原生 SVG 弧线仪表环（100x100）、中央特大加粗利用率百分比、动态厂商识别徽章与温度标签；
+  - 底部副标题清晰呈现识别到的显卡完整型号；
+- **全新紧凑网络 Bento 卡片**：
+  - 将原占满整行的网络吞吐卡片收敛至 50% Bento 宽度，与 GPU 并列；
+  - 内嵌紧凑型平滑双轨贝塞尔波形图（130x52，下行绿 + 上行紫渐变充填），实时直观反馈网络吞吐动态；
+  - 双列清晰标注下载速率（`ArrowDown` 绿色）与上传速率（`ArrowUp` 紫色），并在右上角配备实时下行流速小胶囊；
+- 彻底移除冗余的单行 `miniGpuCard` 和旧版全宽网络大卡片，使主界面硬件监控布局更加整洁、对称、富有科技感。
+
+### 🔍 深度 GPU 显卡型号识别与核显推导引擎 (`api.php` 2026.09.18.03)
+- **多层显卡检测 Fallback 链条**：
+  1. 官方 `gpustat` CLI 与 `/usr/local/emhttp/plugins/gpustat` 脚本捕获；
+  2. NVIDIA 显卡官方 `nvidia-smi` 实时字段查询；
+  3. Linux 原生 DRM `/sys/class/drm/card*` 与 `intel_gpu_top` / AMD `gpu_busy_percent` 检测；
+  4. 全系统环境变量增强版 `lspci -nn` 扫描（自动追加 `/sbin:/usr/sbin:/usr/local/bin` 等完整搜索路径）；
+  5. Linux 内核级 `/sys/bus/pci/devices/*/class` 原生枚举，直接匹配 PCI 显示设备类别码（`0x03*`）并提取 Vendor/Device ID；
+  6. **Intel / AMD CPU 核显智能推断引擎 (`detect_cpu_igpu_model`)**：
+     - 从始终可读的 `/proc/cpuinfo` 深度解析 CPU 型号架构，自动精准映射核显型号，例如 Alder Lake-N N100/N95/N200/N305、Jasper Lake N5105/N5095、Gemini Lake J4125、Intel 6代~14代 Core（UHD 630 / UHD 730 / UHD 770）以及 AMD Ryzen G 系列 APU；
+     - 彻底告别无独立显卡或驱动受限时显示 "N/A" 或 "未检测到独立显卡" 的窘境，真实还原用户主机硬件配置。
+
+---
+
 ## [v1.4.227] - 2026-09-18
 > **核心主题**：彻底根治 GPU 占用率持续为 0% 的核心隐患；全面推出 CPU、内存、GPU、网络四大独立二级详情页；上线近 5 分钟高精度时序曲线与各程序/容器/虚拟机的实时占用排行。
 

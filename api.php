@@ -2,11 +2,11 @@
 /**
  * =========================================================================
  * Unraid Mobile Manager - Backend API (api.php)
- * Version: 2026.09.18.02
+ * Version: 2026.09.18.03
  * Release: 2026-09-18
  * =========================================================================
  */
-define('UNRAID_API_VERSION', '2026.09.18.02');
+define('UNRAID_API_VERSION', '2026.09.18.03');
 
 @ob_start();
 @ini_set('max_execution_time', '0');
@@ -4656,19 +4656,73 @@ function get_gpu_telemetry() {
         return $gpustatCand;
     }
 
-    // 6. Generic display fallback via lspci
-    $genLspci = @shell_exec("lspci 2>/dev/null | grep -iE 'vga compatible controller|3d controller|display controller'");
+    // 6. Generic display fallback via lspci (ensure full PATH)
+    $genLspci = @shell_exec("export PATH=\$PATH:/sbin:/usr/sbin:/usr/local/sbin:/usr/local/bin; lspci -nn 2>/dev/null | grep -iE 'vga compatible controller|3d controller|display controller'");
+    if (empty($genLspci)) {
+        $genLspci = @shell_exec("lspci 2>/dev/null | grep -iE 'vga compatible controller|3d controller|display controller'");
+    }
     if ($genLspci && trim($genLspci) !== '') {
         $firstLine = explode("\n", trim($genLspci))[0];
         if (preg_match('/:\s*(.+)$/', $firstLine, $m)) {
-            $model = trim($m[1]);
-            $vendor = (stripos($model, 'Intel') !== false) ? 'Intel' : ((stripos($model, 'NVIDIA') !== false) ? 'NVIDIA' : ((stripos($model, 'AMD') !== false || stripos($model, 'ATI') !== false) ? 'AMD' : 'Display'));
-            $gpuData['name'] = $model;
+            $rawModel = trim($m[1]);
+            $vendor = (stripos($rawModel, 'Intel') !== false) ? 'Intel' : ((stripos($rawModel, 'NVIDIA') !== false) ? 'NVIDIA' : ((stripos($rawModel, 'AMD') !== false || stripos($rawModel, 'ATI') !== false) ? 'AMD' : 'Display'));
+            $cleanName = $rawModel;
+            if (preg_match('/\[([^\]]*(?:Graphics|Iris|HD|UHD|Arc|GeForce|Radeon)[^\]]*)\]/i', $rawModel, $bm)) {
+                $cleanName = $bm[1];
+            } else {
+                $cleanName = preg_replace('/\s*\(rev\s+[0-9a-f]+\)/i', '', $cleanName);
+                $cleanName = preg_replace('/^(Intel Corporation|NVIDIA Corporation|Advanced Micro Devices, Inc\.\s*\[AMD\/ATI\])\s*/i', '', $cleanName);
+            }
+            $gpuData['name'] = ($vendor === 'Intel' && stripos($cleanName, 'Intel') === false ? 'Intel® ' : '') . $cleanName;
             $gpuData['vendor'] = $vendor;
-            $gpuData['driver'] = 'generic';
+            $gpuData['driver'] = strtolower($vendor);
+            if ($vendor === 'Intel') {
+                $rc6 = get_intel_rc6_usage();
+                if ($rc6 !== null) $gpuData['usage'] = $rc6;
+            }
             $gpuData['active_apps'] = get_gpu_active_apps();
             return $gpuData;
         }
+    }
+
+    // 7. Direct Linux kernel /sys/bus/pci device detection
+    $pciVga = glob('/sys/bus/pci/devices/*/class');
+    if ($pciVga) {
+        foreach ($pciVga as $classFile) {
+            $classHex = trim(@file_get_contents($classFile));
+            if (strpos($classHex, '0x03') === 0) { // 0x0300, 0x0302, 0x0380
+                $devDir = dirname($classFile);
+                $vendorHex = trim(@file_get_contents("{$devDir}/vendor"));
+                $deviceHex = trim(@file_get_contents("{$devDir}/device"));
+                $vendorName = 'GPU';
+                if (stripos($vendorHex, '0x8086') !== false) $vendorName = 'Intel';
+                elseif (stripos($vendorHex, '0x10de') !== false) $vendorName = 'NVIDIA';
+                elseif (stripos($vendorHex, '0x1002') !== false) $vendorName = 'AMD';
+
+                $iModel = ($vendorName === 'Intel') ? detect_cpu_igpu_model() : null;
+                $gpuData['name'] = $iModel ?: ($vendorName . ' 显卡 (' . $deviceHex . ')');
+                $gpuData['vendor'] = $vendorName;
+                $gpuData['driver'] = ($vendorName === 'Intel') ? 'i915' : 'pci';
+                if ($vendorName === 'Intel') {
+                    $rc6 = get_intel_rc6_usage();
+                    if ($rc6 !== null) $gpuData['usage'] = $rc6;
+                }
+                $gpuData['active_apps'] = get_gpu_active_apps();
+                return $gpuData;
+            }
+        }
+    }
+
+    // 8. Intel / AMD CPU Integrated Graphics inference fallback (from /proc/cpuinfo)
+    $cpuIgpu = detect_cpu_igpu_model();
+    if ($cpuIgpu) {
+        $gpuData['name'] = $cpuIgpu;
+        $gpuData['vendor'] = (stripos($cpuIgpu, 'AMD') !== false) ? 'AMD' : 'Intel';
+        $gpuData['driver'] = 'iGPU';
+        $rc6 = get_intel_rc6_usage();
+        if ($rc6 !== null) $gpuData['usage'] = $rc6;
+        $gpuData['active_apps'] = get_gpu_active_apps();
+        return $gpuData;
     }
 
     $gpuData['active_apps'] = get_gpu_active_apps();
@@ -5326,4 +5380,82 @@ function handle_metrics_detail() {
         'vms' => $vmsList,
         'history' => $history
     ]);
+}
+
+/**
+ * Detect CPU Integrated Graphics model by inspecting /proc/cpuinfo or lshw/cpuid
+ */
+function detect_cpu_igpu_model() {
+    $cpuinfo = @file_get_contents('/proc/cpuinfo');
+    if (empty($cpuinfo)) return null;
+
+    $modelName = '';
+    if (preg_match('/model name\s*:\s*(.+)$/m', $cpuinfo, $m)) {
+        $modelName = trim($m[1]);
+    }
+    if (empty($modelName)) return null;
+
+    // Check Intel CPU generation and map to known iGPU
+    if (stripos($modelName, 'Intel') !== false) {
+        // N100, N95, N97, N200, N300, N305, i3-N305
+        if (preg_match('/(N100|N95|N97|N200|N300|N305|i3-N\d+)/i', $modelName, $cm)) {
+            return "Intel® UHD Graphics (Alder Lake-N {$cm[1]})";
+        }
+        // J4125, J4105, J4005, N4100, N4000 (Gemini Lake)
+        if (preg_match('/(J4125|J4105|J4005|N4100|N4000|J5005|J5040|N5000|N5030)/i', $modelName, $cm)) {
+            return "Intel® UHD Graphics 600/605 (Gemini Lake {$cm[1]})";
+        }
+        // N5105, N5095, N6005, J6412 (Jasper Lake / Elkhart Lake)
+        if (preg_match('/(N5105|N5095|N6005|J6412|J6413)/i', $modelName, $cm)) {
+            return "Intel® UHD Graphics (Jasper Lake {$cm[1]})";
+        }
+        // 12th/13th/14th Gen Core: i3/i5/i7/i9 - 12xxx, 13xxx, 14xxx
+        if (preg_match('/i[3579]-1[234]\d{3}/i', $modelName, $cm)) {
+            if (preg_match('/i[35]-1[234]100|i3-1[234]400/i', $modelName)) {
+                return "Intel® UHD Graphics 730 ({$cm[0]})";
+            }
+            return "Intel® UHD Graphics 770 ({$cm[0]})";
+        }
+        // 11th Gen Core: i3/i5/i7/i9 - 11xxx
+        if (preg_match('/i[3579]-11\d{3}/i', $modelName, $cm)) {
+            return "Intel® UHD Graphics 750 ({$cm[0]})";
+        }
+        // 10th Gen Core: i3/i5/i7/i9 - 10xxx
+        if (preg_match('/i[3579]-10\d{3}/i', $modelName, $cm)) {
+            return "Intel® UHD Graphics 630 ({$cm[0]})";
+        }
+        // 9th Gen Core: i3/i5/i7/i9 - 9xxx
+        if (preg_match('/i[3579]-9\d{3}/i', $modelName, $cm)) {
+            return "Intel® UHD Graphics 630 ({$cm[0]})";
+        }
+        // 8th Gen Core: i3/i5/i7/i9 - 8xxx
+        if (preg_match('/i[3579]-8\d{3}/i', $modelName, $cm)) {
+            return "Intel® UHD Graphics 630 ({$cm[0]})";
+        }
+        // 7th Gen Core: i3/i5/i7/i9 - 7xxx
+        if (preg_match('/i[3579]-7\d{3}/i', $modelName, $cm)) {
+            return "Intel® HD Graphics 630 ({$cm[0]})";
+        }
+        // 6th Gen Core: i3/i5/i7/i9 - 6xxx
+        if (preg_match('/i[3579]-6\d{3}/i', $modelName, $cm)) {
+            return "Intel® HD Graphics 530 ({$cm[0]})";
+        }
+        // Generic Intel Core / Celeron / Pentium
+        if (preg_match('/(Celeron|Pentium|Xeon|Core)/i', $modelName, $cm)) {
+            return "Intel® 核芯显卡 (iGPU - {$cm[1]})";
+        }
+        return "Intel® 核芯显卡 (iGPU)";
+    }
+
+    // AMD APU
+    if (stripos($modelName, 'AMD') !== false || stripos($modelName, 'Ryzen') !== false) {
+        if (preg_match('/Ryzen.*?[0-9]{4}[GGE]/i', $modelName, $cm)) {
+            return "AMD Radeon™ Graphics ({$cm[0]})";
+        }
+        if (stripos($modelName, 'Radeon') !== false) {
+            return "AMD Radeon™ Graphics";
+        }
+    }
+
+    return null;
 }
