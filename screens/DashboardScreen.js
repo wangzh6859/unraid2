@@ -1026,7 +1026,7 @@ export default function DashboardScreen({ navigation }) {
         {/* 网络吞吐卡片 */}
         <TouchableOpacity
           style={styles.bentoCard}
-          onPress={() => navigation.navigate('NetworkDetails', { initialNetSpeed: netSpeed, initialHistory: history })}
+          onPress={() => navigation.navigate('NetworkDetails', { initialNetSpeed: netSpeed })}
           activeOpacity={0.8}
         >
           <View style={styles.bentoHeader}>

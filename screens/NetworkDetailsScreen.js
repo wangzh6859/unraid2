@@ -18,21 +18,23 @@ import MetricsLineChart from '../components/MetricsLineChart';
 import { apiFetchJson } from '../utils/apiClient';
 
 function formatSpeed(bytesPerSec) {
-  if (!bytesPerSec || bytesPerSec <= 0) return '0 KB/s';
-  const mb = bytesPerSec / (1024 * 1024);
+  const n = typeof bytesPerSec === 'number' ? bytesPerSec : Number(bytesPerSec);
+  if (!n || isNaN(n) || n <= 0 || !isFinite(n)) return '0 KB/s';
+  const mb = n / (1024 * 1024);
   if (mb >= 100) return `${mb.toFixed(0)} MB/s`;
   if (mb >= 1) return `${mb.toFixed(1)} MB/s`;
-  const kb = bytesPerSec / 1024;
+  const kb = n / 1024;
   return `${kb.toFixed(0)} KB/s`;
 }
 
 function formatBytes(bytes) {
-  if (!bytes || bytes <= 0) return '0 B';
-  const gb = bytes / (1024 * 1024 * 1024);
+  const n = typeof bytes === 'number' ? bytes : Number(bytes);
+  if (!n || isNaN(n) || n <= 0 || !isFinite(n)) return '0 B';
+  const gb = n / (1024 * 1024 * 1024);
   if (gb >= 1) return `${gb.toFixed(2)} GB`;
-  const mb = bytes / (1024 * 1024);
+  const mb = n / (1024 * 1024);
   if (mb >= 1) return `${mb.toFixed(1)} MB`;
-  const kb = bytes / 1024;
+  const kb = n / 1024;
   return `${kb.toFixed(0)} KB`;
 }
 
@@ -188,15 +190,16 @@ export default function NetworkDetailsScreen({ navigation, route }) {
     const newMap = {};
 
     // 1. Docker Containers
-    dockers.forEach(d => {
+    (dockers || []).forEach(d => {
+      if (!d || !d.name) return;
       const id = `docker-${d.name}`;
-      const rxBytes = d.net_rx_bytes || 0;
-      const txBytes = d.net_tx_bytes || 0;
+      const rxBytes = typeof d.net_rx_bytes === 'number' && !isNaN(d.net_rx_bytes) ? d.net_rx_bytes : 0;
+      const txBytes = typeof d.net_tx_bytes === 'number' && !isNaN(d.net_tx_bytes) ? d.net_tx_bytes : 0;
 
-      let rxBps = d.net_rx_bps || 0;
-      let txBps = d.net_tx_bps || 0;
+      let rxBps = typeof d.net_rx_bps === 'number' && !isNaN(d.net_rx_bps) ? d.net_rx_bps : 0;
+      let txBps = typeof d.net_tx_bps === 'number' && !isNaN(d.net_tx_bps) ? d.net_tx_bps : 0;
 
-      if (prevMap[id]) {
+      if (prevMap[id] && typeof prevMap[id].time === 'number' && typeof prevMap[id].rx === 'number' && typeof prevMap[id].tx === 'number') {
         const dt = (now - prevMap[id].time) / 1000.0;
         if (dt >= 0.5 && dt <= 30.0) {
           const dRx = rxBytes - prevMap[id].rx;
@@ -205,6 +208,8 @@ export default function NetworkDetailsScreen({ navigation, route }) {
           if (dTx >= 0 && (!txBps || dTx > 0)) txBps = Math.round(dTx / dt);
         }
       }
+      rxBps = typeof rxBps === 'number' && !isNaN(rxBps) && isFinite(rxBps) ? Math.max(0, rxBps) : 0;
+      txBps = typeof txBps === 'number' && !isNaN(txBps) && isFinite(txBps) ? Math.max(0, txBps) : 0;
       newMap[id] = { rx: rxBytes, tx: txBytes, time: now };
 
       list.push({
@@ -223,15 +228,16 @@ export default function NetworkDetailsScreen({ navigation, route }) {
     });
 
     // 2. VMs
-    vms.forEach(v => {
+    (vms || []).forEach(v => {
+      if (!v || !v.name) return;
       const id = `vm-${v.name}`;
-      const rxBytes = v.net_rx_bytes || 0;
-      const txBytes = v.net_tx_bytes || 0;
+      const rxBytes = typeof v.net_rx_bytes === 'number' && !isNaN(v.net_rx_bytes) ? v.net_rx_bytes : 0;
+      const txBytes = typeof v.net_tx_bytes === 'number' && !isNaN(v.net_tx_bytes) ? v.net_tx_bytes : 0;
 
-      let rxBps = v.net_rx_bps || 0;
-      let txBps = v.net_tx_bps || 0;
+      let rxBps = typeof v.net_rx_bps === 'number' && !isNaN(v.net_rx_bps) ? v.net_rx_bps : 0;
+      let txBps = typeof v.net_tx_bps === 'number' && !isNaN(v.net_tx_bps) ? v.net_tx_bps : 0;
 
-      if (prevMap[id]) {
+      if (prevMap[id] && typeof prevMap[id].time === 'number' && typeof prevMap[id].rx === 'number' && typeof prevMap[id].tx === 'number') {
         const dt = (now - prevMap[id].time) / 1000.0;
         if (dt >= 0.5 && dt <= 30.0) {
           const dRx = rxBytes - prevMap[id].rx;
@@ -240,6 +246,8 @@ export default function NetworkDetailsScreen({ navigation, route }) {
           if (dTx >= 0 && (!txBps || dTx > 0)) txBps = Math.round(dTx / dt);
         }
       }
+      rxBps = typeof rxBps === 'number' && !isNaN(rxBps) && isFinite(rxBps) ? Math.max(0, rxBps) : 0;
+      txBps = typeof txBps === 'number' && !isNaN(txBps) && isFinite(txBps) ? Math.max(0, txBps) : 0;
       newMap[id] = { rx: rxBytes, tx: txBytes, time: now };
 
       const isRunning = v.state === 'running';
@@ -259,15 +267,16 @@ export default function NetworkDetailsScreen({ navigation, route }) {
     });
 
     // 3. System Processes
-    (networkData.top_processes || []).forEach(p => {
-      const id = `proc-${p.pid}-${p.name}`;
-      const rxBytes = p.net_rx_bytes || 0;
-      const txBytes = p.net_tx_bytes || 0;
+    ((networkData && networkData.top_processes) || []).forEach(p => {
+      if (!p || (!p.name && !p.pid)) return;
+      const id = `proc-${p.pid || '0'}-${p.name || 'proc'}`;
+      const rxBytes = typeof p.net_rx_bytes === 'number' && !isNaN(p.net_rx_bytes) ? p.net_rx_bytes : 0;
+      const txBytes = typeof p.net_tx_bytes === 'number' && !isNaN(p.net_tx_bytes) ? p.net_tx_bytes : 0;
 
-      let rxBps = p.rx_bps || 0;
-      let txBps = p.tx_bps || 0;
+      let rxBps = typeof p.rx_bps === 'number' && !isNaN(p.rx_bps) ? p.rx_bps : 0;
+      let txBps = typeof p.tx_bps === 'number' && !isNaN(p.tx_bps) ? p.tx_bps : 0;
 
-      if (prevMap[id]) {
+      if (prevMap[id] && typeof prevMap[id].time === 'number' && typeof prevMap[id].rx === 'number' && typeof prevMap[id].tx === 'number') {
         const dt = (now - prevMap[id].time) / 1000.0;
         if (dt >= 0.5 && dt <= 30.0) {
           const dRx = rxBytes - prevMap[id].rx;
@@ -276,12 +285,14 @@ export default function NetworkDetailsScreen({ navigation, route }) {
           if (dTx >= 0 && (!txBps || dTx > 0)) txBps = Math.round(dTx / dt);
         }
       }
+      rxBps = typeof rxBps === 'number' && !isNaN(rxBps) && isFinite(rxBps) ? Math.max(0, rxBps) : 0;
+      txBps = typeof txBps === 'number' && !isNaN(txBps) && isFinite(txBps) ? Math.max(0, txBps) : 0;
       newMap[id] = { rx: rxBytes, tx: txBytes, time: now };
 
       list.push({
         type: 'process',
         id,
-        name: p.name,
+        name: p.name || `PID ${p.pid}`,
         pid: p.pid,
         rx_bps: rxBps,
         tx_bps: txBps,
@@ -289,7 +300,7 @@ export default function NetworkDetailsScreen({ navigation, route }) {
         total_rx: rxBytes,
         total_tx: txBytes,
         rawStr: `${formatBytes(rxBytes)} / ${formatBytes(txBytes)}`,
-        sub: `进程 PID ${p.pid} · ${p.conns || 1} 个活跃连接 · ${p.command || p.name}`,
+        sub: `进程 PID ${p.pid || 'N/A'} · ${p.conns || 1} 个活跃连接 · ${p.command || p.name || '未知命令'}`,
         raw: p,
       });
     });
@@ -304,15 +315,20 @@ export default function NetworkDetailsScreen({ navigation, route }) {
 
     // Sort: highest live rate first! Secondary sort by cumulative traffic
     return filtered.sort((a, b) => {
-      if (b.total_bps !== a.total_bps) {
-        return b.total_bps - a.total_bps;
+      const aTotal = typeof a.total_bps === 'number' && !isNaN(a.total_bps) ? a.total_bps : 0;
+      const bTotal = typeof b.total_bps === 'number' && !isNaN(b.total_bps) ? b.total_bps : 0;
+      if (bTotal !== aTotal) {
+        return bTotal - aTotal;
       }
-      return (b.total_rx + b.total_tx) - (a.total_rx + a.total_tx);
+      const aCum = (a.total_rx || 0) + (a.total_tx || 0);
+      const bCum = (b.total_rx || 0) + (b.total_tx || 0);
+      return bCum - aCum;
     });
   }, [dockers, vms, networkData.top_processes, filterTab]);
 
   const maxTotalBps = useMemo(() => {
-    return Math.max(...rankedItems.map(i => i.total_bps), 1024);
+    const vals = rankedItems.map(i => i.total_bps).filter(v => typeof v === 'number' && !isNaN(v) && isFinite(v) && v > 0);
+    return vals.length > 0 ? Math.max(...vals, 1024) : 1024;
   }, [rankedItems]);
 
   return (
@@ -527,19 +543,21 @@ export default function NetworkDetailsScreen({ navigation, route }) {
         </View>
 
         {(networkData.interfaces || []).map((iface, idx) => {
+          if (!iface) return null;
+          const ifName = iface.name || `iface-${idx}`;
           const isUp = iface.state === 'up';
           const typeName = iface.is_physical
             ? '物理网卡'
-            : iface.name.startsWith('br')
+            : ifName.startsWith('br')
             ? '桥接虚拟网卡'
-            : iface.name.startsWith('bond')
+            : ifName.startsWith('bond')
             ? '链路聚合 (Bond)'
-            : iface.name.startsWith('wg')
+            : ifName.startsWith('wg')
             ? 'WireGuard 隧道'
             : '容器虚拟网桥';
 
           return (
-            <View key={iface.name || idx} style={styles.ifaceCard}>
+            <View key={ifName} style={styles.ifaceCard}>
               <View style={styles.ifaceHeaderRow}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
                   <View

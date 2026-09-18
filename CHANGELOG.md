@@ -4,6 +4,21 @@
 
 ---
 
+## [v1.4.231] - 2026-09-18
+> **核心主题**：紧急修复点击首页网络卡片进入网络详情页时的闪退崩溃故障（ReferenceError）；全面加固网络详情页数据渲染层的异常边界防御。
+
+### 🚨 紧急修复进入网络详情页闪退崩溃故障
+- **根因定位与修复**：
+  - 在 `screens/DashboardScreen.js` 的网络 Bento 卡片 `onPress` 导航事件中，此前误传入了未在当前组件作用域声明的变量 `history`（`initialHistory: history`）；
+  - 用户在首页点击网络卡片进入二级详情页时，JavaScript 引擎立即抛出致命异常 `ReferenceError: Can't find variable: history`，导致 React Native 宿主崩溃闪退；
+  - 现修复导航传参为 `{ initialNetSpeed: netSpeed }`，并在 `NetworkDetailsScreen.js` 中自动由网络请求加载近 5 分钟历史时序，彻底解决点击崩溃问题。
+- **全链路空值与 NaN 防御性加固**：
+  - 对 `NetworkDetailsScreen.js` 中的 `formatSpeed` 与 `formatBytes` 增加数字类型与 `isFinite` 检查，彻底杜绝 `NaN` 导致的原生布局崩溃；
+  - 对容器列表、虚拟机列表、进程列表遍历全部加入空对象与字段校验，防范未初始化数据或网络缺失字段；
+  - 对网卡名称操作 `(iface.name || '').startsWith` 增加防空保护，保障极端网络环境下绝对稳定运行。
+
+---
+
 ## [v1.4.230] - 2026-09-18
 > **核心主题**：彻底根治网络二级页面不刷新与下拉刷新无效故障；后端 `api.php` 升级至 2026.09.18.05 上线 `type=network` 极速通道（<150ms）并补全主机流速差分与时序更新；首页 2x2 Bento 矩阵内存与 GPU 位置互换（Row 1: CPU+GPU, Row 2: RAM+网络）；首页网络卡片去除右上角下载小标，底部流速顺序调整为先上行再下行。
 
