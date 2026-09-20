@@ -1067,89 +1067,112 @@ export default function DockerDetailsScreen({ route }) {
                       <View style={[styles.composeIconBox, { backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : isPartial ? 'rgba(245, 158, 11, 0.12)' : 'rgba(148, 163, 184, 0.12)' }]}>
                         <Layers size={18} color={isRunning ? colors.green : isPartial ? colors.amber : colors.sub} />
                       </View>
-                      <View style={{ flex: 1, marginRight: 8 }}>
-                        <Text style={styles.composeName} numberOfLines={1}>{project.name}</Text>
-                        <Text style={styles.composeServicesCount}>
-                          共 {project.services?.length || 0} 个容器服务
-                        </Text>
+                      <View style={{ marginLeft: 10, flex: 1 }}>
+                        <Text style={styles.composeCardTitle} numberOfLines={1}>{project.name}</Text>
+                        <Text style={styles.composeCardPath} numberOfLines={1}>{project.yaml_file || project.path}</Text>
                       </View>
                     </View>
 
-                    {/* Status badge */}
-                    <View style={[styles.composeBadge, { backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : isPartial ? 'rgba(245, 158, 11, 0.12)' : 'rgba(148, 163, 184, 0.12)' }]}>
-                      <View style={[styles.composeBadgeDot, { backgroundColor: isRunning ? colors.green : isPartial ? colors.amber : colors.sub }]} />
-                      <Text style={[styles.composeBadgeText, { color: isRunning ? colors.green : isPartial ? colors.amber : colors.sub }]}>
-                        {isRunning ? '全运行中' : isPartial ? '部分就绪' : '已停止'}
+                    {/* 状态徽标 */}
+                    <View style={[styles.composeStatusBadge, {
+                      backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : isPartial ? 'rgba(245, 158, 11, 0.12)' : 'rgba(148, 163, 184, 0.12)'
+                    }]}>
+                      <View style={[styles.statusDotSmall, {
+                        backgroundColor: isRunning ? colors.green : isPartial ? colors.amber : colors.sub
+                      }]} />
+                      <Text style={[styles.composeStatusBadgeText, {
+                        color: isRunning ? colors.green : isPartial ? colors.amber : colors.sub
+                      }]}>
+                        {isRunning ? '运行中' : isPartial ? '部分运行' : '已停止'}
+                        {project.total_count > 0 ? ` (${project.running_count || 0}/${project.total_count})` : ''}
                       </Text>
                     </View>
                   </View>
 
-                  {/* Services tags */}
+                  {/* 包含服务标签列表 */}
                   {project.services && project.services.length > 0 && (
-                    <View style={styles.composeServicesWrap}>
-                      {project.services.map(svc => (
-                        <View key={svc.name} style={styles.composeServiceTag}>
-                          <View style={[styles.composeServiceDot, { backgroundColor: svc.running ? colors.green : colors.sub }]} />
-                          <Text style={styles.composeServiceText} numberOfLines={1}>{svc.name}</Text>
-                        </View>
-                      ))}
+                    <View style={styles.composeServicesRow}>
+                      <Text style={styles.composeServicesLabel}>服务:</Text>
+                      <View style={styles.composeServiceTagsWrap}>
+                        {project.services.map((srv, sIdx) => (
+                          <View key={sIdx} style={styles.composeServiceChip}>
+                            <Text style={styles.composeServiceChipText}>{srv}</Text>
+                          </View>
+                        ))}
+                      </View>
                     </View>
                   )}
 
-                  {/* Actions bar */}
+                  {/* Action Bar */}
                   <View style={styles.composeActionsRow}>
-                    <TouchableOpacity
-                      style={styles.composeActionBtn}
-                      onPress={() => handleComposeEdit(project.name)}
-                      activeOpacity={0.7}
-                    >
-                      <FileCode size={13} color={colors.sub} style={{ marginRight: 4 }} />
-                      <Text style={styles.composeActionText}>YAML 配置</Text>
-                    </TouchableOpacity>
+                    {/* 查看配置与日志 */}
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                      <TouchableOpacity
+                        style={styles.composeConfigBtn}
+                        onPress={() => openYamlModal(project)}
+                        activeOpacity={0.7}
+                      >
+                        <FileCode size={13} color={colors.accent} style={{ marginRight: 4 }} />
+                        <Text style={styles.composeConfigBtnText}>配置</Text>
+                      </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={styles.composeActionBtn}
-                      onPress={() => handleComposeDelete(project.name)}
-                      activeOpacity={0.7}
-                    >
-                      <Trash2 size={13} color={colors.red} style={{ marginRight: 4 }} />
-                      <Text style={[styles.composeActionText, { color: colors.red }]}>删除</Text>
-                    </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.composeConfigBtn}
+                        onPress={() => openComposeLogs(project)}
+                        activeOpacity={0.7}
+                      >
+                        <Terminal size={13} color={colors.accent} style={{ marginRight: 4 }} />
+                        <Text style={styles.composeConfigBtnText}>日志</Text>
+                      </TouchableOpacity>
+                    </View>
 
-                    <View style={{ flex: 1 }} />
+                    {/* 生命周期操作 (Up, Down, Restart, Pull) */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <TouchableOpacity
+                        style={styles.circleActionBtn}
+                        onPress={() => executeComposeAction(project.name, 'pull')}
+                        disabled={!!actLoading}
+                        activeOpacity={0.7}
+                        accessibilityLabel="拉取最新镜像"
+                      >
+                        {actLoading === 'pull' ? (
+                          <ActivityIndicator size="small" color={colors.amber} />
+                        ) : (
+                          <ArrowUp size={14} color="#f59e0b" />
+                        )}
+                      </TouchableOpacity>
 
-                    {actLoading ? (
-                      <ActivityIndicator size="small" color={colors.accent} style={{ paddingHorizontal: 16 }} />
-                    ) : (
-                      <View style={{ flexDirection: 'row', gap: 8 }}>
-                        <TouchableOpacity
-                          style={[styles.composeControlBtn, { backgroundColor: isRunning ? 'rgba(239, 68, 68, 0.12)' : 'rgba(16, 185, 129, 0.12)' }]}
-                          onPress={() => isRunning ? handleComposeAction(project.name, 'down') : handleComposeAction(project.name, 'up')}
-                          activeOpacity={0.7}
-                        >
-                          {isRunning ? (
-                            <>
-                              <Power size={13} color={colors.red} style={{ marginRight: 4 }} />
-                              <Text style={[styles.composeControlBtnText, { color: colors.red }]}>全部停止</Text>
-                            </>
-                          ) : (
-                            <>
-                              <Play size={13} color={colors.green} style={{ marginRight: 4 }} />
-                              <Text style={[styles.composeControlBtnText, { color: colors.green }]}>全部启动</Text>
-                            </>
-                          )}
-                        </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.circleActionBtn}
+                        onPress={() => executeComposeAction(project.name, 'restart')}
+                        disabled={!!actLoading}
+                        activeOpacity={0.7}
+                        accessibilityLabel="重启堆栈"
+                      >
+                        {actLoading === 'restart' ? (
+                          <ActivityIndicator size="small" color={colors.sub} />
+                        ) : (
+                          <RotateCw size={14} color={colors.sub} />
+                        )}
+                      </TouchableOpacity>
 
-                        <TouchableOpacity
-                          style={[styles.composeControlBtn, { backgroundColor: 'rgba(56, 189, 248, 0.12)' }]}
-                          onPress={() => handleComposeAction(project.name, 'restart')}
-                          activeOpacity={0.7}
-                        >
-                          <RotateCw size={13} color={colors.accent} style={{ marginRight: 4 }} />
-                          <Text style={[styles.composeControlBtnText, { color: colors.accent }]}>重启</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
+                      <TouchableOpacity
+                        style={[styles.circleActionBtn, {
+                          backgroundColor: isRunning ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)'
+                        }]}
+                        onPress={() => executeComposeAction(project.name, isRunning ? 'down' : 'up')}
+                        disabled={!!actLoading}
+                        activeOpacity={0.7}
+                      >
+                        {actLoading === (isRunning ? 'down' : 'up') ? (
+                          <ActivityIndicator size="small" color={isRunning ? colors.red : colors.green} />
+                        ) : isRunning ? (
+                          <Power size={14} color={colors.red} />
+                        ) : (
+                          <Play size={14} color={colors.green} />
+                        )}
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 </View>
               );
@@ -1345,98 +1368,120 @@ export default function DockerDetailsScreen({ route }) {
                       <Text style={styles.avatarText}>{initial}</Text>
                     </View>
 
-                    <View style={styles.mainInfo}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <Text style={styles.dockerName} numberOfLines={1}>
-                          {docker.name}
-                        </Text>
-                        {docker.has_update && (
-                          <View style={styles.updateBadge}>
-                            <ArrowUp size={10} color="#ffffff" style={{ marginRight: 2 }} />
-                            <Text style={styles.updateBadgeText}>可更新</Text>
-                          </View>
-                        )}
-                      </View>
-
-                      <View style={styles.subMetaRow}>
-                        <View style={[styles.statusIndicator, { backgroundColor: isRunning ? colors.green : colors.sub }]} />
-                        <Text style={[styles.statusText, { color: isRunning ? colors.green : colors.sub }]}>
-                          {isRunning ? '运行中' : '已停止'}
-                        </Text>
-                        {docker.port || docker.ports ? (
-                          <Text style={styles.portText} numberOfLines={1}>
-                            :{String(docker.port || docker.ports).split(',')[0]}
+                    <View style={styles.nameBlock}>
+                      <Text style={styles.dockerTitle} numberOfLines={1}>
+                        {docker.name}
+                      </Text>
+                      <View style={styles.metaBadgeRow}>
+                        <View style={[styles.statusBadge, { backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : 'rgba(148, 163, 184, 0.12)' }]}>
+                          <View style={[styles.statusDotSmall, { backgroundColor: isRunning ? colors.green : colors.sub }]} />
+                          <Text style={[styles.statusBadgeText, { color: isRunning ? colors.green : colors.sub }]}>
+                            {isRunning ? '运行中' : '已停止'}
                           </Text>
+                        </View>
+
+                        {docker.update_available && (
+                          <TouchableOpacity
+                            style={[
+                              styles.updateBadge,
+                              docker.update_status === 'ready' && styles.updateBadgeReady
+                            ]}
+                            onPress={() => handleUpdateDocker(docker.name, docker.update_status)}
+                            disabled={updatingDocker === docker.name}
+                            activeOpacity={0.7}
+                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                            accessibilityLabel={docker.update_status_text || "可更新"}
+                          >
+                            {updatingDocker === docker.name ? (
+                              <ActivityIndicator size="small" color={docker.update_status === 'ready' ? "#10b981" : "#f59e0b"} style={{ marginRight: 4 }} />
+                            ) : docker.update_status === 'ready' ? (
+                              <RotateCw size={11} color="#10b981" style={{ marginRight: 3 }} />
+                            ) : (
+                              <ArrowUp size={11} color="#f59e0b" style={{ marginRight: 3 }} />
+                            )}
+                            <Text style={[
+                              styles.updateBadgeText,
+                              docker.update_status === 'ready' && styles.updateBadgeTextReady
+                            ]}>
+                              {updatingDocker === docker.name 
+                                ? '更新中...' 
+                                : (docker.update_status === 'ready' ? '更新就绪 · 升级' : '更新 · 升级')}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+
+                        {docker.port ? (
+                          <View style={styles.portBadge}>
+                            <Text style={styles.portBadgeText}>:{docker.port}</Text>
+                          </View>
                         ) : null}
                       </View>
                     </View>
 
-                    {/* 右侧轻量指标胶囊 */}
-                    <View style={styles.cardStatsColumn}>
-                      <View style={styles.miniStatItem}>
-                        <Cpu size={11} color={colors.tempWarm} style={{ marginRight: 3 }} />
-                        <Text style={[styles.miniStatVal, { color: colors.tempWarm }]}>{cpuText}</Text>
+                    {/* 资源胶囊 */}
+                    {isRunning ? (
+                      <View style={styles.resourcePillsCol}>
+                        <View style={styles.resourcePill}>
+                          <Cpu size={10} color={colors.tempWarm} style={{ marginRight: 3 }} />
+                          <Text style={[styles.resourcePillText, { color: colors.tempWarm }]}>{cpuText}</Text>
+                        </View>
+                        <View style={[styles.resourcePill, { marginTop: 4 }]}>
+                          <Database size={10} color={colors.accent} style={{ marginRight: 3 }} />
+                          <Text style={[styles.resourcePillText, { color: colors.accent }]}>{shortMemory}</Text>
+                        </View>
                       </View>
-                      <View style={styles.miniStatItem}>
-                        <Database size={11} color={colors.accent} style={{ marginRight: 3 }} />
-                        <Text style={styles.miniStatVal}>{shortMemory}</Text>
-                      </View>
-                    </View>
+                    ) : null}
                   </View>
 
-                  {/* 下层：极速操作栏 */}
+                  {/* 下层：Action Bar 交互操作栏 */}
                   <View style={styles.cardLowerTier}>
-                    <View style={styles.primaryActions}>
+                    <View style={styles.webActionGroup}>
                       {hasWebAccess ? (
                         <TouchableOpacity
-                          style={[styles.actionBtn, styles.webBtn, { backgroundColor: colors.accent }]}
-                          onPress={() => handleOpenWebUI(docker)}
+                          style={styles.webLaunchPill}
+                          onPress={() => handleLaunchWebUI(docker, webUiInfo)}
+                          onLongPress={() => handleShowWebUiOptions(docker, webUiInfo)}
                           activeOpacity={0.7}
                         >
-                          <Globe size={13} color="#ffffff" style={{ marginRight: 4 }} />
-                          <Text style={styles.webBtnText}>
-                            Web {webUiInfo.isProxy ? '(反代)' : ''}
-                          </Text>
-                          <ExternalLink size={10} color="#ffffff" style={{ marginLeft: 2 }} />
+                          {openingDocker === docker.name ? (
+                            <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 5 }} />
+                          ) : (
+                            <Globe size={13} color="#ffffff" style={{ marginRight: 5 }} />
+                          )}
+                          <Text style={styles.webLaunchPillText}>Web</Text>
+                          <ExternalLink size={11} color="#ffffff" style={{ marginLeft: 3, opacity: 0.85 }} />
                         </TouchableOpacity>
                       ) : null}
 
                       <TouchableOpacity
-                        style={[styles.actionBtn, styles.aliasBtn, hasCustomAlias && styles.aliasBtnActive]}
-                        onPress={() => openAliasConfig(docker)}
+                        style={[styles.customConfigPill, hasCustomAlias && styles.customConfigPillActive]}
+                        onPress={() => handleOpenAliasModal(docker, webUiInfo)}
                         activeOpacity={0.7}
                       >
-                        <Sliders size={13} color={hasCustomAlias ? colors.accent : colors.sub} style={{ marginRight: 4 }} />
-                        <Text style={[styles.aliasBtnText, hasCustomAlias && styles.aliasBtnTextActive]}>
+                        <Sliders size={12} color={hasCustomAlias ? colors.accent : colors.sub} style={{ marginRight: 4 }} />
+                        <Text style={[styles.customConfigPillText, hasCustomAlias && { color: colors.accent, fontWeight: 'bold' }]}>
                           {hasCustomAlias ? '已定制' : '定制'}
                         </Text>
                       </TouchableOpacity>
                     </View>
 
-                    <View style={styles.secondaryActions}>
+                    {/* 容器操作按键群 */}
+                    <View style={styles.mgmtBtnGroup}>
                       <TouchableOpacity
                         style={styles.circleActionBtn}
-                        onPress={() => openDockerTerminal(docker.name)}
+                        onPress={() => openLogsModal(docker)}
                         activeOpacity={0.7}
                       >
-                        <Terminal size={14} color={colors.sub} />
+                        <Terminal size={14} color={colors.accent} />
                       </TouchableOpacity>
 
-                      <TouchableOpacity
-                        style={styles.circleActionBtn}
-                        onPress={() => handleRestartDocker(docker.name)}
-                        activeOpacity={0.7}
-                      >
-                        <RotateCw size={14} color={colors.sub} />
-                      </TouchableOpacity>
-
-                      {docker.has_update ? (
+                      {isRunning ? (
                         <TouchableOpacity
-                          style={[styles.circleActionBtn, { backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}
-                          onPress={() => handleUpdateDocker(docker.name)}
+                          style={styles.circleActionBtn}
+                          onPress={() => handleRestartDocker(docker.name)}
                           activeOpacity={0.7}
                         >
-                          <ArrowUp size={14} color="#f59e0b" />
+                          <RotateCw size={14} color={colors.sub} />
                         </TouchableOpacity>
                       ) : null}
 
@@ -1943,36 +1988,35 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     letterSpacing: -0.5,
   },
 
-  // Filter Section & Sticky Header
-  filterSection: {
-    paddingHorizontal: 16,
-    marginBottom: 8,
-  },
+  // Sticky & Filter Section
   topHeaderSection: {
-    paddingTop: 4,
+    paddingTop: 2,
   },
   stickyFilterSection: {
     paddingHorizontal: 16,
     paddingTop: 8,
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.glass?.barBorder || colors.divider,
+    borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
     zIndex: 10,
-    elevation: 3,
   },
   scrollContent: {
     flexGrow: 1,
   },
   cardsListSection: {
     paddingHorizontal: 16,
-    paddingTop: 12,
+    paddingTop: 10,
     paddingBottom: 110,
     gap: 12,
+  },
+  filterSection: {
+    paddingHorizontal: 16,
+    marginBottom: 8,
   },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.04)',
+    backgroundColor: colors.card,
     borderRadius: 12,
     paddingHorizontal: 12,
     height: 40,
