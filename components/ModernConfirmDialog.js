@@ -1,11 +1,13 @@
 import React from 'react';
 import {
-  StyleSheet, Text, View, TouchableOpacity, Modal, Pressable, ScrollView,
+  StyleSheet, Text, View, TouchableOpacity, Modal, Pressable, ScrollView, Platform,
 } from 'react-native';
+import { BlurView } from 'expo-blur';
 import {
   Trash2, AlertTriangle, CheckCircle2, Info, RotateCw, Power, AlertCircle,
 } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
+import GlassView from './GlassView';
 
 /**
  * ModernConfirmDialog
@@ -73,10 +75,31 @@ export default function ModernConfirmDialog({
   const handleDismiss = onCancel || onConfirm;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={handleDismiss}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={handleDismiss} statusBarTranslucent>
       <View style={styles.overlay}>
+        {/* 背景原生高斯模糊与暗度遮罩 */}
+        <BlurView
+          intensity={35}
+          tint={colors.mode === 'dark' ? 'dark' : 'light'}
+          style={StyleSheet.absoluteFill}
+        />
+        <View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: colors.glass?.modalBackdrop || 'rgba(0, 0, 0, 0.45)' },
+          ]}
+        />
         <Pressable style={StyleSheet.absoluteFill} onPress={handleDismiss} />
-        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder || 'rgba(255, 255, 255, 0.08)' }]}>
+
+        {/* 核心毛玻璃 Squircle 弹窗卡片 */}
+        <GlassView
+          intensity={70}
+          borderRadius={24}
+          borderColor={colors.glass?.border || colors.cardBorder}
+          overlayColor={colors.glass?.modalBg}
+          style={styles.card}
+        >
           {/* Top Icon Badge */}
           <View style={[styles.iconBadge, { backgroundColor: badgeBg }]}>
             {iconElement}
@@ -103,7 +126,7 @@ export default function ModernConfirmDialog({
           <View style={styles.buttonRow}>
             {showCancel && (
               <TouchableOpacity
-                style={[styles.btn, styles.cancelBtn, { backgroundColor: colors.input }]}
+                style={[styles.btn, styles.cancelBtn, { backgroundColor: colors.cardSecondary || colors.input }]}
                 onPress={onCancel}
                 activeOpacity={0.7}
               >
@@ -126,7 +149,7 @@ export default function ModernConfirmDialog({
               <Text style={styles.confirmBtnText}>{finalConfirmText}</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </GlassView>
       </View>
     </Modal>
   );
@@ -135,7 +158,7 @@ export default function ModernConfirmDialog({
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    backgroundColor: 'transparent',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
@@ -148,7 +171,6 @@ const styles = StyleSheet.create({
     paddingBottom: 22,
     paddingHorizontal: 22,
     alignItems: 'center',
-    borderWidth: 1,
     elevation: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 12 },

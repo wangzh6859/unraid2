@@ -8,9 +8,11 @@ import {
   Platform,
   ActivityIndicator,
 } from 'react-native';
+import { BlurView } from 'expo-blur';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { Fingerprint, ShieldCheck, AlertCircle } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
+import GlassView from './GlassView';
 
 export default function AppLockModal({ visible, onUnlock }) {
   const { colors } = useTheme();
@@ -68,8 +70,24 @@ export default function AppLockModal({ visible, onUnlock }) {
   if (!visible) return null;
 
   return (
-    <Modal visible={visible} transparent={false} animationType="fade" statusBarTranslucent>
-      <View style={[styles.container, { backgroundColor: colors.bg }]}>
+    <Modal visible={visible} transparent={true} animationType="fade" statusBarTranslucent>
+      <View style={styles.container}>
+        {/* 全屏深层高斯模糊与安全遮蔽背景 */}
+        <BlurView
+          intensity={85}
+          tint={colors.mode === 'dark' ? 'dark' : 'light'}
+          style={StyleSheet.absoluteFill}
+        />
+        <View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              backgroundColor: colors.glass?.bgStrong || (colors.mode === 'dark' ? 'rgba(11, 15, 25, 0.90)' : 'rgba(248, 250, 252, 0.92)'),
+            },
+          ]}
+        />
+
         {/* Shield Icon / Top Badge */}
         <View style={[styles.shieldBadge, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
           <ShieldCheck color={colors.accent} size={42} />
@@ -81,17 +99,25 @@ export default function AppLockModal({ visible, onUnlock }) {
           已开启安全锁屏保护，请验证指纹或面容识别以进入系统
         </Text>
 
-        {/* Big Touch-to-Unlock Button */}
+        {/* Big Touch-to-Unlock Button with Glass Ring */}
         <TouchableOpacity
-          style={[styles.fingerprintBtn, { backgroundColor: 'rgba(59, 130, 246, 0.14)', borderColor: colors.accent }]}
+          style={styles.fingerprintBtnWrapper}
           onPress={handleAuthenticate}
           activeOpacity={0.7}
         >
-          {isAuthenticating ? (
-            <ActivityIndicator size="large" color={colors.accent} />
-          ) : (
-            <Fingerprint color={colors.accent} size={64} />
-          )}
+          <GlassView
+            intensity={50}
+            borderRadius={60}
+            borderColor={colors.glass?.border || 'rgba(56, 189, 248, 0.3)'}
+            overlayColor="rgba(56, 189, 248, 0.10)"
+            style={styles.fingerprintBtn}
+          >
+            {isAuthenticating ? (
+              <ActivityIndicator size="large" color={colors.accent} />
+            ) : (
+              <Fingerprint color={colors.accent} size={64} />
+            )}
+          </GlassView>
         </TouchableOpacity>
 
         <TouchableOpacity onPress={handleAuthenticate} style={styles.promptTextBtn}>
@@ -140,18 +166,20 @@ const styles = StyleSheet.create({
     maxWidth: 280,
     marginBottom: 44,
   },
-  fingerprintBtn: {
-    width: 120,
-    height: 120,
+  fingerprintBtnWrapper: {
     borderRadius: 60,
-    borderWidth: 2,
-    justifyContent: 'center',
-    alignItems: 'center',
     elevation: 8,
     shadowColor: '#3b82f6',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.3,
     shadowRadius: 16,
+  },
+  fingerprintBtn: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   promptTextBtn: {
     marginTop: 20,

@@ -1599,7 +1599,7 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   content: {
     padding: 16,
     paddingTop: Platform.OS === 'ios' ? 44 : 24,
-    paddingBottom: 40,
+    paddingBottom: 110,
   },
   center: {
     flex: 1,

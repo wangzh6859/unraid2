@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './utils/apiClient';
-import { StatusBar, AppState, View, Text, TouchableOpacity, ScrollView, Platform } from 'react-native';
+import { StatusBar, AppState, View, Text, TouchableOpacity, ScrollView, Platform, StyleSheet } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Home, Box, Monitor, Folder, Settings } from 'lucide-react-native';
 import AppLockModal from './components/AppLockModal';
+import GlassView from './components/GlassView';
 
 // 引入所有子页面
 import DashboardScreen from './screens/DashboardScreen';
@@ -72,13 +73,28 @@ function MainTabs() {
         },
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.sub,
+        tabBarBackground: () => (
+          <GlassView
+            intensity={65}
+            border={false}
+            overlayColor={colors.glass?.barBg}
+            style={StyleSheet.absoluteFill}
+          />
+        ),
         headerStyle: { backgroundColor: colors.bar },
         headerTintColor: colors.textStrong,
         tabBarStyle: {
-          backgroundColor: colors.bar,
-          borderTopColor: colors.divider,
-          height: Platform.OS === 'ios' ? 86 : 60,
-          paddingBottom: Platform.OS === 'ios' ? 26 : 8,
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          backgroundColor: 'transparent',
+          borderTopWidth: StyleSheet.hairlineWidth || 1,
+          borderTopColor: colors.glass?.barBorder || colors.divider,
+          elevation: 0,
+          shadowOpacity: 0,
+          height: Platform.OS === 'ios' ? 86 : 64,
+          paddingBottom: Platform.OS === 'ios' ? 26 : 10,
           paddingTop: 6,
         },
         tabBarLabelStyle: {

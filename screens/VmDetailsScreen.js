@@ -561,7 +561,7 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   content: {
     padding: 16,
     paddingTop: 6,
-    paddingBottom: 32,
+    paddingBottom: 110,
     gap: 12,
   },
   vmCard: {

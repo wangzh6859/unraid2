@@ -36,6 +36,20 @@ export const themes = {
     tempWarm: '#F97316',      // 珊瑚橙
     tempCool: '#06B6D4',      // 冷态青
     ringBg: 'rgba(255, 255, 255, 0.08)',
+    // 毛玻璃拟态系统 (Glassmorphism)
+    glass: {
+      tint: 'dark',
+      bg: 'rgba(15, 23, 42, 0.72)',             // 通用毛玻璃卡片底色
+      bgStrong: 'rgba(11, 15, 25, 0.85)',       // 高遮蔽毛玻璃（底栏、顶栏）
+      bgLight: 'rgba(255, 255, 255, 0.05)',     // 极薄微光玻璃
+      border: 'rgba(255, 255, 255, 0.12)',      // 亚克力微光漫反射描边
+      borderSubtle: 'rgba(255, 255, 255, 0.06)',// 极弱描边
+      highlight: 'rgba(255, 255, 255, 0.20)',   // 顶部高光微切线
+      barBg: 'rgba(13, 20, 36, 0.75)',          // 底部导航栏与顶部条毛玻璃底色
+      barBorder: 'rgba(255, 255, 255, 0.10)',   // 导航条微光上边框
+      modalBg: 'rgba(15, 23, 42, 0.82)',        // 弹窗玻璃卡片
+      modalBackdrop: 'rgba(0, 0, 0, 0.45)',     // 弹窗高斯模糊遮罩底色
+    },
   },
   light: {
     mode: 'light',
@@ -63,6 +77,20 @@ export const themes = {
     tempWarm: '#EA580C',      // 活力橙
     tempCool: '#0891B2',      // 冷态青
     ringBg: '#E2E8F0',
+    // 毛玻璃拟态系统 (Glassmorphism)
+    glass: {
+      tint: 'light',
+      bg: 'rgba(255, 255, 255, 0.75)',          // 通用毛玻璃卡片底色
+      bgStrong: 'rgba(248, 250, 252, 0.88)',    // 高遮蔽毛玻璃（底栏、顶栏）
+      bgLight: 'rgba(255, 255, 255, 0.45)',     // 极薄微光玻璃
+      border: 'rgba(255, 255, 255, 0.80)',      // 亮白微光反光描边
+      borderSubtle: 'rgba(226, 232, 240, 0.60)',// 浅灰边缘描边
+      highlight: 'rgba(255, 255, 255, 0.95)',   // 顶部极白高光微切线
+      barBg: 'rgba(255, 255, 255, 0.80)',       // 底部导航栏与顶部条毛玻璃底色
+      barBorder: 'rgba(226, 232, 240, 0.80)',   // 导航条浅灰上边框
+      modalBg: 'rgba(255, 255, 255, 0.88)',     // 弹窗玻璃卡片
+      modalBackdrop: 'rgba(15, 23, 42, 0.25)',  // 弹窗高斯模糊遮罩底色
+    },
   },
 };
 

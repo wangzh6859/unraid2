@@ -34,6 +34,16 @@ import {
 } from '../utils/dockerWebUiManager';
 
 const APP_RELEASE_CHANGELOGS = {
+  '1.5.0': `【v1.5.0 全新毛玻璃拟态视觉基座与通透 Dock】
+💎 1. 全新 Glassmorphism 毛玻璃视觉设计语言（第一阶段）：
+   - 官方集成 expo-blur 原生高斯模糊硬件加速引擎与亚克力微光漫反射描边。
+   - 适配深色与浅色双模材质系统，通透质感与信息层级对比度完美融合。
+🚀 2. 悬浮式通透毛玻璃底部导航 Dock：
+   - 底部 5 大核心功能导航栏升级为悬浮半透明微光 Dock。
+   - 页面列表内容滚动向上穿透模糊层，呈现原生 iOS / 高端 Android 级别的物理景深层次。
+✨ 3. 全局沉浸式毛玻璃安全锁与弹窗体系：
+   - 生物识别全屏安全锁屏升级为 85 阶高强度高斯模糊虚化背景，保护隐私同时兼备科技质感。
+   - 确认与警告弹窗全面接入毛玻璃 Squircle 拟态卡片与背部动态景深虚化。`,
   '1.4.0': `【v1.4.0 核心更新与性能飞跃】
 ⚡ 1. 智能双模上传引擎（Smart Dual-Mode Engine）：
    - 原生流式直传（≤ 32MB）：零 Base64 转码与桥接损耗，局域网线速直达 30MB/s ~ 80MB/s！
@@ -1701,7 +1711,7 @@ export default function SettingsScreen({ navigation }) {
 
 const createStyles = (colors) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 16, paddingBottom: 50 },
+  content: { padding: 16, paddingBottom: 110 },
   header: { alignItems: 'center', marginVertical: 24 },
   title: { color: colors.textStrong, fontSize: 24, fontWeight: 'bold' },
   subtitle: { color: colors.muted, fontSize: 13, marginTop: 4 },
