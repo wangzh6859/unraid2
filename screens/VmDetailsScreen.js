@@ -1,19 +1,21 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity,
-  TextInput, Platform
+  TextInput, Platform, StatusBar
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   Monitor, RotateCw, Play, Power, Pause, Zap, Cpu, Database,
-  Search, X, Check, ArrowUpDown, ShieldAlert
+  Search, X, Check, ArrowUpDown, ShieldAlert, ChevronLeft
 } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import GlassView from '../components/GlassView';
 
-export default function VmDetailsScreen() {
+const STATUS_BAR_HEIGHT = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 44;
+
+export default function VmDetailsScreen({ navigation }) {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
@@ -213,8 +215,11 @@ export default function VmDetailsScreen() {
 
   return (
     <View style={styles.container}>
+      {/* 0. 顶部状态栏专属通透毛玻璃顶帽 (与吸顶搜索区无缝融为一体) */}
+      <GlassView border={false} style={styles.statusBarCap} />
+
       <ScrollView
-        style={{ flex: 1 }}
+        style={styles.mainScrollView}
         contentContainerStyle={styles.scrollContent}
         stickyHeaderIndices={[1]}
         showsVerticalScrollIndicator={false}
@@ -229,6 +234,26 @@ export default function VmDetailsScreen() {
       >
         {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕) */}
         <View style={styles.topHeaderSection}>
+          <View style={styles.topNavHeaderRow}>
+            <View style={styles.titleWithBackRow}>
+              {navigation?.canGoBack?.() && (
+                <TouchableOpacity
+                  onPress={() => navigation.goBack()}
+                  style={styles.navBackBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <ChevronLeft size={22} color={colors.textStrong} />
+                </TouchableOpacity>
+              )}
+              <View>
+                <Text style={styles.navScreenTitle}>虚拟机 (VM)</Text>
+                <Text style={styles.navScreenSub}>
+                  {runningCount} 台正常运行 · 共 {vms.length} 台
+                </Text>
+              </View>
+            </View>
+          </View>
+
           {/* 1. 顶部 Bento 概览看板 */}
           <View style={styles.heroRow}>
             <View style={styles.heroCard}>
@@ -257,33 +282,45 @@ export default function VmDetailsScreen() {
           </View>
         </View>
 
-        {/* Index 1: 搜索框与筛选胶囊 (到达顶部吸顶，并呈现毛玻璃特效) */}
+        {/* Index 1: 搜索框与筛选胶囊 (到达顶部吸顶，并与顶部直接合并为一处毛玻璃悬浮岛) */}
         <GlassView
           border={false}
           style={styles.stickyFilterSection}
         >
-          <View style={styles.searchBox}>
-            <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="搜索虚拟机名称..."
-              placeholderTextColor={colors.muted}
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            {searchQuery ? (
-              <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <X size={15} color={colors.sub} />
+          <View style={styles.searchBoxRow}>
+            {navigation?.canGoBack?.() && (
+              <TouchableOpacity
+                onPress={() => navigation.goBack()}
+                style={styles.stickyBackBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <ChevronLeft size={20} color={colors.textStrong} />
               </TouchableOpacity>
-            ) : null}
+            )}
+            <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
+              <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="搜索虚拟机名称..."
+                placeholderTextColor={colors.muted}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              {searchQuery ? (
+                <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <X size={15} color={colors.sub} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
           </View>
 
           <View style={styles.tabsRow}>
             <TouchableOpacity
               style={[styles.tabBtn, statusFilter === 'all' && styles.tabBtnActive]}
               onPress={() => setStatusFilter('all')}
+              activeOpacity={0.7}
             >
               <Text style={[styles.tabBtnText, statusFilter === 'all' && styles.tabBtnTextActive]}>
                 全部 {vms.length}
@@ -292,6 +329,7 @@ export default function VmDetailsScreen() {
             <TouchableOpacity
               style={[styles.tabBtn, statusFilter === 'running' && styles.tabBtnActive]}
               onPress={() => setStatusFilter('running')}
+              activeOpacity={0.7}
             >
               <Text style={[styles.tabBtnText, statusFilter === 'running' && styles.tabBtnTextActive]}>
                 运行中 {runningCount}
@@ -300,6 +338,7 @@ export default function VmDetailsScreen() {
             <TouchableOpacity
               style={[styles.tabBtn, statusFilter === 'stopped' && styles.tabBtnActive]}
               onPress={() => setStatusFilter('stopped')}
+              activeOpacity={0.7}
             >
               <Text style={[styles.tabBtnText, statusFilter === 'stopped' && styles.tabBtnTextActive]}>
                 未运行 {stoppedCount}
@@ -522,15 +561,63 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   },
 
   // Sticky & Filter Section
+  statusBarCap: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: STATUS_BAR_HEIGHT,
+    zIndex: 100,
+  },
+  mainScrollView: {
+    flex: 1,
+    marginTop: STATUS_BAR_HEIGHT,
+  },
   topHeaderSection: {
-    paddingTop: 4,
+    paddingTop: 8,
+  },
+  topNavHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 4,
+  },
+  titleWithBackRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  navBackBtn: {
+    marginRight: 10,
+    padding: 2,
+  },
+  stickyBackBtn: {
+    marginRight: 8,
+    padding: 4,
+  },
+  navScreenTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.textStrong,
+    letterSpacing: -0.3,
+  },
+  navScreenSub: {
+    fontSize: 12,
+    color: colors.sub,
+    marginTop: 2,
+    fontWeight: '500',
   },
   stickyFilterSection: {
     paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingTop: 10,
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+    borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: isDark ? 0.25 : 0.06,
+    shadowRadius: 8,
     zIndex: 10,
   },
   scrollContent: {
@@ -546,16 +633,24 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     paddingHorizontal: 16,
     marginBottom: 8,
   },
+  searchBoxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.card,
-    borderRadius: 12,
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#ffffff',
+    borderRadius: 14,
     paddingHorizontal: 12,
-    height: 40,
+    height: 42,
     borderWidth: 1,
-    borderColor: colors.cardBorder,
-    marginBottom: 10,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: isDark ? 0.2 : 0.04,
+    shadowRadius: 3,
   },
   searchInput: {
     flex: 1,
@@ -568,12 +663,12 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     gap: 6,
   },
   tabBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    backgroundColor: colors.cardSecondary,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)',
     borderWidth: 1,
-    borderColor: colors.cardBorder,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.09)' : 'rgba(0, 0, 0, 0.06)',
   },
   tabBtnActive: {
     backgroundColor: colors.accent,

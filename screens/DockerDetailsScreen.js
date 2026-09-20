@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Image, StyleSheet, Text, View, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity,
-  Modal, TextInput, Pressable, Platform, Linking, KeyboardAvoidingView,
+  Modal, TextInput, Pressable, Platform, Linking, KeyboardAvoidingView, StatusBar,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -9,7 +9,7 @@ import * as Clipboard from 'expo-clipboard';
 import {
   Cpu, Database, RotateCw, Play, Power, Terminal, ExternalLink,
   Search, Copy, Check, X, RefreshCw, Globe, Sliders, Box, Layers,
-  ChevronDown, ArrowUpDown, Filter, Sparkles, ArrowUp, Zap, FileCode, Plus, CheckCircle2, AlertTriangle, AlertCircle, Trash2, Folder } from 'lucide-react-native';
+  ChevronDown, ChevronLeft, ArrowUpDown, Filter, Sparkles, ArrowUp, Zap, FileCode, Plus, CheckCircle2, AlertTriangle, AlertCircle, Trash2, Folder } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import GlassView from '../components/GlassView';
@@ -18,7 +18,9 @@ import {
   removeDockerAlias, resolveDockerWebUrl,
 } from '../utils/dockerWebUiManager';
 
-export default function DockerDetailsScreen({ route }) {
+const STATUS_BAR_HEIGHT = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 44;
+
+export default function DockerDetailsScreen({ navigation, route }) {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
@@ -977,9 +979,12 @@ export default function DockerDetailsScreen({ route }) {
 
   return (
     <View style={styles.container}>
+      {/* 0. 顶部状态栏专属通透毛玻璃顶帽 (与吸顶搜索区无缝融为一体) */}
+      <GlassView border={false} style={styles.statusBarCap} />
+
       {dockerMode === 'compose' ? (
         <ScrollView
-          style={{ flex: 1 }}
+          style={styles.mainScrollView}
           contentContainerStyle={styles.scrollContent}
           stickyHeaderIndices={[1]}
           showsVerticalScrollIndicator={false}
@@ -994,6 +999,25 @@ export default function DockerDetailsScreen({ route }) {
         >
           {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕) */}
           <View style={styles.topHeaderSection}>
+            <View style={styles.topNavHeaderRow}>
+              <View style={styles.titleWithBackRow}>
+                {navigation?.canGoBack?.() && (
+                  <TouchableOpacity
+                    onPress={() => navigation.goBack()}
+                    style={styles.navBackBtn}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <ChevronLeft size={22} color={colors.textStrong} />
+                  </TouchableOpacity>
+                )}
+                <View>
+                  <Text style={styles.navScreenTitle}>Docker 容器</Text>
+                  <Text style={styles.navScreenSub}>
+                    {composeRunningCount} 个堆栈运行中 · 共 {composeProjects.length} 个
+                  </Text>
+                </View>
+              </View>
+            </View>
             {renderSegmentBar()}
             {/* Compose 概览与快捷操作 */}
             <View style={styles.composeHeroRow}>
@@ -1014,12 +1038,21 @@ export default function DockerDetailsScreen({ route }) {
             </View>
           </View>
 
-          {/* Index 1: 搜索与新建堆栈 (到达顶部吸顶，并呈现毛玻璃特效) */}
+          {/* Index 1: 搜索与新建堆栈 (到达顶部吸顶，并与顶部直接合并为一处毛玻璃悬浮岛) */}
           <GlassView
             border={false}
             style={styles.stickyFilterSection}
           >
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {navigation?.canGoBack?.() && (
+                <TouchableOpacity
+                  onPress={() => navigation.goBack()}
+                  style={styles.stickyBackBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <ChevronLeft size={20} color={colors.textStrong} />
+                </TouchableOpacity>
+              )}
               <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
                 <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
                 <TextInput
@@ -1031,7 +1064,7 @@ export default function DockerDetailsScreen({ route }) {
                   autoCapitalize="none"
                 />
                 {composeSearchQuery ? (
-                  <TouchableOpacity onPress={() => setComposeSearchQuery('')}>
+                  <TouchableOpacity onPress={() => setComposeSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                     <X size={15} color={colors.sub} />
                   </TouchableOpacity>
                 ) : null}
@@ -1191,7 +1224,7 @@ export default function DockerDetailsScreen({ route }) {
         </ScrollView>
       ) : (
         <ScrollView
-          style={{ flex: 1 }}
+          style={styles.mainScrollView}
           contentContainerStyle={styles.scrollContent}
           stickyHeaderIndices={[1]}
           showsVerticalScrollIndicator={false}
@@ -1206,6 +1239,25 @@ export default function DockerDetailsScreen({ route }) {
         >
           {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕) */}
           <View style={styles.topHeaderSection}>
+            <View style={styles.topNavHeaderRow}>
+              <View style={styles.titleWithBackRow}>
+                {navigation?.canGoBack?.() && (
+                  <TouchableOpacity
+                    onPress={() => navigation.goBack()}
+                    style={styles.navBackBtn}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <ChevronLeft size={22} color={colors.textStrong} />
+                  </TouchableOpacity>
+                )}
+                <View>
+                  <Text style={styles.navScreenTitle}>Docker 容器中枢</Text>
+                  <Text style={styles.navScreenSub}>
+                    {runningCount} 个容器正常运行 · 共 {dockers.length} 个
+                  </Text>
+                </View>
+              </View>
+            </View>
             {renderSegmentBar()}
             {/* 1. 顶部 Bento 概览看板 (Hero Stats) */}
             <View style={styles.heroRow}>
@@ -1235,27 +1287,38 @@ export default function DockerDetailsScreen({ route }) {
             </View>
           </View>
 
-          {/* Index 1: 搜索框与状态筛选胶囊 (到达顶部吸顶，并呈现毛玻璃特效) */}
+          {/* Index 1: 搜索框与状态筛选胶囊 (到达顶部吸顶，并与顶部直接合并为一处毛玻璃悬浮岛) */}
           <GlassView
             border={false}
             style={styles.stickyFilterSection}
           >
-            <View style={styles.searchBox}>
-              <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="搜索容器名称或端口..."
-                placeholderTextColor={colors.muted}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              {searchQuery ? (
-                <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                  <X size={15} color={colors.sub} />
+            <View style={styles.searchBoxRow}>
+              {navigation?.canGoBack?.() && (
+                <TouchableOpacity
+                  onPress={() => navigation.goBack()}
+                  style={styles.stickyBackBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <ChevronLeft size={20} color={colors.textStrong} />
                 </TouchableOpacity>
-              ) : null}
+              )}
+              <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
+                <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="搜索容器名称、镜像或端口..."
+                  placeholderTextColor={colors.muted}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {searchQuery ? (
+                  <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <X size={15} color={colors.sub} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
             </View>
 
             <View style={styles.filterRow}>
@@ -1267,6 +1330,7 @@ export default function DockerDetailsScreen({ route }) {
                 <TouchableOpacity
                   style={[styles.tabBtn, statusFilter === 'all' && styles.tabBtnActive]}
                   onPress={() => setStatusFilter('all')}
+                  activeOpacity={0.7}
                 >
                   <Text style={[styles.tabBtnText, statusFilter === 'all' && styles.tabBtnTextActive]}>
                     全部 {dockers.length}
@@ -1276,6 +1340,7 @@ export default function DockerDetailsScreen({ route }) {
                 <TouchableOpacity
                   style={[styles.tabBtn, statusFilter === 'running' && styles.tabBtnActive]}
                   onPress={() => setStatusFilter('running')}
+                  activeOpacity={0.7}
                 >
                   <Text style={[styles.tabBtnText, statusFilter === 'running' && styles.tabBtnTextActive]}>
                     运行中 {runningCount}
@@ -1285,6 +1350,7 @@ export default function DockerDetailsScreen({ route }) {
                 <TouchableOpacity
                   style={[styles.tabBtn, statusFilter === 'stopped' && styles.tabBtnActive]}
                   onPress={() => setStatusFilter('stopped')}
+                  activeOpacity={0.7}
                 >
                   <Text style={[styles.tabBtnText, statusFilter === 'stopped' && styles.tabBtnTextActive]}>
                     已停止 {stoppedCount}
@@ -1295,14 +1361,17 @@ export default function DockerDetailsScreen({ route }) {
                   style={[
                     styles.tabBtn,
                     statusFilter === 'updates' && styles.tabBtnActive,
-                    updateCount > 0 && styles.tabBtnUpdateActive
+                    updateCount > 0 && styles.tabBtnUpdate,
+                    updateCount > 0 && statusFilter === 'updates' && styles.tabBtnUpdateActive,
                   ]}
                   onPress={() => setStatusFilter('updates')}
+                  activeOpacity={0.7}
                 >
                   <Text style={[
                     styles.tabBtnText,
                     statusFilter === 'updates' && styles.tabBtnTextActive,
-                    updateCount > 0 && { color: '#f59e0b', fontWeight: 'bold' }
+                    updateCount > 0 && statusFilter !== 'updates' && { color: '#f59e0b', fontWeight: 'bold' },
+                    updateCount > 0 && statusFilter === 'updates' && { color: '#ffffff', fontWeight: 'bold' },
                   ]}>
                     更新就绪 {updateCount}
                   </Text>
@@ -1334,9 +1403,9 @@ export default function DockerDetailsScreen({ route }) {
                   }}
                   activeOpacity={0.7}
                 >
-                  <ArrowUpDown size={12} color={colors.sub} style={{ marginRight: 4 }} />
+                  <ArrowUpDown size={12} color={colors.accent} style={{ marginRight: 4 }} />
                   <Text style={styles.sortToggleText}>
-                    {sortRule === 'name' ? '按名称' : sortRule === 'status' ? '按状态' : '按CPU'}
+                    {sortRule === 'name' ? '按名称' : sortRule === 'status' ? '按状态' : '按负载'}
                   </Text>
                 </TouchableOpacity>
               </ScrollView>
@@ -1989,15 +2058,63 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   },
 
   // Sticky & Filter Section
+  statusBarCap: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: STATUS_BAR_HEIGHT,
+    zIndex: 100,
+  },
+  mainScrollView: {
+    flex: 1,
+    marginTop: STATUS_BAR_HEIGHT,
+  },
   topHeaderSection: {
-    paddingTop: 2,
+    paddingTop: 8,
+  },
+  topNavHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 4,
+  },
+  titleWithBackRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  navBackBtn: {
+    marginRight: 10,
+    padding: 2,
+  },
+  stickyBackBtn: {
+    marginRight: 8,
+    padding: 4,
+  },
+  navScreenTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.textStrong,
+    letterSpacing: -0.3,
+  },
+  navScreenSub: {
+    fontSize: 12,
+    color: colors.sub,
+    marginTop: 2,
+    fontWeight: '500',
   },
   stickyFilterSection: {
     paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingTop: 10,
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+    borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: isDark ? 0.25 : 0.06,
+    shadowRadius: 8,
     zIndex: 10,
   },
   scrollContent: {
@@ -2013,16 +2130,24 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     paddingHorizontal: 16,
     marginBottom: 8,
   },
+  searchBoxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.card,
-    borderRadius: 12,
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#ffffff',
+    borderRadius: 14,
     paddingHorizontal: 12,
-    height: 40,
+    height: 42,
     borderWidth: 1,
-    borderColor: colors.cardBorder,
-    marginBottom: 10,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: isDark ? 0.2 : 0.04,
+    shadowRadius: 3,
   },
   searchInput: {
     flex: 1,
@@ -2053,16 +2178,24 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     gap: 6,
   },
   tabBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    backgroundColor: colors.cardSecondary,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)',
     borderWidth: 1,
-    borderColor: colors.cardBorder,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.09)' : 'rgba(0, 0, 0, 0.06)',
   },
   tabBtnActive: {
     backgroundColor: colors.accent,
     borderColor: colors.accent,
+  },
+  tabBtnUpdate: {
+    backgroundColor: isDark ? 'rgba(245, 158, 11, 0.12)' : '#fffbeb',
+    borderColor: 'rgba(245, 158, 11, 0.35)',
+  },
+  tabBtnUpdateActive: {
+    backgroundColor: '#f59e0b',
+    borderColor: '#f59e0b',
   },
   tabBtnText: {
     fontSize: 12,
@@ -2075,16 +2208,16 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   sortToggleBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.cardSecondary,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 8,
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: colors.cardBorder,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.09)' : 'rgba(0, 0, 0, 0.06)',
   },
   sortToggleText: {
     fontSize: 11,
-    color: colors.sub,
+    color: colors.accent,
     fontWeight: '600',
   },
 

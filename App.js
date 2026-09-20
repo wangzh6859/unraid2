@@ -47,8 +47,8 @@ function HomeStack() {
       <Stack.Screen name="仪表盘" component={DashboardScreen} options={{ headerShown: false }} />
       <Stack.Screen name="存储详情" component={StorageDetailsScreen} options={{ title: '磁盘存储与阵列' }} />
       <Stack.Screen name="SMART详情" component={SmartDetailsScreen} options={{ title: 'S.M.A.R.T. 诊断' }} />
-      <Stack.Screen name="Docker详情" component={DockerDetailsScreen} options={{ title: 'Docker 容器' }} />
-      <Stack.Screen name="VM详情" component={VmDetailsScreen} options={{ title: '虚拟机' }} />
+      <Stack.Screen name="Docker详情" component={DockerDetailsScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="VM详情" component={VmDetailsScreen} options={{ headerShown: false }} />
       <Stack.Screen name="CpuDetails" component={CpuDetailsScreen} options={{ title: 'CPU 性能与进程' }} />
       <Stack.Screen name="MemoryDetails" component={MemoryDetailsScreen} options={{ title: '内存监控与进程' }} />
       <Stack.Screen name="GpuDetails" component={GpuDetailsScreen} options={{ title: 'GPU 显卡与负载' }} />
@@ -104,8 +104,8 @@ function MainTabs() {
       })}
     >
       <Tab.Screen name="首页" component={HomeStack} options={{ headerShown: false }} />
-      <Tab.Screen name="容器" component={DockerDetailsScreen} options={{ headerTitle: 'Docker 容器中枢' }} />
-      <Tab.Screen name="虚拟机" component={VmDetailsScreen} options={{ headerTitle: '虚拟机 (VM)' }} />
+      <Tab.Screen name="容器" component={DockerDetailsScreen} options={{ headerShown: false }} />
+      <Tab.Screen name="虚拟机" component={VmDetailsScreen} options={{ headerShown: false }} />
       <Tab.Screen name="文件" component={FilesScreen} options={{ headerTitle: '文件管理' }} />
       <Tab.Screen name="设置" component={SettingsScreen} options={{ headerTitle: '系统设置' }} />
     </Tab.Navigator>
@@ -193,7 +193,8 @@ function ThemedRoot() {
     <>
       <StatusBar
         barStyle={colors.mode === 'dark' ? 'light-content' : 'dark-content'}
-        backgroundColor={colors.bg}
+        backgroundColor="transparent"
+        translucent={true}
       />
       <NavigationContainer ref={navRef} linking={linking}>
         <Stack.Navigator>
