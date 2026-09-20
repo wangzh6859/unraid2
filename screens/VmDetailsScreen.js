@@ -11,6 +11,7 @@ import {
 } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
+import GlassView from '../components/GlassView';
 
 export default function VmDetailsScreen() {
   const { colors, isDark } = useTheme();
@@ -212,84 +213,10 @@ export default function VmDetailsScreen() {
 
   return (
     <View style={styles.container}>
-      {/* 1. 顶部 Bento 概览看板 */}
-      <View style={styles.heroRow}>
-        <View style={styles.heroCard}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-            <View style={[styles.heroDot, { backgroundColor: colors.green }]} />
-            <Text style={styles.heroLabel}>运行中</Text>
-          </View>
-          <Text style={[styles.heroNum, { color: colors.green }]}>{runningCount}</Text>
-        </View>
-
-        <View style={styles.heroCard}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-            <View style={[styles.heroDot, { backgroundColor: colors.sub }]} />
-            <Text style={styles.heroLabel}>未运行 / 挂起</Text>
-          </View>
-          <Text style={[styles.heroNum, { color: colors.textStrong }]}>{stoppedCount}</Text>
-        </View>
-
-        <View style={styles.heroCard}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-            <Monitor size={11} color={colors.pink} style={{ marginRight: 4 }} />
-            <Text style={styles.heroLabel}>总虚拟机</Text>
-          </View>
-          <Text style={[styles.heroNum, { color: colors.pink }]}>{vms.length}</Text>
-        </View>
-      </View>
-
-      {/* 2. 搜索框与筛选胶囊 */}
-      <View style={styles.filterSection}>
-        <View style={styles.searchBox}>
-          <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="搜索虚拟机名称..."
-            placeholderTextColor={colors.muted}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          {searchQuery ? (
-            <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <X size={15} color={colors.sub} />
-            </TouchableOpacity>
-          ) : null}
-        </View>
-
-        <View style={styles.tabsRow}>
-          <TouchableOpacity
-            style={[styles.tabBtn, statusFilter === 'all' && styles.tabBtnActive]}
-            onPress={() => setStatusFilter('all')}
-          >
-            <Text style={[styles.tabBtnText, statusFilter === 'all' && styles.tabBtnTextActive]}>
-              全部 {vms.length}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tabBtn, statusFilter === 'running' && styles.tabBtnActive]}
-            onPress={() => setStatusFilter('running')}
-          >
-            <Text style={[styles.tabBtnText, statusFilter === 'running' && styles.tabBtnTextActive]}>
-              运行中 {runningCount}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tabBtn, statusFilter === 'stopped' && styles.tabBtnActive]}
-            onPress={() => setStatusFilter('stopped')}
-          >
-            <Text style={[styles.tabBtnText, statusFilter === 'stopped' && styles.tabBtnTextActive]}>
-              未运行 {stoppedCount}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* 3. 虚拟机卡片列表 */}
       <ScrollView
-        contentContainerStyle={styles.content}
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.scrollContent}
+        stickyHeaderIndices={[1]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -300,142 +227,215 @@ export default function VmDetailsScreen() {
           />
         }
       >
-        {filteredVms.map((vm, index) => {
-          const isRunning = vm.status === 'running';
-          const isPaused = vm.status === 'paused';
-          const isOperating = operatingVm === vm.name;
+        {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕) */}
+        <View style={styles.topHeaderSection}>
+          {/* 1. 顶部 Bento 概览看板 */}
+          <View style={styles.heroRow}>
+            <View style={styles.heroCard}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                <View style={[styles.heroDot, { backgroundColor: colors.green }]} />
+                <Text style={styles.heroLabel}>运行中</Text>
+              </View>
+              <Text style={[styles.heroNum, { color: colors.green }]}>{runningCount}</Text>
+            </View>
 
-          return (
-            <View key={vm.name || index} style={styles.vmCard}>
-              {/* 上层 */}
-              <View style={styles.cardUpperTier}>
-                <View style={[styles.avatar, { backgroundColor: isRunning ? 'rgba(236, 72, 153, 0.15)' : 'rgba(148, 163, 184, 0.15)' }]}>
-                  <Monitor size={20} color={isRunning ? colors.pink : colors.sub} />
-                </View>
+            <View style={styles.heroCard}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                <View style={[styles.heroDot, { backgroundColor: colors.sub }]} />
+                <Text style={styles.heroLabel}>未运行 / 挂起</Text>
+              </View>
+              <Text style={[styles.heroNum, { color: colors.textStrong }]}>{stoppedCount}</Text>
+            </View>
 
-                <View style={styles.nameBlock}>
-                  <Text style={styles.vmTitle} numberOfLines={1}>{vm.name}</Text>
-                  <View style={styles.metaBadgeRow}>
-                    <View style={[styles.statusBadge, {
-                      backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : isPaused ? 'rgba(245, 158, 11, 0.12)' : 'rgba(148, 163, 184, 0.12)'
-                    }]}>
-                      <View style={[styles.statusDotSmall, {
-                        backgroundColor: isRunning ? colors.green : isPaused ? colors.amber : colors.sub
-                      }]} />
-                      <Text style={[styles.statusBadgeText, {
-                        color: isRunning ? colors.green : isPaused ? colors.amber : colors.sub
+            <View style={styles.heroCard}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                <Monitor size={11} color={colors.pink} style={{ marginRight: 4 }} />
+                <Text style={styles.heroLabel}>总虚拟机</Text>
+              </View>
+              <Text style={[styles.heroNum, { color: colors.pink }]}>{vms.length}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Index 1: 搜索框与筛选胶囊 (到达顶部吸顶，并呈现毛玻璃特效) */}
+        <GlassView
+          border={false}
+          style={styles.stickyFilterSection}
+        >
+          <View style={styles.searchBox}>
+            <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="搜索虚拟机名称..."
+              placeholderTextColor={colors.muted}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {searchQuery ? (
+              <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <X size={15} color={colors.sub} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
+          <View style={styles.tabsRow}>
+            <TouchableOpacity
+              style={[styles.tabBtn, statusFilter === 'all' && styles.tabBtnActive]}
+              onPress={() => setStatusFilter('all')}
+            >
+              <Text style={[styles.tabBtnText, statusFilter === 'all' && styles.tabBtnTextActive]}>
+                全部 {vms.length}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tabBtn, statusFilter === 'running' && styles.tabBtnActive]}
+              onPress={() => setStatusFilter('running')}
+            >
+              <Text style={[styles.tabBtnText, statusFilter === 'running' && styles.tabBtnTextActive]}>
+                运行中 {runningCount}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tabBtn, statusFilter === 'stopped' && styles.tabBtnActive]}
+              onPress={() => setStatusFilter('stopped')}
+            >
+              <Text style={[styles.tabBtnText, statusFilter === 'stopped' && styles.tabBtnTextActive]}>
+                未运行 {stoppedCount}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </GlassView>
+
+        {/* Index 2: 虚拟机卡片列表 (在毛玻璃下向上滑动) */}
+        <View style={styles.cardsListSection}>
+          {filteredVms.map((vm, index) => {
+            const isRunning = vm.status === 'running';
+            const isPaused = vm.status === 'paused';
+            const isOperating = operatingVm === vm.name;
+
+            return (
+              <View key={vm.name || index} style={styles.vmCard}>
+                {/* 上层 */}
+                <View style={styles.cardUpperTier}>
+                  <View style={[styles.avatar, { backgroundColor: isRunning ? 'rgba(236, 72, 153, 0.15)' : 'rgba(148, 163, 184, 0.15)' }]}>
+                    <Monitor size={20} color={isRunning ? colors.pink : colors.sub} />
+                  </View>
+
+                  <View style={styles.nameBlock}>
+                    <Text style={styles.vmTitle} numberOfLines={1}>{vm.name}</Text>
+                    <View style={styles.metaBadgeRow}>
+                      <View style={[styles.statusBadge, {
+                        backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : isPaused ? 'rgba(245, 158, 11, 0.12)' : 'rgba(148, 163, 184, 0.12)'
                       }]}>
-                        {isRunning ? '运行中' : isPaused ? '已挂起' : '已关机'}
-                      </Text>
+                        <View style={[styles.statusDotSmall, {
+                          backgroundColor: isRunning ? colors.green : isPaused ? colors.amber : colors.sub
+                        }]} />
+                        <Text style={[styles.statusBadgeText, {
+                          color: isRunning ? colors.green : isPaused ? colors.amber : colors.sub
+                        }]}>
+                          {isRunning ? '运行中' : isPaused ? '已挂起' : '未运行'}
+                        </Text>
+                      </View>
                     </View>
                   </View>
                 </View>
 
-                {/* 核心配置指标 */}
-                <View style={styles.specPillsCol}>
-                  <View style={styles.specPill}>
-                    <Cpu size={10} color={colors.accent} style={{ marginRight: 3 }} />
-                    <Text style={[styles.specPillText, { color: colors.accent }]}>{vm.cores || 2} vCPU</Text>
-                  </View>
-                  <View style={[styles.specPill, { marginTop: 4 }]}>
-                    <Database size={10} color={colors.tempWarm} style={{ marginRight: 3 }} />
-                    <Text style={[styles.specPillText, { color: colors.tempWarm }]}>{formatVmMemory(vm.memory)}</Text>
-                  </View>
-                </View>
-              </View>
+                {/* 下层：极简直觉控制栏 */}
+                <View style={styles.cardLowerTier}>
+                  <View style={{ flex: 1 }} />
 
-              {/* 下层：操作栏 */}
-              <View style={styles.cardLowerTier}>
-                <Text style={styles.actionPromptText}>
-                  {isOperating ? '正在下发指令...' : isRunning ? '虚拟机正在执行任务' : isPaused ? '虚拟机已被冻结挂起' : '虚拟机处于关机状态'}
-                </Text>
+                  {/* 状态动作按键 */}
+                  <View style={styles.actionGroup}>
+                    {isOperating ? (
+                      <View style={styles.operatingBox}>
+                        <ActivityIndicator size="small" color={colors.accent} />
+                        <Text style={[styles.operatingText, { color: colors.accent }]}>处理中...</Text>
+                      </View>
+                    ) : null}
 
-                <View style={styles.mgmtBtnGroup}>
-                  {isOperating ? (
-                    <ActivityIndicator size="small" color={colors.accent} style={{ marginRight: 8 }} />
-                  ) : null}
+                    {isRunning && (
+                      <>
+                        <TouchableOpacity
+                          style={[styles.primaryActionBtn, { backgroundColor: colors.amber }]}
+                          onPress={() => handlePauseVm(vm.name)}
+                          disabled={isOperating}
+                          activeOpacity={0.8}
+                        >
+                          <Pause size={13} color="#ffffff" style={{ marginRight: 4 }} />
+                          <Text style={styles.primaryActionBtnText}>挂起</Text>
+                        </TouchableOpacity>
 
-                  {isRunning && (
-                    <>
-                      <TouchableOpacity
-                        style={styles.circleActionBtn}
-                        onPress={() => handlePauseVm(vm.name)}
-                        disabled={isOperating}
-                        activeOpacity={0.7}
-                        accessibilityLabel="挂起虚拟机"
-                      >
-                        <Pause size={14} color={colors.amber} />
-                      </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.primaryActionBtn, { backgroundColor: colors.red }]}
+                          onPress={() => handleStopVm(vm.name)}
+                          disabled={isOperating}
+                          activeOpacity={0.8}
+                        >
+                          <Power size={13} color="#ffffff" style={{ marginRight: 4 }} />
+                          <Text style={styles.primaryActionBtnText}>关机</Text>
+                        </TouchableOpacity>
 
-                      <TouchableOpacity
-                        style={styles.circleActionBtn}
-                        onPress={() => handleStopVm(vm.name)}
-                        disabled={isOperating}
-                        activeOpacity={0.7}
-                        accessibilityLabel="正常关机"
-                      >
-                        <Power size={14} color={colors.red} />
-                      </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.circleActionBtn}
+                          onPress={() => handleForceStopVm(vm.name)}
+                          disabled={isOperating}
+                          activeOpacity={0.7}
+                        >
+                          <Zap size={14} color={colors.red} />
+                        </TouchableOpacity>
+                      </>
+                    )}
 
-                      <TouchableOpacity
-                        style={[styles.circleActionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}
-                        onPress={() => handleForceStopVm(vm.name)}
-                        disabled={isOperating}
-                        activeOpacity={0.7}
-                        accessibilityLabel="强制断电"
-                      >
-                        <ShieldAlert size={14} color={colors.red} />
-                      </TouchableOpacity>
-                    </>
-                  )}
+                    {isPaused && (
+                      <>
+                        <TouchableOpacity
+                          style={[styles.primaryActionBtn, { backgroundColor: colors.green }]}
+                          onPress={() => handleResumeVm(vm.name)}
+                          disabled={isOperating}
+                          activeOpacity={0.8}
+                        >
+                          <Play size={13} color="#ffffff" style={{ marginRight: 4 }} />
+                          <Text style={styles.primaryActionBtnText}>恢复运行</Text>
+                        </TouchableOpacity>
 
-                  {isPaused && (
-                    <>
+                        <TouchableOpacity
+                          style={styles.circleActionBtn}
+                          onPress={() => handleForceStopVm(vm.name)}
+                          disabled={isOperating}
+                          activeOpacity={0.7}
+                        >
+                          <Power size={14} color={colors.red} />
+                        </TouchableOpacity>
+                      </>
+                    )}
+
+                    {!isRunning && !isPaused && (
                       <TouchableOpacity
                         style={[styles.primaryActionBtn, { backgroundColor: colors.green }]}
-                        onPress={() => handleResumeVm(vm.name)}
+                        onPress={() => handleStartVm(vm.name)}
                         disabled={isOperating}
                         activeOpacity={0.8}
                       >
                         <Play size={13} color="#ffffff" style={{ marginRight: 4 }} />
-                        <Text style={styles.primaryActionBtnText}>恢复运行</Text>
+                        <Text style={styles.primaryActionBtnText}>启动虚拟机</Text>
                       </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={styles.circleActionBtn}
-                        onPress={() => handleForceStopVm(vm.name)}
-                        disabled={isOperating}
-                        activeOpacity={0.7}
-                      >
-                        <Power size={14} color={colors.red} />
-                      </TouchableOpacity>
-                    </>
-                  )}
-
-                  {!isRunning && !isPaused && (
-                    <TouchableOpacity
-                      style={[styles.primaryActionBtn, { backgroundColor: colors.green }]}
-                      onPress={() => handleStartVm(vm.name)}
-                      disabled={isOperating}
-                      activeOpacity={0.8}
-                    >
-                      <Play size={13} color="#ffffff" style={{ marginRight: 4 }} />
-                      <Text style={styles.primaryActionBtnText}>启动虚拟机</Text>
-                    </TouchableOpacity>
-                  )}
+                    )}
+                  </View>
                 </View>
               </View>
-            </View>
-          );
-        })}
+            );
+          })}
 
-        {filteredVms.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Monitor size={42} color={colors.muted} style={{ marginBottom: 12 }} />
-            <Text style={styles.emptyTitle}>暂无虚拟机</Text>
-            <Text style={styles.emptySub}>当前 Unraid 未配置或未匹配到符合条件的虚拟机</Text>
-          </View>
-        ) : null}
+          {filteredVms.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <Monitor size={42} color={colors.muted} style={{ marginBottom: 12 }} />
+              <Text style={styles.emptyTitle}>暂无虚拟机</Text>
+              <Text style={styles.emptySub}>当前 Unraid 未配置或未匹配到符合条件的虚拟机</Text>
+            </View>
+          ) : null}
+        </View>
       </ScrollView>
 
       {/* Modern Confirm Modal */}
@@ -510,15 +510,36 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     letterSpacing: -0.5,
   },
 
-  // Filter Section
+  // Filter Section & Sticky Header
   filterSection: {
     paddingHorizontal: 16,
     marginBottom: 8,
   },
+  topHeaderSection: {
+    paddingTop: 4,
+  },
+  stickyFilterSection: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.glass?.barBorder || colors.divider,
+    zIndex: 10,
+    elevation: 3,
+  },
+  scrollContent: {
+    flexGrow: 1,
+  },
+  cardsListSection: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 110,
+    gap: 12,
+  },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.card,
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.04)',
     borderRadius: 12,
     paddingHorizontal: 12,
     height: 40,

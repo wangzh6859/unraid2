@@ -92,12 +92,10 @@ export default function ModernConfirmDialog({
         />
         <Pressable style={StyleSheet.absoluteFill} onPress={handleDismiss} />
 
-        {/* 核心毛玻璃 Squircle 弹窗卡片 */}
+        {/* 核心毛玻璃 Squircle 弹窗卡片 (与底栏、顶栏统一透明度与模糊) */}
         <GlassView
-          intensity={70}
           borderRadius={24}
           borderColor={colors.glass?.border || colors.cardBorder}
-          overlayColor={colors.glass?.modalBg}
           style={styles.card}
         >
           {/* Top Icon Badge */}

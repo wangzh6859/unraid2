@@ -75,9 +75,7 @@ function MainTabs() {
         tabBarInactiveTintColor: colors.sub,
         tabBarBackground: () => (
           <GlassView
-            intensity={65}
             border={false}
-            overlayColor={colors.glass?.barBg}
             style={StyleSheet.absoluteFill}
           />
         ),

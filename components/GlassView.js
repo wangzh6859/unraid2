@@ -14,7 +14,7 @@ import { useTheme } from '../ThemeContext';
 export default function GlassView({
   children,
   style,
-  intensity = 55,
+  intensity,
   tint,
   border = true,
   borderColor,
@@ -29,10 +29,13 @@ export default function GlassView({
   const effectiveTint = tint || (isDark ? 'dark' : 'light');
   const glassTokens = colors?.glass || {};
 
+  // 全局统一模糊强度：优先传入值，其次全局标准 65
+  const effectiveIntensity = intensity ?? glassTokens.intensity ?? 65;
+
   // 提取传入 style 中的圆角与边框配置
   const flattenedStyle = StyleSheet.flatten(style) || {};
   const effectiveRadius = borderRadius ?? flattenedStyle.borderRadius ?? 0;
-  const effectiveBorderColor = borderColor || glassTokens.border || 'rgba(255, 255, 255, 0.12)';
+  const effectiveBorderColor = borderColor || glassTokens.border || (isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(226, 232, 240, 0.85)');
 
   const containerStyle = [
     styles.container,
@@ -47,17 +50,15 @@ export default function GlassView({
     style,
   ];
 
-  const defaultOverlayColor = isDark
-    ? (glassTokens.bg || 'rgba(15, 23, 42, 0.72)')
-    : (glassTokens.bg || 'rgba(255, 255, 255, 0.75)');
-
+  // 全局统一色相与透明度（默认 0.78 严谨对齐）
+  const defaultOverlayColor = glassTokens.bg || (isDark ? 'rgba(13, 20, 36, 0.78)' : 'rgba(255, 255, 255, 0.78)');
   const tintOverlayColor = overlayColor !== undefined ? overlayColor : defaultOverlayColor;
 
   return (
     <View style={containerStyle} {...props}>
       {/* 1. 原生高斯模糊背景层 (Backdrop Blur) */}
       <BlurView
-        intensity={intensity}
+        intensity={effectiveIntensity}
         tint={effectiveTint}
         style={[StyleSheet.absoluteFill, { borderRadius: effectiveRadius }]}
       />
