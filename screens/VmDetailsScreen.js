@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity,
-  TextInput, Platform, StatusBar
+  TextInput, Platform, StatusBar, Keyboard
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -26,6 +26,7 @@ export default function VmDetailsScreen({ navigation }) {
   const [operatingVm, setOperatingVm] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'running' | 'stopped'
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
 
   // Modern Confirmation Dialog state
   const [confirmModal, setConfirmModal] = useState({
@@ -246,52 +247,54 @@ export default function VmDetailsScreen({ navigation }) {
           />
         }
       >
-        {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕) */}
-        <View style={styles.topHeaderSection}>
-          <View style={styles.topNavHeaderRow}>
-            <View style={styles.titleWithBackRow}>
-              <View>
-                <Text style={styles.navScreenTitle}>虚拟机 (VM)</Text>
-                <Text style={styles.navScreenSub}>
-                  {runningCount} 台正常运行 · 共 {vms.length} 台
-                </Text>
+        {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕，搜索聚焦时下沉隐藏) */}
+        {!isSearchFocused && (
+          <View style={styles.topHeaderSection}>
+            <View style={styles.topNavHeaderRow}>
+              <View style={styles.titleWithBackRow}>
+                <View>
+                  <Text style={styles.navScreenTitle}>虚拟机 (VM)</Text>
+                  <Text style={styles.navScreenSub}>
+                    {runningCount} 台正常运行 · 共 {vms.length} 台
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* 1. 顶部 Bento 概览看板 */}
+            <View style={styles.heroRow}>
+              <View style={styles.heroCard}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                  <View style={[styles.heroDot, { backgroundColor: colors.green }]} />
+                  <Text style={styles.heroLabel}>运行中</Text>
+                </View>
+                <Text style={[styles.heroNum, { color: colors.green }]}>{runningCount}</Text>
+              </View>
+
+              <View style={styles.heroCard}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                  <View style={[styles.heroDot, { backgroundColor: colors.sub }]} />
+                  <Text style={styles.heroLabel}>未运行 / 挂起</Text>
+                </View>
+                <Text style={[styles.heroNum, { color: colors.textStrong }]}>{stoppedCount}</Text>
+              </View>
+
+              <View style={styles.heroCard}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                  <Monitor size={11} color={colors.pink} style={{ marginRight: 4 }} />
+                  <Text style={styles.heroLabel}>总虚拟机</Text>
+                </View>
+                <Text style={[styles.heroNum, { color: colors.pink }]}>{vms.length}</Text>
               </View>
             </View>
           </View>
-
-          {/* 1. 顶部 Bento 概览看板 */}
-          <View style={styles.heroRow}>
-            <View style={styles.heroCard}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                <View style={[styles.heroDot, { backgroundColor: colors.green }]} />
-                <Text style={styles.heroLabel}>运行中</Text>
-              </View>
-              <Text style={[styles.heroNum, { color: colors.green }]}>{runningCount}</Text>
-            </View>
-
-            <View style={styles.heroCard}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                <View style={[styles.heroDot, { backgroundColor: colors.sub }]} />
-                <Text style={styles.heroLabel}>未运行 / 挂起</Text>
-              </View>
-              <Text style={[styles.heroNum, { color: colors.textStrong }]}>{stoppedCount}</Text>
-            </View>
-
-            <View style={styles.heroCard}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                <Monitor size={11} color={colors.pink} style={{ marginRight: 4 }} />
-                <Text style={styles.heroLabel}>总虚拟机</Text>
-              </View>
-              <Text style={[styles.heroNum, { color: colors.pink }]}>{vms.length}</Text>
-            </View>
-          </View>
-        </View>
+        )}
 
         {/* Index 1: 全局统一圆角悬浮毛玻璃搜索岛 */}
-        <View style={styles.stickyIslandWrapper}>
+        <View style={[styles.stickyIslandWrapper, isSearchFocused && styles.stickyIslandFocused]}>
           <GlassView
             border={true}
-            style={styles.floatingIslandCard}
+            style={[styles.floatingIslandCard, isSearchFocused && styles.floatingIslandCardFocused]}
           >
             <View style={styles.searchBoxRow}>
               <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
@@ -302,6 +305,7 @@ export default function VmDetailsScreen({ navigation }) {
                   placeholderTextColor={colors.muted}
                   value={searchQuery}
                   onChangeText={setSearchQuery}
+                  onFocus={() => setIsSearchFocused(true)}
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
@@ -311,6 +315,20 @@ export default function VmDetailsScreen({ navigation }) {
                   </TouchableOpacity>
                 ) : null}
               </View>
+
+              {isSearchFocused && (
+                <TouchableOpacity
+                  style={styles.searchCancelBtn}
+                  onPress={() => {
+                    setSearchQuery('');
+                    setIsSearchFocused(false);
+                    Keyboard.dismiss();
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.searchCancelText}>取消</Text>
+                </TouchableOpacity>
+              )}
             </View>
 
             <View style={styles.tabsRow}>
@@ -613,6 +631,9 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     backgroundColor: 'transparent',
     zIndex: 20,
   },
+  stickyIslandFocused: {
+    zIndex: 120,
+  },
   floatingIslandCard: {
     borderRadius: 20,
     paddingHorizontal: 14,
@@ -626,6 +647,13 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     shadowRadius: 10,
     elevation: 4,
     overflow: 'hidden',
+  },
+  floatingIslandCardFocused: {
+    borderColor: isDark ? 'rgba(56, 189, 248, 0.4)' : 'rgba(14, 165, 233, 0.35)',
+    shadowColor: colors.accent,
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 12,
   },
   scrollContent: {
     flexGrow: 1,
@@ -664,6 +692,18 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     color: colors.textStrong,
     fontSize: 13,
     paddingVertical: 0,
+  },
+  searchCancelBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    marginLeft: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  searchCancelText: {
+    fontSize: 14,
+    color: colors.accent,
+    fontWeight: '700',
   },
   tabsRow: {
     flexDirection: 'row',

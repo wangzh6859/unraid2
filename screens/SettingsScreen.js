@@ -2,19 +2,23 @@ import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   StyleSheet, Text, View, TouchableOpacity, ActivityIndicator,
   ScrollView, RefreshControl, Switch, Modal, TextInput, KeyboardAvoidingView, Platform,
-  Pressable, Linking,
+  Pressable, Linking, StatusBar,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system';
 import * as LocalAuthentication from 'expo-local-authentication';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import Svg, { Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
+import GlassView from '../components/GlassView';
 import {
   HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server,
   LogOut, Moon, Sun, FolderDown, RefreshCw, Trash2, Key, Power,
   RotateCw, AlertTriangle, CheckCircle, Fingerprint, ShieldAlert,
   Sparkles, DownloadCloud, ExternalLink, Activity, Radio, Zap, Globe, Sliders, X, Check,
 } from 'lucide-react-native';
+
+const STATUS_BAR_HEIGHT = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 44;
 import { useTheme } from '../ThemeContext';
 import {
   getDownloadDir, setDownloadDir, resetDownloadDir, getCacheDirPath,
@@ -168,7 +172,7 @@ export default function SettingsScreen({ navigation }) {
   const [updateModalVisible, setUpdateModalVisible] = useState(false);
 
   const { isDark, colors, toggleTheme } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
   const appVersion = Constants.expoConfig?.version || '1.2.0';
 
   const isNewerVersion = (latestTag, currentVer) => {
@@ -956,27 +960,78 @@ export default function SettingsScreen({ navigation }) {
   };
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          tintColor={colors.accent}
-          colors={[colors.accent]}
-        />
-      }
-    >
-      <View style={styles.header}>
-        <SettingsIcon color={colors.accent} size={48} style={{ marginBottom: 12 }} />
-        <Text style={styles.title}>系统控制与设置</Text>
-        <Text style={styles.subtitle}>Unraid Manager v{appVersion}</Text>
-      </View>
+    <View style={styles.container}>
+      {/* 顶部状态栏渐变氛围过渡层 */}
+      <Svg style={styles.topGradientFade} pointerEvents="none">
+        <Defs>
+          <LinearGradient id="settingsTopFade" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor={colors.bg} stopOpacity="1" />
+            <Stop offset="0.6" stopColor={colors.bg} stopOpacity="0.8" />
+            <Stop offset="1" stopColor={colors.bg} stopOpacity="0" />
+          </LinearGradient>
+        </Defs>
+        <Rect x="0" y="0" width="100%" height="100%" fill="url(#settingsTopFade)" />
+      </Svg>
 
-      {/* Unraid Core Server Card */}
-      <Text style={styles.sectionTitle}>主控连接凭证</Text>
-      <View style={styles.card}>
+      <ScrollView
+        style={styles.mainScrollView}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.accent}
+            colors={[colors.accent]}
+          />
+        }
+      >
+        <View style={styles.topHeaderSection}>
+          <View style={styles.topNavHeaderRow}>
+            <View style={styles.titleWithBackRow}>
+              <View>
+                <Text style={styles.navScreenTitle}>系统控制与设置</Text>
+                <Text style={styles.navScreenSub}>
+                  Unraid Mobile Manager · 统一管理中枢
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          {/* 顶部 Bento 概览看板 */}
+          <View style={styles.heroRow}>
+            <View style={styles.heroCard}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                <View style={[styles.heroDot, { backgroundColor: unraidUrl ? colors.green : colors.sub }]} />
+                <Text style={styles.heroLabel}>主控核心</Text>
+              </View>
+              <Text style={[styles.heroNum, { color: unraidUrl ? colors.green : colors.sub }]}>
+                {unraidUrl ? '已连接' : '未连接'}
+              </Text>
+            </View>
+
+            <View style={styles.heroCard}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                <ShieldCheck size={11} color={appLockEnabled ? colors.accent : colors.sub} style={{ marginRight: 4 }} />
+                <Text style={styles.heroLabel}>安全防护</Text>
+              </View>
+              <Text style={[styles.heroNum, { color: appLockEnabled ? colors.accent : colors.sub }]}>
+                {appLockEnabled ? '已布防' : '未开启'}
+              </Text>
+            </View>
+
+            <View style={styles.heroCard}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                <Sparkles size={11} color={colors.purple} style={{ marginRight: 4 }} />
+                <Text style={styles.heroLabel}>软件版本</Text>
+              </View>
+              <Text style={[styles.heroNum, { color: colors.purple }]}>v{appVersion}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Unraid Core Server Card */}
+        <Text style={styles.sectionTitle}>主控连接凭证</Text>
+        <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <TouchableOpacity style={styles.row} onPress={editServerUrl}>
           <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
             <Server color={colors.accent} size={20} />
@@ -1012,11 +1067,11 @@ export default function SettingsScreen({ navigation }) {
             <Text style={styles.rowSub}>清除本地保存的 API 访问凭据</Text>
           </View>
         </TouchableOpacity>
-      </View>
+      </GlassView>
 
       {/* Server Power Controls Card */}
       <Text style={styles.sectionTitle}>服务器电源控制</Text>
-      <View style={styles.card}>
+      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <TouchableOpacity style={styles.row} onPress={handleServerReboot} disabled={powerLoading}>
           <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}>
             <RotateCw color={colors.amber} size={20} />
@@ -1044,11 +1099,11 @@ export default function SettingsScreen({ navigation }) {
             <Text style={[styles.powerActionTagText, { color: colors.red }]}>关机</Text>
           </View>
         </TouchableOpacity>
-      </View>
+      </GlassView>
 
       {/* Wake-on-LAN Remote Wake Card */}
       <Text style={styles.sectionTitle}>网络唤醒 (Wake-on-LAN)</Text>
-      <View style={styles.card}>
+      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <TouchableOpacity style={styles.row} onPress={editWolMac}>
           <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
             <Zap color={colors.accent} size={20} />
@@ -1106,11 +1161,11 @@ export default function SettingsScreen({ navigation }) {
             )}
           </View>
         </TouchableOpacity>
-      </View>
+      </GlassView>
 
       {/* Docker Reverse Proxy & WebUI Jump */}
       <Text style={styles.sectionTitle}>Docker 反代与 Web 界面</Text>
-      <View style={styles.card}>
+      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <View style={styles.row}>
           <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
             <Globe color={colors.accent} size={20} />
@@ -1160,11 +1215,11 @@ export default function SettingsScreen({ navigation }) {
           </View>
           <Text style={styles.editHint}>管理</Text>
         </TouchableOpacity>
-      </View>
+      </GlassView>
 
       {/* Security & Biometrics */}
       <Text style={styles.sectionTitle}>安全防护与生物识别</Text>
-      <View style={styles.card}>
+      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <View style={styles.row}>
           <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
             <Fingerprint color={colors.accent} size={20} />
@@ -1202,11 +1257,11 @@ export default function SettingsScreen({ navigation }) {
             thumbColor={'#ffffff'}
           />
         </View>
-      </View>
+      </GlassView>
 
       {/* Background Transfer & Foreground Service */}
       <Text style={styles.sectionTitle}>传输与后台保活</Text>
-      <View style={styles.card}>
+      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <View style={styles.row}>
           <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
             <Activity color={colors.green || '#10b981'} size={20} />
@@ -1224,11 +1279,11 @@ export default function SettingsScreen({ navigation }) {
             thumbColor={'#ffffff'}
           />
         </View>
-      </View>
+      </GlassView>
 
       {/* Appearance & Themes */}
       <Text style={styles.sectionTitle}>外观与沉浸显示</Text>
-      <View style={styles.card}>
+      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <View style={styles.row}>
           <View style={[styles.iconBox, { backgroundColor: isDark ? 'rgba(139, 92, 246, 0.15)' : 'rgba(245, 158, 11, 0.15)' }]}>
             {isDark ? <Moon color={colors.purple} size={20} /> : <Sun color={colors.amber} size={20} />}
@@ -1244,11 +1299,11 @@ export default function SettingsScreen({ navigation }) {
             thumbColor={'#ffffff'}
           />
         </View>
-      </View>
+      </GlassView>
 
       {/* Download Directory */}
       <Text style={styles.sectionTitle}>本地存储与下载</Text>
-      <View style={styles.card}>
+      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <View style={styles.row}>
           <View style={styles.iconBox}>
             <FolderDown color={colors.accent} size={20} />
@@ -1271,11 +1326,11 @@ export default function SettingsScreen({ navigation }) {
             <Text style={styles.miniBtnText}>恢复应用内置</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </GlassView>
 
       {/* Preview Cache Management */}
       <Text style={styles.sectionTitle}>即时预览缓存</Text>
-      <View style={styles.card}>
+      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <View style={styles.row}>
           <View style={styles.iconBox}>
             <HardDrive color={colors.green} size={20} />
@@ -1325,11 +1380,11 @@ export default function SettingsScreen({ navigation }) {
             <Text style={styles.rowSub}>即刻释放手机存储空间</Text>
           </View>
         </TouchableOpacity>
-      </View>
+      </GlassView>
 
       {/* Architecture & Protocol */}
       <Text style={styles.sectionTitle}>底层核心架构</Text>
-      <View style={styles.card}>
+      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <View style={styles.row}>
           <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
             <ShieldCheck color={colors.accent} size={20} />
@@ -1349,11 +1404,11 @@ export default function SettingsScreen({ navigation }) {
             <Text style={styles.rowSub}>RFC 7233 HTTP 206 Partial Content 分片流</Text>
           </View>
         </View>
-      </View>
+      </GlassView>
 
       {/* Software Version & In-App Update */}
       <Text style={styles.sectionTitle}>软件版本与在线更新</Text>
-      <View style={styles.card}>
+      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <View style={styles.row}>
           <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
             <Sparkles color={colors.accent} size={20} />
@@ -1426,7 +1481,7 @@ export default function SettingsScreen({ navigation }) {
             )}
           </TouchableOpacity>
         </View>
-      </View>
+      </GlassView>
 
       {/* Server Config Input Modal */}
       <Modal visible={serverEditVisible} transparent animationType="fade" onRequestClose={() => setServerEditVisible(false)}>
@@ -1705,27 +1760,161 @@ export default function SettingsScreen({ navigation }) {
         onConfirm={confirmDialog.onConfirm}
         onCancel={() => setConfirmDialog(prev => ({ ...prev, visible: false }))}
       />
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
-const createStyles = (colors) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 16, paddingBottom: 110 },
-  header: { alignItems: 'center', marginVertical: 24 },
-  title: { color: colors.textStrong, fontSize: 24, fontWeight: 'bold' },
-  subtitle: { color: colors.muted, fontSize: 13, marginTop: 4 },
+const createStyles = (colors, isDark) => StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.bg,
+  },
+  topGradientFade: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: STATUS_BAR_HEIGHT + 20,
+    zIndex: 100,
+  },
+  mainScrollView: {
+    flex: 1,
+    marginTop: STATUS_BAR_HEIGHT,
+  },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 110,
+  },
+  topHeaderSection: {
+    paddingTop: 4,
+    marginBottom: 6,
+  },
+  topNavHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
+    paddingTop: 6,
+    paddingBottom: 6,
+  },
+  titleWithBackRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  navScreenTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: colors.textStrong,
+    letterSpacing: -0.3,
+  },
+  navScreenSub: {
+    fontSize: 12,
+    color: colors.sub,
+    marginTop: 2,
+    fontWeight: '500',
+  },
 
-  sectionTitle: { color: colors.sub, fontSize: 13, fontWeight: 'bold', marginLeft: 8, marginBottom: 8, marginTop: 16 },
-  card: { backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden', elevation: 3 },
+  // Hero Stats Row
+  heroRow: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  heroCard: {
+    flex: 1,
+    backgroundColor: colors.card,
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: isDark ? 0.2 : 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  heroDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 6,
+  },
+  heroLabel: {
+    fontSize: 11,
+    color: colors.sub,
+    fontWeight: '600',
+  },
+  heroNum: {
+    fontSize: 17,
+    fontWeight: 'bold',
+    letterSpacing: -0.4,
+  },
 
-  row: { flexDirection: 'row', alignItems: 'center', padding: 16 },
-  iconBox: { width: 40, height: 40, borderRadius: 10, backgroundColor: 'rgba(16, 185, 129, 0.15)', justifyContent: 'center', alignItems: 'center', marginRight: 14 },
-  infoBox: { flex: 1, justifyContent: 'center' },
-  rowTitle: { color: colors.text, fontSize: 15, fontWeight: '500', marginBottom: 3 },
-  rowSub: { color: colors.sub, fontSize: 12 },
-  valueText: { color: colors.green, fontSize: 15, fontWeight: 'bold' },
-  editHint: { color: colors.accent, fontSize: 13, fontWeight: 'bold' },
+  sectionTitle: {
+    color: colors.sub,
+    fontSize: 13,
+    fontWeight: 'bold',
+    marginLeft: 6,
+    marginBottom: 8,
+    marginTop: 18,
+    letterSpacing: 0.2,
+  },
+  glassCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.10)' : 'rgba(0, 0, 0, 0.06)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: isDark ? 0.25 : 0.05,
+    shadowRadius: 10,
+    elevation: 3,
+    overflow: 'hidden',
+    marginBottom: 4,
+  },
+
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  iconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+  },
+  infoBox: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  rowTitle: {
+    color: colors.textStrong,
+    fontSize: 15,
+    fontWeight: '600',
+    marginBottom: 3,
+  },
+  rowSub: {
+    color: colors.sub,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  valueText: {
+    color: colors.green,
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  editHint: {
+    color: colors.accent,
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
 
   powerActionTag: {
     paddingHorizontal: 12,
@@ -1740,11 +1929,35 @@ const createStyles = (colors) => StyleSheet.create({
     fontWeight: 'bold',
   },
 
-  divider: { height: 1, backgroundColor: colors.divider, marginLeft: 68 },
+  divider: {
+    height: 1,
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
+    marginLeft: 70,
+  },
 
-  btnRow: { flexDirection: 'row', padding: 12, justifyContent: 'space-around' },
-  miniBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.input, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8 },
-  miniBtnText: { color: colors.text, fontSize: 13, fontWeight: 'bold', marginLeft: 6 },
+  btnRow: {
+    flexDirection: 'row',
+    padding: 12,
+    gap: 12,
+  },
+  miniBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
+  },
+  miniBtnText: {
+    color: colors.textStrong,
+    fontSize: 13,
+    fontWeight: '600',
+    marginLeft: 6,
+  },
 
   overlayCenter: {
     flex: 1,
@@ -1763,11 +1976,11 @@ const createStyles = (colors) => StyleSheet.create({
     paddingHorizontal: 22,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
     elevation: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.35,
+    shadowOpacity: isDark ? 0.4 : 0.15,
     shadowRadius: 20,
   },
   dialogIconBadge: {
@@ -1837,17 +2050,18 @@ const createStyles = (colors) => StyleSheet.create({
   updateCard: {
     width: '100%',
     maxWidth: 340,
+    backgroundColor: colors.card,
     borderRadius: 24,
     paddingTop: 24,
     paddingBottom: 20,
     paddingHorizontal: 22,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
     elevation: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.35,
+    shadowOpacity: isDark ? 0.4 : 0.15,
     shadowRadius: 20,
   },
   updateTitle: {

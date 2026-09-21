@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './utils/apiClient';
-import { StatusBar, AppState, View, Text, TouchableOpacity, ScrollView, Platform, StyleSheet } from 'react-native';
+import { StatusBar, AppState, View, Text, TouchableOpacity, ScrollView, Platform, StyleSheet, Keyboard } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -60,6 +60,27 @@ function HomeStack() {
 // 💡 悬浮毛玻璃胶囊 Dock 导航栏
 function CustomFloatingTabBar({ state, descriptors, navigation }) {
   const { colors, isDark } = useTheme();
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => setIsKeyboardVisible(true)
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setIsKeyboardVisible(false)
+    );
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  // 软键盘弹出时彻底隐藏 Dock 栏，杜绝浮在输入法上方
+  if (isKeyboardVisible) {
+    return null;
+  }
 
   return (
     <View style={tabStyles.floatingTabBarWrapper} pointerEvents="box-none">
@@ -173,7 +194,7 @@ function MainTabs() {
       <Tab.Screen name="容器" component={DockerDetailsScreen} options={{ headerShown: false }} />
       <Tab.Screen name="虚拟机" component={VmDetailsScreen} options={{ headerShown: false }} />
       <Tab.Screen name="文件" component={FilesScreen} options={{ headerShown: false }} />
-      <Tab.Screen name="设置" component={SettingsScreen} options={{ headerTitle: '系统设置' }} />
+      <Tab.Screen name="设置" component={SettingsScreen} options={{ headerShown: false }} />
     </Tab.Navigator>
   );
 }

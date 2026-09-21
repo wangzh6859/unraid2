@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Image, StyleSheet, Text, View, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity,
-  Modal, TextInput, Pressable, Platform, Linking, KeyboardAvoidingView, StatusBar,
+  Modal, TextInput, Pressable, Platform, Linking, KeyboardAvoidingView, StatusBar, Keyboard,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -34,6 +34,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
   const [openingDocker, setOpeningDocker] = useState(null);
   const [updatingDocker, setUpdatingDocker] = useState(null);
   const [mainScrollEnabled, setMainScrollEnabled] = useState(true);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
 
   // 顶部分段切换：独立容器 vs Compose 堆栈
   const [dockerMode, setDockerMode] = useState('containers'); // 'containers' | 'compose'
@@ -1013,43 +1014,45 @@ export default function DockerDetailsScreen({ navigation, route }) {
             />
           }
         >
-          {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕) */}
-          <View style={styles.topHeaderSection}>
-            <View style={styles.topNavHeaderRow}>
-              <View style={styles.titleWithBackRow}>
-                <View>
-                  <Text style={styles.navScreenTitle}>Docker 容器</Text>
-                  <Text style={styles.navScreenSub}>
-                    {composeRunningCount} 个堆栈运行中 · 共 {composeProjects.length} 个
+          {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕，搜索聚焦时下沉隐藏) */}
+          {!isSearchFocused && (
+            <View style={styles.topHeaderSection}>
+              <View style={styles.topNavHeaderRow}>
+                <View style={styles.titleWithBackRow}>
+                  <View>
+                    <Text style={styles.navScreenTitle}>Docker 容器</Text>
+                    <Text style={styles.navScreenSub}>
+                      {composeRunningCount} 个堆栈运行中 · 共 {composeProjects.length} 个
+                    </Text>
+                  </View>
+                </View>
+              </View>
+              {renderSegmentBar()}
+              {/* Compose 概览与快捷操作 */}
+              <View style={styles.composeHeroRow}>
+                <View style={styles.composeHeroCard}>
+                  <Text style={styles.composeHeroNum}>{composeProjects.length}</Text>
+                  <Text style={styles.composeHeroLabel}>总堆栈数</Text>
+                </View>
+                <View style={styles.composeHeroCard}>
+                  <Text style={[styles.composeHeroNum, { color: colors.green }]}>{composeRunningCount}</Text>
+                  <Text style={styles.composeHeroLabel}>全服务运行</Text>
+                </View>
+                <View style={styles.composeHeroCard}>
+                  <Text style={[styles.composeHeroNum, { color: colors.amber }]}>
+                    {composeProjects.length - composeRunningCount}
                   </Text>
+                  <Text style={styles.composeHeroLabel}>未完全运行</Text>
                 </View>
               </View>
             </View>
-            {renderSegmentBar()}
-            {/* Compose 概览与快捷操作 */}
-            <View style={styles.composeHeroRow}>
-              <View style={styles.composeHeroCard}>
-                <Text style={styles.composeHeroNum}>{composeProjects.length}</Text>
-                <Text style={styles.composeHeroLabel}>总堆栈数</Text>
-              </View>
-              <View style={styles.composeHeroCard}>
-                <Text style={[styles.composeHeroNum, { color: colors.green }]}>{composeRunningCount}</Text>
-                <Text style={styles.composeHeroLabel}>全服务运行</Text>
-              </View>
-              <View style={styles.composeHeroCard}>
-                <Text style={[styles.composeHeroNum, { color: colors.amber }]}>
-                  {composeProjects.length - composeRunningCount}
-                </Text>
-                <Text style={styles.composeHeroLabel}>未完全运行</Text>
-              </View>
-            </View>
-          </View>
+          )}
 
           {/* Index 1: 全局统一圆角悬浮毛玻璃搜索岛 */}
-          <View style={styles.stickyIslandWrapper}>
+          <View style={[styles.stickyIslandWrapper, isSearchFocused && styles.stickyIslandFocused]}>
             <GlassView
               border={true}
-              style={styles.floatingIslandCard}
+              style={[styles.floatingIslandCard, isSearchFocused && styles.floatingIslandCardFocused]}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
@@ -1060,6 +1063,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
                     placeholderTextColor={colors.muted}
                     value={composeSearchQuery}
                     onChangeText={setComposeSearchQuery}
+                    onFocus={() => setIsSearchFocused(true)}
                     autoCapitalize="none"
                   />
                   {composeSearchQuery ? (
@@ -1069,17 +1073,31 @@ export default function DockerDetailsScreen({ navigation, route }) {
                   ) : null}
                 </View>
 
-                <TouchableOpacity
-                  style={styles.newStackBtn}
-                  onPress={() => {
-                    setNewStackName('');
-                    setNewStackModalVisible(true);
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Plus size={15} color="#ffffff" style={{ marginRight: 4 }} />
-                  <Text style={styles.newStackBtnText}>新建堆栈</Text>
-                </TouchableOpacity>
+                {!isSearchFocused ? (
+                  <TouchableOpacity
+                    style={styles.newStackBtn}
+                    onPress={() => {
+                      setNewStackName('');
+                      setNewStackModalVisible(true);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Plus size={15} color="#ffffff" style={{ marginRight: 4 }} />
+                    <Text style={styles.newStackBtnText}>新建堆栈</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.searchCancelBtn}
+                    onPress={() => {
+                      setComposeSearchQuery('');
+                      setIsSearchFocused(false);
+                      Keyboard.dismiss();
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.searchCancelText}>取消</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </GlassView>
           </View>
@@ -1239,52 +1257,54 @@ export default function DockerDetailsScreen({ navigation, route }) {
             />
           }
         >
-          {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕) */}
-          <View style={styles.topHeaderSection}>
-            <View style={styles.topNavHeaderRow}>
-              <View style={styles.titleWithBackRow}>
-                <View>
-                  <Text style={styles.navScreenTitle}>Docker 容器中枢</Text>
-                  <Text style={styles.navScreenSub}>
-                    {runningCount} 个容器正常运行 · 共 {dockers.length} 个
-                  </Text>
+          {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕，搜索聚焦时下沉隐藏) */}
+          {!isSearchFocused && (
+            <View style={styles.topHeaderSection}>
+              <View style={styles.topNavHeaderRow}>
+                <View style={styles.titleWithBackRow}>
+                  <View>
+                    <Text style={styles.navScreenTitle}>Docker 容器中枢</Text>
+                    <Text style={styles.navScreenSub}>
+                      {runningCount} 个容器正常运行 · 共 {dockers.length} 个
+                    </Text>
+                  </View>
+                </View>
+              </View>
+              {renderSegmentBar()}
+              {/* 1. 顶部 Bento 概览看板 (Hero Stats) */}
+              <View style={styles.heroRow}>
+                <View style={styles.heroCard}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                    <View style={[styles.heroDot, { backgroundColor: colors.green }]} />
+                    <Text style={styles.heroLabel}>运行中</Text>
+                  </View>
+                  <Text style={[styles.heroNum, { color: colors.green }]}>{runningCount}</Text>
+                </View>
+
+                <View style={styles.heroCard}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                    <View style={[styles.heroDot, { backgroundColor: colors.sub }]} />
+                    <Text style={styles.heroLabel}>已停止</Text>
+                  </View>
+                  <Text style={[styles.heroNum, { color: colors.textStrong }]}>{stoppedCount}</Text>
+                </View>
+
+                <View style={styles.heroCard}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                    <Cpu size={11} color={colors.tempWarm} style={{ marginRight: 4 }} />
+                    <Text style={styles.heroLabel}>总负载</Text>
+                  </View>
+                  <Text style={[styles.heroNum, { color: colors.tempWarm }]}>{totalCpuAgg}%</Text>
                 </View>
               </View>
             </View>
-            {renderSegmentBar()}
-            {/* 1. 顶部 Bento 概览看板 (Hero Stats) */}
-            <View style={styles.heroRow}>
-              <View style={styles.heroCard}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                  <View style={[styles.heroDot, { backgroundColor: colors.green }]} />
-                  <Text style={styles.heroLabel}>运行中</Text>
-                </View>
-                <Text style={[styles.heroNum, { color: colors.green }]}>{runningCount}</Text>
-              </View>
-
-              <View style={styles.heroCard}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                  <View style={[styles.heroDot, { backgroundColor: colors.sub }]} />
-                  <Text style={styles.heroLabel}>已停止</Text>
-                </View>
-                <Text style={[styles.heroNum, { color: colors.textStrong }]}>{stoppedCount}</Text>
-              </View>
-
-              <View style={styles.heroCard}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                  <Cpu size={11} color={colors.tempWarm} style={{ marginRight: 4 }} />
-                  <Text style={styles.heroLabel}>总负载</Text>
-                </View>
-                <Text style={[styles.heroNum, { color: colors.tempWarm }]}>{totalCpuAgg}%</Text>
-              </View>
-            </View>
-          </View>
+          )}
 
           {/* Index 1: 全局统一圆角悬浮毛玻璃搜索岛 */}
-          <View style={styles.stickyIslandWrapper}>
+          <View style={[styles.stickyIslandWrapper, isSearchFocused && styles.stickyIslandFocused]}>
             <GlassView
               border={true}
-              style={styles.floatingIslandCard}
+              style={[styles.floatingIslandCard, isSearchFocused && styles.floatingIslandCardFocused]}
             >
               <View style={styles.searchBoxRow}>
                 <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
@@ -1295,6 +1315,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
                     placeholderTextColor={colors.muted}
                     value={searchQuery}
                     onChangeText={setSearchQuery}
+                    onFocus={() => setIsSearchFocused(true)}
                     autoCapitalize="none"
                     autoCorrect={false}
                   />
@@ -1304,6 +1325,20 @@ export default function DockerDetailsScreen({ navigation, route }) {
                     </TouchableOpacity>
                   ) : null}
                 </View>
+
+                {isSearchFocused && (
+                  <TouchableOpacity
+                    style={styles.searchCancelBtn}
+                    onPress={() => {
+                      setSearchQuery('');
+                      setIsSearchFocused(false);
+                      Keyboard.dismiss();
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.searchCancelText}>取消</Text>
+                  </TouchableOpacity>
+                )}
               </View>
 
               <View
@@ -2114,6 +2149,9 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     backgroundColor: 'transparent',
     zIndex: 20,
   },
+  stickyIslandFocused: {
+    zIndex: 120,
+  },
   floatingIslandCard: {
     borderRadius: 20,
     paddingHorizontal: 14,
@@ -2127,6 +2165,13 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     shadowRadius: 10,
     elevation: 4,
     overflow: 'hidden',
+  },
+  floatingIslandCardFocused: {
+    borderColor: isDark ? 'rgba(56, 189, 248, 0.4)' : 'rgba(14, 165, 233, 0.35)',
+    shadowColor: colors.accent,
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 12,
   },
   scrollContent: {
     flexGrow: 1,
@@ -2165,6 +2210,18 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     color: colors.textStrong,
     fontSize: 13,
     paddingVertical: 0,
+  },
+  searchCancelBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    marginLeft: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  searchCancelText: {
+    fontSize: 14,
+    color: colors.accent,
+    fontWeight: '700',
   },
   filterScrollContainer: {
     flexDirection: 'row',

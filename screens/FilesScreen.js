@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo, useR
 import {
   StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator,
   KeyboardAvoidingView, Platform, ScrollView, Modal, BackHandler,
-  Pressable, RefreshControl, AppState, StatusBar,
+  Pressable, RefreshControl, AppState, StatusBar, Keyboard,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -140,6 +140,7 @@ export default function FilesScreen({ navigation }) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('name'); // 'name' | 'date' | 'size'
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
 
   // Selection & UI Modals
   const [multiSelect, setMultiSelect] = useState(false);
@@ -1818,47 +1819,35 @@ export default function FilesScreen({ navigation }) {
           />
         }
       >
-        {/* Index 0: 顶部大标题与路径说明 */}
-        <View style={styles.topHeaderSection}>
-          <View style={styles.topNavHeaderRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.navScreenTitle}>文件管理</Text>
-              <Text style={styles.navScreenSub} numberOfLines={1}>
-                {isAtRoot ? 'Unraid 根共享库 (/mnt/user)' : currentPath}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Index 1: 全局统一 20px 圆角悬浮毛玻璃中枢岛 */}
-        <View style={styles.stickyIslandWrapper}>
-          <GlassView
-            border={true}
-            style={styles.floatingIslandCard}
-          >
-            {/* 第一行：目录名导航、传输中枢、新建操作按键 */}
-            <View style={styles.islandNavRow}>
-              <View style={styles.islandNavLeft}>
+        {/* Index 0: 顶部大标题与操作按键 (搜索聚焦时平滑下沉隐藏) */}
+        {!isSearchFocused && (
+          <View style={styles.topHeaderSection}>
+            <View style={styles.topNavHeaderRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 10 }}>
                 {!isAtRoot && (
                   <TouchableOpacity
                     onPress={goBack}
-                    style={styles.islandBackBtn}
+                    style={styles.navBackBtn}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
-                    <ChevronLeft color={colors.textStrong} size={20} />
+                    <ChevronLeft color={colors.textStrong} size={22} />
                   </TouchableOpacity>
                 )}
-                <Folder color={colors.accent} size={18} style={{ marginRight: 6 }} />
-                <Text style={styles.islandDirTitle} numberOfLines={1}>
-                  {currentFolderTitle}
-                </Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.navScreenTitle}>文件管理</Text>
+                  <Text style={styles.navScreenSub} numberOfLines={1}>
+                    {isAtRoot ? 'Unraid 根共享库 (/mnt/user)' : currentFolderTitle}
+                  </Text>
+                </View>
               </View>
 
-              <View style={styles.islandNavRight}>
+              {/* 右上角：传输任务中心 + 新建按钮 */}
+              <View style={styles.topNavActions}>
                 <TouchableOpacity
                   onPress={() => setIsTransferVisible(true)}
-                  style={styles.islandIconBtn}
+                  style={styles.topActionBtn}
                   hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  accessibilityLabel="传输任务中心"
                 >
                   <ArrowDownUp color={colors.accent} size={18} />
                   {activeTransferCount > 0 && (
@@ -1870,15 +1859,24 @@ export default function FilesScreen({ navigation }) {
 
                 <TouchableOpacity
                   onPress={() => setIsMenuVisible(true)}
-                  style={[styles.islandIconBtn, { marginLeft: 8 }]}
+                  style={[styles.topActionBtn, { marginLeft: 8 }]}
                   hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  accessibilityLabel="新建与上传"
                 >
                   <Plus color={colors.textStrong} size={20} />
                 </TouchableOpacity>
               </View>
             </View>
+          </View>
+        )}
 
-            {/* 第二行：全宽搜索输入框 + 排序胶囊 (无左侧多余返回箭头) */}
+        {/* Index 1: 全局统一 20px 圆角悬浮毛玻璃搜索中枢岛 */}
+        <View style={[styles.stickyIslandWrapper, isSearchFocused && styles.stickyIslandFocused]}>
+          <GlassView
+            border={true}
+            style={[styles.floatingIslandCard, isSearchFocused && styles.floatingIslandCardFocused]}
+          >
+            {/* 纯净全宽搜索输入框 + 排序胶囊 / 取消按钮 */}
             <View style={styles.islandSearchRow}>
               <View style={styles.searchBox}>
                 <Search color={colors.muted} size={15} style={{ marginRight: 8 }} />
@@ -1888,6 +1886,7 @@ export default function FilesScreen({ navigation }) {
                   placeholderTextColor={colors.muted}
                   value={searchQuery}
                   onChangeText={setSearchQuery}
+                  onFocus={() => setIsSearchFocused(true)}
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
@@ -1898,19 +1897,33 @@ export default function FilesScreen({ navigation }) {
                 )}
               </View>
 
-              <TouchableOpacity
-                style={styles.sortToggleBtn}
-                onPress={() => {
-                  const modes = ['name', 'date', 'size'];
-                  const next = modes[(modes.indexOf(sortBy) + 1) % modes.length];
-                  setSortBy(next);
-                }}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.sortToggleText}>
-                  {sortBy === 'name' ? '按名称' : sortBy === 'date' ? '按时间' : '按大小'}
-                </Text>
-              </TouchableOpacity>
+              {!isSearchFocused ? (
+                <TouchableOpacity
+                  style={styles.sortToggleBtn}
+                  onPress={() => {
+                    const modes = ['name', 'date', 'size'];
+                    const next = modes[(modes.indexOf(sortBy) + 1) % modes.length];
+                    setSortBy(next);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.sortToggleText}>
+                    {sortBy === 'name' ? '按名称' : sortBy === 'date' ? '按时间' : '按大小'}
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={styles.searchCancelBtn}
+                  onPress={() => {
+                    setSearchQuery('');
+                    setIsSearchFocused(false);
+                    Keyboard.dismiss();
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.searchCancelText}>取消</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </GlassView>
         </View>
@@ -2055,16 +2068,20 @@ export default function FilesScreen({ navigation }) {
         />
       )}
 
-      {/* Dropdown Menu (Top-Right Plus) - rendered as in-screen overlay to avoid Dialog WindowManager crash */}
+      {/* 现代化悬浮毛玻璃新建操作菜单 (FloatingGlassActionMenu) */}
       {isMenuVisible && (
         <View style={styles.menuOverlayContainer} pointerEvents="box-none">
           <Pressable style={styles.menuBackdrop} onPress={() => setIsMenuVisible(false)} />
-          <View style={styles.dropdownMenu}>
-            <TouchableOpacity style={styles.menuItem} onPress={handleUpload}>
-              <UploadCloud color={colors.text} size={20} />
+          <GlassView border={true} borderRadius={20} style={styles.dropdownMenu}>
+            <TouchableOpacity style={styles.menuItem} onPress={handleUpload} activeOpacity={0.7}>
+              <View style={[styles.menuItemIconBox, { backgroundColor: 'rgba(56, 189, 248, 0.15)' }]}>
+                <UploadCloud color={colors.accent} size={18} />
+              </View>
               <Text style={styles.menuText}>上传文件</Text>
             </TouchableOpacity>
-            <View style={styles.divider} />
+
+            <View style={styles.menuDivider} />
+
             <TouchableOpacity
               style={styles.menuItem}
               onPress={() => {
@@ -2072,22 +2089,30 @@ export default function FilesScreen({ navigation }) {
                 setNewFolderName('');
                 setMkdirVisible(true);
               }}
+              activeOpacity={0.7}
             >
-              <FolderPlus color={colors.text} size={20} />
+              <View style={[styles.menuItemIconBox, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+                <FolderPlus color={colors.green} size={18} />
+              </View>
               <Text style={styles.menuText}>新建文件夹</Text>
             </TouchableOpacity>
-            <View style={styles.divider} />
+
+            <View style={styles.menuDivider} />
+
             <TouchableOpacity
               style={styles.menuItem}
               onPress={() => {
                 setIsMenuVisible(false);
                 onRefresh();
               }}
+              activeOpacity={0.7}
             >
-              <RefreshCw color={colors.text} size={20} />
+              <View style={[styles.menuItemIconBox, { backgroundColor: 'rgba(168, 85, 247, 0.15)' }]}>
+                <RefreshCw color="#a855f7" size={17} />
+              </View>
               <Text style={styles.menuText}>刷新目录</Text>
             </TouchableOpacity>
-          </View>
+          </GlassView>
         </View>
       )}
 
@@ -2642,6 +2667,41 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     paddingTop: 6,
     paddingBottom: 4,
   },
+  topNavActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  navBackBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
+    marginRight: 8,
+  },
+  topActionBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)',
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.06)',
+    position: 'relative',
+  },
+  searchCancelBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  searchCancelText: {
+    fontSize: 14,
+    color: colors.accent,
+    fontWeight: '700',
+  },
   navScreenTitle: {
     fontSize: 20,
     fontWeight: '700',
@@ -2889,34 +2949,56 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   },
   menuBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
   },
   dropdownMenu: {
     position: 'absolute',
-    top: Platform.OS === 'ios' ? 100 : 8,
+    top: STATUS_BAR_HEIGHT + 48,
     right: 16,
-    backgroundColor: colors.card,
     borderRadius: 20,
-    padding: 8,
-    width: 196,
-    elevation: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    padding: 6,
+    width: 175,
+    elevation: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
+    shadowOpacity: isDark ? 0.4 : 0.15,
+    shadowRadius: 18,
     zIndex: 100000,
+    overflow: 'hidden',
   },
   menuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 14,
   },
-  menuText: { color: colors.text, fontSize: 14, marginLeft: 12, fontWeight: '600' },
+  menuItemIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  menuText: { color: colors.textStrong, fontSize: 14, fontWeight: '600' },
+  menuDivider: {
+    height: 1,
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
+    marginHorizontal: 8,
+    marginVertical: 3,
+  },
   divider: { height: 1, backgroundColor: colors.divider, marginVertical: 4 },
+  stickyIslandFocused: {
+    zIndex: 120,
+  },
+  floatingIslandCardFocused: {
+    borderColor: isDark ? 'rgba(56, 189, 248, 0.4)' : 'rgba(14, 165, 233, 0.35)',
+    shadowColor: colors.accent,
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 12,
+  },
 
   // Action sheet details
   actionSheet: {
