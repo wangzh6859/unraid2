@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo, useR
 import {
   StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator,
   KeyboardAvoidingView, Platform, ScrollView, Modal, BackHandler,
-  Pressable, RefreshControl, AppState,
+  Pressable, RefreshControl, AppState, StatusBar,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -14,13 +14,17 @@ import {
 } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
+import Svg, { Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
 import { useTheme } from '../ThemeContext';
 import { getDownloadDir, formatBytes } from '../utils/cacheManager';
 import FilePreviewer from '../components/FilePreviewer';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
+import GlassView from '../components/GlassView';
 import backgroundTransferManager from '../utils/backgroundTransferManager';
 import { apiFetch, apiFetchJson, resetNetworkPool } from '../utils/apiClient';
 import { BUNDLED_API_VERSION, BUNDLED_API_CODE } from '../utils/bundledApi';
+
+const STATUS_BAR_HEIGHT = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 44;
 
 // Proactively and silently pushes bundled api.php to Unraid server if outdated
 async function autoSyncServerApi(cleanBaseUrl, apiToken, serverApiVersionRef, serverMaxUploadSizeRef) {
@@ -83,8 +87,8 @@ const isArchiveFile = (name) => {
 };
 
 export default function FilesScreen({ navigation }) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
   // Modern confirmation & result dialog state
   const [confirmDialog, setConfirmDialog] = useState({
@@ -1777,60 +1781,147 @@ export default function FilesScreen({ navigation }) {
     );
   }
 
+  const pathSegments = currentPath.split('/').filter(Boolean);
+  const currentFolderTitle = isAtRoot ? '根共享库 (/mnt/user)' : decodeURIComponent(pathSegments[pathSegments.length - 1] || '文件');
+  const activeTransferCount = useMemo(() => transfers.filter(t => t.status === 'transferring' || t.status === 'pending').length, [transfers]);
+
   return (
     <View style={styles.fileContainer}>
-      {/* Path Breadcrumb & Search Bar */}
-      <View style={styles.topFilterBar}>
-        <View style={styles.searchBox}>
-          <Search color={colors.muted} size={18} style={{ marginRight: 8 }} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="搜索当前目录..."
-            placeholderTextColor={colors.muted}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <X color={colors.muted} size={18} />
-            </TouchableOpacity>
-          )}
-        </View>
-
-        <TouchableOpacity
-          style={styles.sortToggleBtn}
-          onPress={() => {
-            const modes = ['name', 'date', 'size'];
-            const next = modes[(modes.indexOf(sortBy) + 1) % modes.length];
-            setSortBy(next);
-          }}
-        >
-          <Text style={styles.sortToggleText}>
-            {sortBy === 'name' ? '名称' : sortBy === 'date' ? '时间' : '大小'}
-          </Text>
-        </TouchableOpacity>
+      {/* 0. 顶部状态栏氛围渐变过渡层 */}
+      <View style={styles.topGradientFade} pointerEvents="none">
+        <Svg height={STATUS_BAR_HEIGHT + 20} width="100%" pointerEvents="none">
+          <Defs>
+            <LinearGradient id="topAtmosphereFiles" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0" stopColor={colors.bg} stopOpacity="1" />
+              <Stop offset="0.65" stopColor={colors.bg} stopOpacity="0.85" />
+              <Stop offset="0.88" stopColor={colors.bg} stopOpacity="0.35" />
+              <Stop offset="1" stopColor={colors.bg} stopOpacity="0" />
+            </LinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width="100%" height={STATUS_BAR_HEIGHT + 20} fill="url(#topAtmosphereFiles)" />
+        </Svg>
       </View>
 
-      {/* File List */}
-      {isLoadingList && !isRefreshing ? (
-        <View style={styles.listCenter}>
-          <ActivityIndicator size="large" color={colors.accent} />
-          <Text style={[styles.emptyText, { marginTop: 12 }]}>正在加载文件列表...</Text>
+      <ScrollView
+        style={styles.mainScrollView}
+        contentContainerStyle={styles.scrollContent}
+        stickyHeaderIndices={[1]}
+        showsVerticalScrollIndicator={false}
+        nestedScrollEnabled={true}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.accent}
+            colors={[colors.accent]}
+          />
+        }
+      >
+        {/* Index 0: 顶部大标题与路径说明 */}
+        <View style={styles.topHeaderSection}>
+          <View style={styles.topNavHeaderRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.navScreenTitle}>文件管理</Text>
+              <Text style={styles.navScreenSub} numberOfLines={1}>
+                {isAtRoot ? 'Unraid 根共享库 (/mnt/user)' : currentPath}
+              </Text>
+            </View>
+          </View>
         </View>
-      ) : (
-        <ScrollView
-          style={styles.listScroll}
-          contentContainerStyle={styles.listContent}
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefreshing}
-              onRefresh={onRefresh}
-              tintColor={colors.accent}
-              colors={[colors.accent]}
-            />
-          }
-        >
-          {filteredFiles.length === 0 ? (
+
+        {/* Index 1: 全局统一 20px 圆角悬浮毛玻璃中枢岛 */}
+        <View style={styles.stickyIslandWrapper}>
+          <GlassView
+            border={true}
+            style={styles.floatingIslandCard}
+          >
+            {/* 第一行：目录名导航、传输中枢、新建操作按键 */}
+            <View style={styles.islandNavRow}>
+              <View style={styles.islandNavLeft}>
+                {!isAtRoot && (
+                  <TouchableOpacity
+                    onPress={goBack}
+                    style={styles.islandBackBtn}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <ChevronLeft color={colors.textStrong} size={20} />
+                  </TouchableOpacity>
+                )}
+                <Folder color={colors.accent} size={18} style={{ marginRight: 6 }} />
+                <Text style={styles.islandDirTitle} numberOfLines={1}>
+                  {currentFolderTitle}
+                </Text>
+              </View>
+
+              <View style={styles.islandNavRight}>
+                <TouchableOpacity
+                  onPress={() => setIsTransferVisible(true)}
+                  style={styles.islandIconBtn}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <ArrowDownUp color={colors.accent} size={18} />
+                  {activeTransferCount > 0 && (
+                    <View style={styles.transferBadge}>
+                      <Text style={styles.transferBadgeText}>{activeTransferCount}</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => setIsMenuVisible(true)}
+                  style={[styles.islandIconBtn, { marginLeft: 8 }]}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <Plus color={colors.textStrong} size={20} />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* 第二行：全宽搜索输入框 + 排序胶囊 (无左侧多余返回箭头) */}
+            <View style={styles.islandSearchRow}>
+              <View style={styles.searchBox}>
+                <Search color={colors.muted} size={15} style={{ marginRight: 8 }} />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="搜索当前目录..."
+                  placeholderTextColor={colors.muted}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {searchQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                    <X color={colors.muted} size={15} />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              <TouchableOpacity
+                style={styles.sortToggleBtn}
+                onPress={() => {
+                  const modes = ['name', 'date', 'size'];
+                  const next = modes[(modes.indexOf(sortBy) + 1) % modes.length];
+                  setSortBy(next);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.sortToggleText}>
+                  {sortBy === 'name' ? '按名称' : sortBy === 'date' ? '按时间' : '按大小'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </GlassView>
+        </View>
+
+        {/* Index 2: 文件条目列表 */}
+        <View style={styles.cardsListSection}>
+          {isLoadingList && !isRefreshing ? (
+            <View style={styles.listCenter}>
+              <ActivityIndicator size="large" color={colors.accent} />
+              <Text style={[styles.emptyText, { marginTop: 12 }]}>正在加载文件列表...</Text>
+            </View>
+          ) : filteredFiles.length === 0 ? (
             <View style={styles.listCenter}>
               <FolderOpen color={colors.muted} size={48} style={{ marginBottom: 12 }} />
               <Text style={styles.emptyText}>当前目录无内容，下拉可刷新</Text>
@@ -1840,11 +1931,12 @@ export default function FilesScreen({ navigation }) {
               const sel = isSelected(item.path);
               return (
                 <TouchableOpacity
-                  key={index}
+                  key={item.path || index}
                   style={[styles.fileRow, sel && styles.fileRowSelected]}
                   onPress={() => handleFileClick(item)}
                   onLongPress={() => handleLongPress(item)}
                   delayLongPress={350}
+                  activeOpacity={0.7}
                 >
                   <View style={styles.fileIconBox}>
                     {item.isFolder ? (
@@ -1883,8 +1975,8 @@ export default function FilesScreen({ navigation }) {
               );
             })
           )}
-        </ScrollView>
-      )}
+        </View>
+      </ScrollView>
 
       {/* Multi-Select Bottom Action Bar */}
       {multiSelect && (
@@ -2507,7 +2599,7 @@ export default function FilesScreen({ navigation }) {
   );
 }
 
-const createStyles = (colors) => StyleSheet.create({
+const createStyles = (colors, isDark) => StyleSheet.create({
   center: { flex: 1, backgroundColor: colors.bg, justifyContent: 'center', padding: 20 },
   setupCard: { backgroundColor: colors.card, borderRadius: 20, padding: 28, elevation: 5 },
   setupTitle: { color: colors.textStrong, fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 10 },
@@ -2520,47 +2612,165 @@ const createStyles = (colors) => StyleSheet.create({
   transferIconBtn: { backgroundColor: 'rgba(59, 130, 246, 0.15)', padding: 6, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(59, 130, 246, 0.3)' },
 
   fileContainer: { flex: 1, backgroundColor: colors.bg },
-  topFilterBar: {
+
+  // Top Atmospheric Gradient & Sticky Floating Island
+  topGradientFade: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: STATUS_BAR_HEIGHT + 20,
+    zIndex: 100,
+  },
+  mainScrollView: {
+    flex: 1,
+    marginTop: STATUS_BAR_HEIGHT,
+  },
+  scrollContent: {
+    flexGrow: 1,
+  },
+  topHeaderSection: {
+    paddingTop: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 4,
+  },
+  topNavHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: colors.card,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
+    justifyContent: 'space-between',
+    paddingTop: 6,
+    paddingBottom: 4,
+  },
+  navScreenTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.textStrong,
+    letterSpacing: -0.3,
+  },
+  navScreenSub: {
+    fontSize: 12,
+    color: colors.sub,
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  stickyIslandWrapper: {
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 6,
+    backgroundColor: 'transparent',
+    zIndex: 20,
+  },
+  floatingIslandCard: {
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 10,
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: isDark ? 0.25 : 0.06,
+    shadowRadius: 10,
+    elevation: 4,
+    overflow: 'hidden',
+  },
+  islandNavRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  islandNavLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 10,
+  },
+  islandBackBtn: {
+    padding: 4,
+    marginRight: 4,
+  },
+  islandDirTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.textStrong,
+    flex: 1,
+  },
+  islandNavRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  islandIconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: colors.cardSecondary,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  transferBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: colors.accent,
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  transferBadgeText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: 'bold',
+  },
+  islandSearchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
   },
   searchBox: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.input,
-    borderRadius: 8,
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#ffffff',
+    borderRadius: 12,
     paddingHorizontal: 10,
     height: 38,
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.06)',
   },
   searchInput: {
     flex: 1,
     color: colors.textStrong,
-    fontSize: 14,
+    fontSize: 13,
     padding: 0,
   },
   sortToggleBtn: {
-    backgroundColor: colors.input,
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)',
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.09)' : 'rgba(0, 0, 0, 0.06)',
   },
   sortToggleText: {
     color: colors.accent,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: 'bold',
+  },
+  cardsListSection: {
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 110,
   },
 
   listCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', minHeight: 320 },
   emptyText: { color: colors.muted, fontSize: 15 },
-  listScroll: { flex: 1 },
-  listContent: { padding: 12, paddingBottom: 110 },
   fileRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, padding: 12, borderRadius: 12, marginBottom: 8 },
   fileRowSelected: { borderWidth: 1.5, borderColor: colors.accent },
   checkbox: { marginLeft: 10, justifyContent: 'center', alignItems: 'center' },

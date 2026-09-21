@@ -982,7 +982,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
     <View style={styles.container}>
       {/* 0. 顶部状态栏氛围渐变过渡层 (消除全透明突兀割裂，使卡片向上平滑隐入顶端背景) */}
       <View style={styles.topGradientFade} pointerEvents="none">
-        <Svg height={STATUS_BAR_HEIGHT + 28} width="100%">
+        <Svg height={STATUS_BAR_HEIGHT + 20} width="100%" pointerEvents="none">
           <Defs>
             <LinearGradient id="topAtmosphereDocker" x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0" stopColor={colors.bg} stopOpacity="1" />
@@ -991,7 +991,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
               <Stop offset="1" stopColor={colors.bg} stopOpacity="0" />
             </LinearGradient>
           </Defs>
-          <Rect x="0" y="0" width="100%" height={STATUS_BAR_HEIGHT + 28} fill="url(#topAtmosphereDocker)" />
+          <Rect x="0" y="0" width="100%" height={STATUS_BAR_HEIGHT + 20} fill="url(#topAtmosphereDocker)" />
         </Svg>
       </View>
 
@@ -1001,6 +1001,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
           contentContainerStyle={styles.scrollContent}
           stickyHeaderIndices={[1]}
           showsVerticalScrollIndicator={false}
+          nestedScrollEnabled={true}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -1058,15 +1059,6 @@ export default function DockerDetailsScreen({ navigation, route }) {
               style={styles.floatingIslandCard}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                {navigation?.canGoBack?.() && (
-                  <TouchableOpacity
-                    onPress={() => navigation.goBack()}
-                    style={styles.stickyBackBtn}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <ChevronLeft size={20} color={colors.textStrong} />
-                  </TouchableOpacity>
-                )}
                 <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
                   <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
                   <TextInput
@@ -1243,6 +1235,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
           contentContainerStyle={styles.scrollContent}
           stickyHeaderIndices={[1]}
           showsVerticalScrollIndicator={false}
+          nestedScrollEnabled={true}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -1309,15 +1302,6 @@ export default function DockerDetailsScreen({ navigation, route }) {
               style={styles.floatingIslandCard}
             >
               <View style={styles.searchBoxRow}>
-                {navigation?.canGoBack?.() && (
-                  <TouchableOpacity
-                    onPress={() => navigation.goBack()}
-                    style={styles.stickyBackBtn}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <ChevronLeft size={20} color={colors.textStrong} />
-                  </TouchableOpacity>
-                )}
                 <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
                   <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
                   <TextInput
@@ -1340,6 +1324,10 @@ export default function DockerDetailsScreen({ navigation, route }) {
               <View style={styles.filterRow}>
                 <ScrollView
                   horizontal
+                  nestedScrollEnabled={true}
+                  directionalLockEnabled={true}
+                  keyboardShouldPersistTaps="handled"
+                  scrollEventThrottle={16}
                   showsHorizontalScrollIndicator={false}
                   contentContainerStyle={styles.filterScrollContainer}
                 >
@@ -2080,7 +2068,7 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: STATUS_BAR_HEIGHT + 28,
+    height: STATUS_BAR_HEIGHT + 20,
     zIndex: 100,
   },
   mainScrollView: {

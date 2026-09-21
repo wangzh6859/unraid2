@@ -1,14 +1,18 @@
 import React, { useState, useCallback, useMemo, useRef } from 'react';
 import { StyleSheet, Text, View, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity,
-  Platform
+  Platform, StatusBar
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   HardDrive, Server, ShieldCheck, ThumbsUp, ThumbsDown, Thermometer,
-  ChevronRight, Play, Pause, Square, Shield, Zap, AlertTriangle, CheckCircle2, ArrowDown, ArrowUp } from 'lucide-react-native';
+  ChevronRight, ChevronLeft, Play, Pause, Square, Shield, Zap, AlertTriangle, CheckCircle2, ArrowDown, ArrowUp } from 'lucide-react-native';
+import Svg, { Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
 import { useTheme } from '../ThemeContext';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
+import GlassView from '../components/GlassView';
+
+const STATUS_BAR_HEIGHT = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 44;
 
 export default function StorageDetailsScreen({ navigation }) {
   const { colors, isDark } = useTheme();
@@ -212,59 +216,91 @@ export default function StorageDetailsScreen({ navigation }) {
   }
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          tintColor={colors.accent}
-          colors={[colors.accent]}
-        />
-      }
-    >
-      {/* 1. 顶部存储阵列概览全景卡片 */}
-      <View style={styles.heroCard}>
-        <View style={styles.heroHeader}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <HardDrive size={18} color={colors.accent} style={{ marginRight: 8 }} />
-            <Text style={styles.heroTitle}>Array 存储阵列全景</Text>
-          </View>
-          <View style={styles.healthBadge}>
-            <View style={[styles.healthDot, { backgroundColor: colors.green }]} />
-            <Text style={styles.healthBadgeText}>阵列保护中</Text>
-          </View>
-        </View>
-
-        <View style={styles.capacityRow}>
-          <Text style={styles.capacityBigNum}>{totalArrayPct}%</Text>
-          <Text style={styles.capacitySubText}>
-            已使用 {formatBytes(totalArrayUsed)} / 总量 {formatBytes(totalArraySize)}
-          </Text>
-        </View>
-
-        {/* 分段式彩色容量分布条 */}
-        <View style={styles.multiSegTrack}>
-          <View style={[styles.multiSegBar, { width: `${Math.min(totalArrayPct, 100)}%`, backgroundColor: totalArrayPct > 85 ? colors.red : colors.accent }]} />
-        </View>
-
-        <View style={styles.arrayMetaGrid}>
-          <View style={styles.arrayMetaItem}>
-            <Text style={styles.arrayMetaLabel}>校验盘</Text>
-            <Text style={styles.arrayMetaVal}>{parityDisks.length} 块</Text>
-          </View>
-          <View style={styles.arrayMetaItem}>
-            <Text style={styles.arrayMetaLabel}>数据盘</Text>
-            <Text style={styles.arrayMetaVal}>{dataDisks.length} 块</Text>
-          </View>
-          <View style={styles.arrayMetaItem}>
-            <Text style={styles.arrayMetaLabel}>缓存池</Text>
-            <Text style={styles.arrayMetaVal}>{cacheDisks.length} 块</Text>
-          </View>
-        </View>
+    <View style={styles.screenWrapper}>
+      {/* 顶部状态栏氛围渐变过渡层 */}
+      <View style={styles.topGradientFade} pointerEvents="none">
+        <Svg width="100%" height={STATUS_BAR_HEIGHT + 20}>
+          <Defs>
+            <LinearGradient id="storageTopFade" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0" stopColor={colors.bg} stopOpacity="1" />
+              <Stop offset="0.6" stopColor={colors.bg} stopOpacity="0.75" />
+              <Stop offset="1" stopColor={colors.bg} stopOpacity="0" />
+            </LinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width="100%" height="100%" fill="url(#storageTopFade)" />
+        </Svg>
       </View>
+
+      <ScrollView
+        style={styles.mainScrollView}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        nestedScrollEnabled={true}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.accent}
+            colors={[colors.accent]}
+          />
+        }
+      >
+        {/* 顶部导航标题条 */}
+        <View style={styles.topNavHeaderRow}>
+          <TouchableOpacity
+            style={styles.navBackBtn}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <ChevronLeft size={22} color={colors.text} />
+          </TouchableOpacity>
+          <View style={styles.topNavTitleBox}>
+            <Text style={styles.navScreenTitle}>存储阵列</Text>
+            <Text style={styles.navScreenSub}>Array & Pool Overview</Text>
+          </View>
+        </View>
+
+        {/* 1. 顶部存储阵列概览全景卡片 (统一 20px 圆角毛玻璃卡片) */}
+        <GlassView style={styles.heroGlassCard} border={true}>
+          <View style={styles.heroHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <HardDrive size={18} color={colors.accent} style={{ marginRight: 8 }} />
+              <Text style={styles.heroTitle}>Array 存储阵列全景</Text>
+            </View>
+            <View style={styles.healthBadge}>
+              <View style={[styles.healthDot, { backgroundColor: colors.green }]} />
+              <Text style={styles.healthBadgeText}>阵列保护中</Text>
+            </View>
+          </View>
+
+          <View style={styles.capacityRow}>
+            <Text style={styles.capacityBigNum}>{totalArrayPct}%</Text>
+            <Text style={styles.capacitySubText}>
+              已使用 {formatBytes(totalArrayUsed)} / 总量 {formatBytes(totalArraySize)}
+            </Text>
+          </View>
+
+          {/* 分段式彩色容量分布条 */}
+          <View style={styles.multiSegTrack}>
+            <View style={[styles.multiSegBar, { width: `${Math.min(totalArrayPct, 100)}%`, backgroundColor: totalArrayPct > 85 ? colors.red : colors.accent }]} />
+          </View>
+
+          <View style={styles.arrayMetaGrid}>
+            <View style={styles.arrayMetaItem}>
+              <Text style={styles.arrayMetaLabel}>校验盘</Text>
+              <Text style={styles.arrayMetaVal}>{parityDisks.length} 块</Text>
+            </View>
+            <View style={styles.arrayMetaItem}>
+              <Text style={styles.arrayMetaLabel}>数据盘</Text>
+              <Text style={styles.arrayMetaVal}>{dataDisks.length} 块</Text>
+            </View>
+            <View style={styles.arrayMetaItem}>
+              <Text style={styles.arrayMetaLabel}>缓存池</Text>
+              <Text style={styles.arrayMetaVal}>{cacheDisks.length} 块</Text>
+            </View>
+          </View>
+        </GlassView>
 
       {/* 2. 奇偶校验中控台卡片 */}
       <View style={styles.card}>
@@ -408,7 +444,8 @@ export default function StorageDetailsScreen({ navigation }) {
         onConfirm={confirmDialog.onConfirm}
         onCancel={() => setConfirmDialog(prev => ({ ...prev, visible: false }))}
       />
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 
   function renderDiskItem(disk, index) {
@@ -565,15 +602,59 @@ export default function StorageDetailsScreen({ navigation }) {
 }
 
 const createStyles = (colors, isDark) => StyleSheet.create({
+  screenWrapper: {
+    flex: 1,
+    backgroundColor: colors.bg,
+  },
+  topGradientFade: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: STATUS_BAR_HEIGHT + 20,
+    zIndex: 99,
+  },
+  mainScrollView: {
+    flex: 1,
+  },
   container: {
     flex: 1,
     backgroundColor: colors.bg,
   },
   content: {
     padding: 16,
-    paddingTop: Platform.OS === 'ios' ? 12 : 16,
-    paddingBottom: 32,
+    paddingTop: 8,
+    paddingBottom: 110,
     gap: 14,
+  },
+  topNavHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: STATUS_BAR_HEIGHT + 6,
+    paddingBottom: 10,
+  },
+  navBackBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
+    marginRight: 12,
+  },
+  topNavTitleBox: {
+    flex: 1,
+  },
+  navScreenTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: colors.textStrong,
+    letterSpacing: -0.3,
+  },
+  navScreenSub: {
+    fontSize: 12,
+    color: colors.sub,
+    marginTop: 1,
   },
   center: {
     flex: 1,
@@ -589,6 +670,11 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   },
 
   // 1. Hero Card
+  heroGlassCard: {
+    borderRadius: 20,
+    padding: 16,
+    overflow: 'hidden',
+  },
   heroCard: {
     backgroundColor: colors.card,
     borderRadius: 20,

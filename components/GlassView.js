@@ -58,6 +58,7 @@ export default function GlassView({
     <View style={containerStyle} {...props}>
       {/* 1. 原生高斯模糊背景层 (Backdrop Blur) */}
       <BlurView
+        pointerEvents="none"
         intensity={effectiveIntensity}
         tint={effectiveTint}
         style={[StyleSheet.absoluteFill, { borderRadius: effectiveRadius }]}

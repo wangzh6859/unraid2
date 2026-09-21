@@ -45,7 +45,7 @@ function HomeStack() {
       }}
     >
       <Stack.Screen name="仪表盘" component={DashboardScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="存储详情" component={StorageDetailsScreen} options={{ title: '磁盘存储与阵列' }} />
+      <Stack.Screen name="存储详情" component={StorageDetailsScreen} options={{ headerShown: false }} />
       <Stack.Screen name="SMART详情" component={SmartDetailsScreen} options={{ title: 'S.M.A.R.T. 诊断' }} />
       <Stack.Screen name="Docker详情" component={DockerDetailsScreen} options={{ headerShown: false }} />
       <Stack.Screen name="VM详情" component={VmDetailsScreen} options={{ headerShown: false }} />
@@ -57,56 +57,122 @@ function HomeStack() {
   );
 }
 
+// 💡 悬浮毛玻璃胶囊 Dock 导航栏
+function CustomFloatingTabBar({ state, descriptors, navigation }) {
+  const { colors, isDark } = useTheme();
+
+  return (
+    <View style={tabStyles.floatingTabBarWrapper} pointerEvents="box-none">
+      <GlassView
+        border={true}
+        borderRadius={24}
+        style={tabStyles.floatingTabBarContainer}
+      >
+        <View style={tabStyles.floatingTabBarInner}>
+          {state.routes.map((route, index) => {
+            const { options } = descriptors[route.key];
+            const isFocused = state.index === index;
+
+            const onPress = () => {
+              const event = navigation.emit({
+                type: 'tabPress',
+                target: route.key,
+                canPreventDefault: true,
+              });
+
+              if (!isFocused && !event.defaultPrevented) {
+                navigation.navigate(route.name);
+              }
+            };
+
+            const onLongPress = () => {
+              navigation.emit({
+                type: 'tabLongPress',
+                target: route.key,
+              });
+            };
+
+            const iconSize = 20;
+            const color = isFocused ? colors.accent : colors.sub;
+            const strokeWidth = isFocused ? 2.3 : 1.7;
+
+            const renderIcon = () => {
+              if (route.name === '首页') return <Home color={color} size={iconSize} strokeWidth={strokeWidth} />;
+              if (route.name === '容器') return <Box color={color} size={iconSize} strokeWidth={strokeWidth} />;
+              if (route.name === '虚拟机') return <Monitor color={color} size={iconSize} strokeWidth={strokeWidth} />;
+              if (route.name === '文件') return <Folder color={color} size={iconSize} strokeWidth={strokeWidth} />;
+              if (route.name === '设置') return <Settings color={color} size={iconSize} strokeWidth={strokeWidth} />;
+              return null;
+            };
+
+            return (
+              <TouchableOpacity
+                key={route.key}
+                accessibilityRole="button"
+                accessibilityState={isFocused ? { selected: true } : {}}
+                accessibilityLabel={options.tabBarAccessibilityLabel}
+                testID={options.tabBarTestID}
+                onPress={onPress}
+                onLongPress={onLongPress}
+                style={tabStyles.tabItem}
+                activeOpacity={0.7}
+              >
+                {/* 激活项微光胶囊衬底 */}
+                {isFocused && (
+                  <View
+                    style={[
+                      tabStyles.activePillBackground,
+                      {
+                        backgroundColor: isDark
+                          ? 'rgba(56, 189, 248, 0.15)'
+                          : 'rgba(14, 165, 233, 0.12)',
+                        borderColor: isDark
+                          ? 'rgba(56, 189, 248, 0.28)'
+                          : 'rgba(14, 165, 233, 0.22)',
+                      },
+                    ]}
+                  />
+                )}
+                <View style={tabStyles.tabIconWrapper}>
+                  {renderIcon()}
+                </View>
+                <Text
+                  style={[
+                    tabStyles.tabLabel,
+                    {
+                      color: isFocused ? colors.accent : colors.sub,
+                      fontWeight: isFocused ? '700' : '500',
+                    },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {route.name}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </GlassView>
+    </View>
+  );
+}
+
 // 💡 5 大一级核心导航器（跟随主题，现代微光 Dock）
 function MainTabs() {
   const { colors } = useTheme();
   return (
     <Tab.Navigator
-      screenOptions={({ route }) => ({
-        tabBarIcon: ({ color, size, focused }) => {
-          const iconSize = 22;
-          if (route.name === '首页') return <Home color={color} size={iconSize} strokeWidth={focused ? 2.4 : 1.8} />;
-          if (route.name === '容器') return <Box color={color} size={iconSize} strokeWidth={focused ? 2.4 : 1.8} />;
-          if (route.name === '虚拟机') return <Monitor color={color} size={iconSize} strokeWidth={focused ? 2.4 : 1.8} />;
-          if (route.name === '文件') return <Folder color={color} size={iconSize} strokeWidth={focused ? 2.4 : 1.8} />;
-          if (route.name === '设置') return <Settings color={color} size={iconSize} strokeWidth={focused ? 2.4 : 1.8} />;
-        },
-        tabBarActiveTintColor: colors.accent,
-        tabBarInactiveTintColor: colors.sub,
-        tabBarBackground: () => (
-          <GlassView
-            border={false}
-            style={StyleSheet.absoluteFill}
-          />
-        ),
+      tabBar={props => <CustomFloatingTabBar {...props} />}
+      screenOptions={{
         headerStyle: { backgroundColor: colors.bar },
         headerTintColor: colors.textStrong,
-        tabBarStyle: {
-          position: 'absolute',
-          bottom: 0,
-          left: 0,
-          right: 0,
-          backgroundColor: 'transparent',
-          borderTopWidth: StyleSheet.hairlineWidth || 1,
-          borderTopColor: colors.glass?.barBorder || colors.divider,
-          elevation: 0,
-          shadowOpacity: 0,
-          height: Platform.OS === 'ios' ? 86 : 64,
-          paddingBottom: Platform.OS === 'ios' ? 26 : 10,
-          paddingTop: 6,
-        },
-        tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '600',
-          marginTop: -2,
-        },
         sceneContainerStyle: { backgroundColor: colors.bg },
-      })}
+      }}
     >
       <Tab.Screen name="首页" component={HomeStack} options={{ headerShown: false }} />
       <Tab.Screen name="容器" component={DockerDetailsScreen} options={{ headerShown: false }} />
       <Tab.Screen name="虚拟机" component={VmDetailsScreen} options={{ headerShown: false }} />
-      <Tab.Screen name="文件" component={FilesScreen} options={{ headerTitle: '文件管理' }} />
+      <Tab.Screen name="文件" component={FilesScreen} options={{ headerShown: false }} />
       <Tab.Screen name="设置" component={SettingsScreen} options={{ headerTitle: '系统设置' }} />
     </Tab.Navigator>
   );
@@ -212,6 +278,60 @@ function ThemedRoot() {
     </>
   );
 }
+
+const tabStyles = StyleSheet.create({
+  floatingTabBarWrapper: {
+    position: 'absolute',
+    bottom: Platform.OS === 'ios' ? 24 : 14,
+    left: 14,
+    right: 14,
+    alignItems: 'center',
+    zIndex: 90,
+  },
+  floatingTabBarContainer: {
+    width: '100%',
+    borderRadius: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 14,
+    elevation: 8,
+    overflow: 'hidden',
+  },
+  floatingTabBarInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingVertical: 7,
+    paddingHorizontal: 6,
+    height: 62,
+  },
+  tabItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 4,
+    borderRadius: 16,
+    position: 'relative',
+    height: '100%',
+  },
+  activePillBackground: {
+    position: 'absolute',
+    top: 2,
+    bottom: 2,
+    left: 4,
+    right: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  tabIconWrapper: {
+    marginBottom: 2,
+  },
+  tabLabel: {
+    fontSize: 10,
+    letterSpacing: -0.2,
+  },
+});
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
