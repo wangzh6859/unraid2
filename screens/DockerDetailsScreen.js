@@ -45,13 +45,13 @@ export default function DockerDetailsScreen({ navigation, route }) {
     setIsSearchFocused(true);
     Animated.timing(searchAnim, {
       toValue: 1,
-      duration: 300,
+      duration: 260,
       easing: Easing.out(Easing.cubic),
-      useNativeDriver: false,
+      useNativeDriver: true,
     }).start();
     setTimeout(() => {
       focusedSearchInputRef.current?.focus();
-    }, 50);
+    }, 60);
   };
 
   const handleExitSearch = () => {
@@ -59,27 +59,17 @@ export default function DockerDetailsScreen({ navigation, route }) {
     focusedSearchInputRef.current?.blur();
     searchInputRef.current?.blur();
     composeSearchInputRef.current?.blur();
-    setSearchQuery('');
-    setComposeSearchQuery('');
     Animated.timing(searchAnim, {
       toValue: 0,
-      duration: 280,
+      duration: 240,
       easing: Easing.out(Easing.cubic),
-      useNativeDriver: false,
+      useNativeDriver: true,
     }).start(() => {
       setIsSearchFocused(false);
+      setSearchQuery('');
+      setComposeSearchQuery('');
     });
   };
-
-  // 全页面下沉与向深处景深缩放 (如同图2中的整体下潜)
-  const pageSinkTranslateY = searchAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 24],
-  });
-  const pageSinkScale = searchAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, 0.96],
-  });
 
   // 顶部分段切换：独立容器 vs Compose 堆栈
   const [dockerMode, setDockerMode] = useState('containers'); // 'containers' | 'compose'
@@ -88,6 +78,44 @@ export default function DockerDetailsScreen({ navigation, route }) {
       setDockerMode(route.params.initialMode);
     }
   }, [route?.params?.initialMode]);
+
+  // 搜索岛从常规列表位置平滑上浮置顶的位移与透明度 (从原位平滑浮升，彻底杜绝闪现)
+  const SEARCH_START_OFFSET = dockerMode === 'compose' ? 165 : 175;
+  const searchIslandTranslateY = searchAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [SEARCH_START_OFFSET, 0],
+  });
+  const searchIslandOpacity = searchAnim.interpolate({
+    inputRange: [0, 0.15, 1],
+    outputRange: [0, 1, 1],
+    extrapolate: 'clamp',
+  });
+  const staticSearchOpacity = searchAnim.interpolate({
+    inputRange: [0, 0.25],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+
+  // 全页面下沉与深处景深微缩 (让图中框起来的部分整体大幅下沉)
+  const pageSinkTranslateY = searchAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 52],
+  });
+  const pageSinkScale = searchAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0.94],
+  });
+  const backdropOpacity = searchAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 1],
+  });
+  const searchResultsOpacity = searchAnim.interpolate({
+    inputRange: [0, 0.3, 1],
+    outputRange: [0, 0, 1],
+    extrapolate: 'clamp',
+  });
+
+  const hasSearchQuery = dockerMode === 'compose' ? composeSearchQuery.trim().length > 0 : searchQuery.trim().length > 0;
   const [checkingUpdates, setCheckingUpdates] = useState(false);
 
   // Docker Compose 状态
@@ -1382,7 +1410,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
             </View>
 
             {/* 常规状态下的搜索岛 */}
-            <View style={styles.stickyIslandWrapper}>
+            <Animated.View style={[styles.stickyIslandWrapper, { opacity: staticSearchOpacity }]}>
               <GlassView border={true} style={styles.floatingIslandCard}>
                 <TouchableOpacity
                   activeOpacity={0.85}
@@ -1409,7 +1437,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
                   </TouchableOpacity>
                 </TouchableOpacity>
               </GlassView>
-            </View>
+            </Animated.View>
 
             {/* Compose 堆栈列表 */}
             <View style={styles.cardsListSection}>
@@ -1483,7 +1511,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
             </View>
 
             {/* 常规状态下的搜索岛 */}
-            <View style={styles.stickyIslandWrapper}>
+            <Animated.View style={[styles.stickyIslandWrapper, { opacity: staticSearchOpacity }]}>
               <GlassView border={true} style={styles.floatingIslandCard}>
                 <TouchableOpacity
                   activeOpacity={0.85}
@@ -1598,7 +1626,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
                   </ScrollView>
                 </View>
               </GlassView>
-            </View>
+            </Animated.View>
 
             {/* 容器卡片列表 */}
             <View style={styles.cardsListSection}>
@@ -1616,48 +1644,41 @@ export default function DockerDetailsScreen({ navigation, route }) {
         )}
       </Animated.View>
 
-      {/* 2. 搜索聚焦时的全屏模糊沉降遮罩 (如同图2中的下潜蒙层) */}
+      {/* 2. 搜索聚焦时的全屏模糊沉降遮罩 (让图中框起来的部分整体大幅下沉并深度模糊) */}
       {isSearchFocused && (
         <Animated.View
           style={[
             StyleSheet.absoluteFill,
             {
-              opacity: searchAnim,
+              opacity: backdropOpacity,
               zIndex: 120,
             },
           ]}
         >
           <BlurView
-            intensity={Platform.OS === 'android' ? 25 : 35}
+            intensity={Platform.OS === 'android' ? 45 : 55}
             tint={isDark ? 'dark' : 'light'}
             style={StyleSheet.absoluteFill}
           />
           <View
             style={[
               StyleSheet.absoluteFill,
-              { backgroundColor: isDark ? 'rgba(15, 23, 42, 0.55)' : 'rgba(0, 0, 0, 0.35)' },
+              { backgroundColor: isDark ? 'rgba(15, 23, 42, 0.65)' : 'rgba(240, 244, 248, 0.72)' },
             ]}
           />
           <Pressable style={StyleSheet.absoluteFill} onPress={handleExitSearch} />
         </Animated.View>
       )}
 
-      {/* 3. 搜索聚焦时悬浮于顶部的光效搜索岛 (保持图三的精致光效与安全区距离) */}
+      {/* 3. 搜索聚焦时从原位平滑浮升置顶的光效搜索岛 (保持图三的精致光效，彻底杜绝闪现) */}
       {isSearchFocused && (
         <Animated.View
           style={[
             styles.floatingSearchIsland,
             {
               top: STATUS_BAR_HEIGHT + 10,
-              opacity: searchAnim,
-              transform: [
-                {
-                  translateY: searchAnim.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [12, 0],
-                  }),
-                },
-              ],
+              opacity: searchIslandOpacity,
+              transform: [{ translateY: searchIslandTranslateY }],
             },
           ]}
         >
@@ -1697,14 +1718,14 @@ export default function DockerDetailsScreen({ navigation, route }) {
         </Animated.View>
       )}
 
-      {/* 4. 搜索结果显示在搜索框下面 */}
-      {isSearchFocused && (
+      {/* 4. 搜索结果在搜索框正下方展示 (仅在有输入内容时渲染，无输入时展现图中框选的下沉模糊背景) */}
+      {isSearchFocused && hasSearchQuery && (
         <Animated.View
           style={[
             styles.floatingSearchResultsArea,
             {
               top: STATUS_BAR_HEIGHT + 66,
-              opacity: searchAnim,
+              opacity: searchResultsOpacity,
               transform: [
                 {
                   translateY: searchAnim.interpolate({
