@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo, useR
 import {
   StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator,
   KeyboardAvoidingView, Platform, ScrollView, Modal, BackHandler,
-  Pressable, RefreshControl, AppState, StatusBar, Keyboard, Animated,
+  Pressable, RefreshControl, AppState, StatusBar, Keyboard, Animated, Easing,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -149,7 +149,8 @@ export default function FilesScreen({ navigation }) {
     setIsSearchFocused(true);
     Animated.timing(searchAnim, {
       toValue: 1,
-      duration: 220,
+      duration: 300,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
     }).start();
     setTimeout(() => {
@@ -158,28 +159,34 @@ export default function FilesScreen({ navigation }) {
   };
 
   const handleExitSearch = () => {
-    setIsSearchFocused(false);
     Keyboard.dismiss();
     searchInputRef.current?.blur();
     setSearchQuery('');
     Animated.timing(searchAnim, {
       toValue: 0,
-      duration: 200,
+      duration: 280,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
-    }).start();
+    }).start(() => {
+      setIsSearchFocused(false);
+    });
   };
 
-  const topHeaderMaxHeight = searchAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [120, STATUS_BAR_HEIGHT + 8],
+  const topHeaderHeight = searchAnim.interpolate({
+    inputRange: [0, 0.25, 1],
+    outputRange: [110, 110, STATUS_BAR_HEIGHT + 8],
   });
   const topHeaderOpacity = searchAnim.interpolate({
-    inputRange: [0, 0.6, 1],
-    outputRange: [1, 0.1, 0],
+    inputRange: [0, 0.5, 1],
+    outputRange: [1, 0.2, 0],
   });
   const topHeaderTranslateY = searchAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 25],
+    outputRange: [0, 36],
+  });
+  const topHeaderScale = searchAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0.92],
   });
 
   // Selection & UI Modals
@@ -1864,58 +1871,67 @@ export default function FilesScreen({ navigation }) {
           style={[
             styles.topHeaderSection,
             {
-              maxHeight: topHeaderMaxHeight,
-              opacity: topHeaderOpacity,
-              transform: [{ translateY: topHeaderTranslateY }],
+              maxHeight: topHeaderHeight,
               overflow: 'hidden',
             },
           ]}
+          pointerEvents={isSearchFocused ? 'none' : 'auto'}
         >
-          <View style={styles.topNavHeaderRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 10 }}>
-              {!isAtRoot && (
+          <Animated.View
+            style={{
+              opacity: topHeaderOpacity,
+              transform: [
+                { translateY: topHeaderTranslateY },
+                { scale: topHeaderScale },
+              ],
+            }}
+          >
+            <View style={styles.topNavHeaderRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 10 }}>
+                {!isAtRoot && (
+                  <TouchableOpacity
+                    onPress={goBack}
+                    style={styles.navBackBtn}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <ChevronLeft color={colors.textStrong} size={22} />
+                  </TouchableOpacity>
+                )}
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.navScreenTitle}>文件管理</Text>
+                  <Text style={styles.navScreenSub} numberOfLines={1}>
+                    {isAtRoot ? 'Unraid 根共享库 (/mnt/user)' : currentFolderTitle}
+                  </Text>
+                </View>
+              </View>
+
+              {/* 右上角：传输任务中心 + 新建按钮 */}
+              <View style={styles.topNavActions}>
                 <TouchableOpacity
-                  onPress={goBack}
-                  style={styles.navBackBtn}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  onPress={() => setIsTransferVisible(true)}
+                  style={styles.topActionBtn}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  accessibilityLabel="传输任务中心"
                 >
-                  <ChevronLeft color={colors.textStrong} size={22} />
+                  <ArrowDownUp color={colors.accent} size={18} />
+                  {activeTransferCount > 0 && (
+                    <View style={styles.transferBadge}>
+                      <Text style={styles.transferBadgeText}>{activeTransferCount}</Text>
+                    </View>
+                  )}
                 </TouchableOpacity>
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={styles.navScreenTitle}>文件管理</Text>
-                <Text style={styles.navScreenSub} numberOfLines={1}>
-                  {isAtRoot ? 'Unraid 根共享库 (/mnt/user)' : currentFolderTitle}
-                </Text>
+
+                <TouchableOpacity
+                  onPress={() => setIsMenuVisible(true)}
+                  style={[styles.topActionBtn, { marginLeft: 8 }]}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  accessibilityLabel="新建与上传"
+                >
+                  <Plus color={colors.textStrong} size={20} />
+                </TouchableOpacity>
               </View>
             </View>
-
-            {/* 右上角：传输任务中心 + 新建按钮 */}
-            <View style={styles.topNavActions}>
-              <TouchableOpacity
-                onPress={() => setIsTransferVisible(true)}
-                style={styles.topActionBtn}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                accessibilityLabel="传输任务中心"
-              >
-                <ArrowDownUp color={colors.accent} size={18} />
-                {activeTransferCount > 0 && (
-                  <View style={styles.transferBadge}>
-                    <Text style={styles.transferBadgeText}>{activeTransferCount}</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={() => setIsMenuVisible(true)}
-                style={[styles.topActionBtn, { marginLeft: 8 }]}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                accessibilityLabel="新建与上传"
-              >
-                <Plus color={colors.textStrong} size={20} />
-              </TouchableOpacity>
-            </View>
-          </View>
+          </Animated.View>
         </Animated.View>
 
         {/* Index 1: 全局统一 20px 圆角悬浮毛玻璃搜索中枢岛 */}
@@ -1966,13 +1982,15 @@ export default function FilesScreen({ navigation }) {
                     </Text>
                   </TouchableOpacity>
                 ) : (
-                  <TouchableOpacity
-                    style={styles.searchCancelBtn}
-                    onPress={handleExitSearch}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.searchCancelText}>取消</Text>
-                  </TouchableOpacity>
+                  <Animated.View style={{ opacity: searchAnim }}>
+                    <TouchableOpacity
+                      style={styles.searchCancelBtn}
+                      onPress={handleExitSearch}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.searchCancelText}>取消</Text>
+                    </TouchableOpacity>
+                  </Animated.View>
                 )}
               </View>
             </GlassView>

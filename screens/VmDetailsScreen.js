@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity,
-  TextInput, Platform, StatusBar, Keyboard, Animated, Pressable,
+  TextInput, Platform, StatusBar, Keyboard, Animated, Pressable, Easing,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -35,7 +35,8 @@ export default function VmDetailsScreen({ navigation }) {
     setIsSearchFocused(true);
     Animated.timing(searchAnim, {
       toValue: 1,
-      duration: 220,
+      duration: 300,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
     }).start();
     setTimeout(() => {
@@ -44,28 +45,34 @@ export default function VmDetailsScreen({ navigation }) {
   };
 
   const handleExitSearch = () => {
-    setIsSearchFocused(false);
     Keyboard.dismiss();
     searchInputRef.current?.blur();
     setSearchQuery('');
     Animated.timing(searchAnim, {
       toValue: 0,
-      duration: 200,
+      duration: 280,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
-    }).start();
+    }).start(() => {
+      setIsSearchFocused(false);
+    });
   };
 
-  const topHeaderMaxHeight = searchAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [200, STATUS_BAR_HEIGHT + 8],
+  const topHeaderHeight = searchAnim.interpolate({
+    inputRange: [0, 0.25, 1],
+    outputRange: [180, 180, STATUS_BAR_HEIGHT + 8],
   });
   const topHeaderOpacity = searchAnim.interpolate({
-    inputRange: [0, 0.6, 1],
-    outputRange: [1, 0.1, 0],
+    inputRange: [0, 0.5, 1],
+    outputRange: [1, 0.2, 0],
   });
   const topHeaderTranslateY = searchAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 30],
+    outputRange: [0, 45],
+  });
+  const topHeaderScale = searchAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0.92],
   });
 
   // Modern Confirmation Dialog state
@@ -293,51 +300,59 @@ export default function VmDetailsScreen({ navigation }) {
           style={[
             styles.topHeaderSection,
             {
-              maxHeight: topHeaderMaxHeight,
-              opacity: topHeaderOpacity,
-              transform: [{ translateY: topHeaderTranslateY }],
+              maxHeight: topHeaderHeight,
               overflow: 'hidden',
             },
           ]}
           pointerEvents={isSearchFocused ? 'none' : 'auto'}
         >
-          <View style={styles.topNavHeaderRow}>
-            <View style={styles.titleWithBackRow}>
-              <View>
-                <Text style={styles.navScreenTitle}>虚拟机 (VM)</Text>
-                <Text style={styles.navScreenSub}>
-                  {runningCount} 台正常运行 · 共 {vms.length} 台
-                </Text>
+          <Animated.View
+            style={{
+              opacity: topHeaderOpacity,
+              transform: [
+                { translateY: topHeaderTranslateY },
+                { scale: topHeaderScale },
+              ],
+            }}
+          >
+            <View style={styles.topNavHeaderRow}>
+              <View style={styles.titleWithBackRow}>
+                <View>
+                  <Text style={styles.navScreenTitle}>虚拟机 (VM)</Text>
+                  <Text style={styles.navScreenSub}>
+                    {runningCount} 台正常运行 · 共 {vms.length} 台
+                  </Text>
+                </View>
               </View>
-            </View>
-          </View>
-
-          {/* 1. 顶部 Bento 概览看板 */}
-          <View style={styles.heroRow}>
-            <View style={styles.heroCard}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                <View style={[styles.heroDot, { backgroundColor: colors.green }]} />
-                <Text style={styles.heroLabel}>运行中</Text>
-              </View>
-              <Text style={[styles.heroNum, { color: colors.green }]}>{runningCount}</Text>
-            </View>
-
-            <View style={styles.heroCard}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                <View style={[styles.heroDot, { backgroundColor: colors.sub }]} />
-                <Text style={styles.heroLabel}>未运行 / 挂起</Text>
-              </View>
-              <Text style={[styles.heroNum, { color: colors.textStrong }]}>{stoppedCount}</Text>
             </View>
 
-            <View style={styles.heroCard}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                <Monitor size={11} color={colors.pink} style={{ marginRight: 4 }} />
-                <Text style={styles.heroLabel}>总虚拟机</Text>
+            {/* 1. 顶部 Bento 概览看板 */}
+            <View style={styles.heroRow}>
+              <View style={styles.heroCard}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                  <View style={[styles.heroDot, { backgroundColor: colors.green }]} />
+                  <Text style={styles.heroLabel}>运行中</Text>
+                </View>
+                <Text style={[styles.heroNum, { color: colors.green }]}>{runningCount}</Text>
               </View>
-              <Text style={[styles.heroNum, { color: colors.pink }]}>{vms.length}</Text>
+
+              <View style={styles.heroCard}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                  <View style={[styles.heroDot, { backgroundColor: colors.sub }]} />
+                  <Text style={styles.heroLabel}>未运行 / 挂起</Text>
+                </View>
+                <Text style={[styles.heroNum, { color: colors.textStrong }]}>{stoppedCount}</Text>
+              </View>
+
+              <View style={styles.heroCard}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                  <Monitor size={11} color={colors.pink} style={{ marginRight: 4 }} />
+                  <Text style={styles.heroLabel}>总虚拟机</Text>
+                </View>
+                <Text style={[styles.heroNum, { color: colors.pink }]}>{vms.length}</Text>
+              </View>
             </View>
-          </View>
+          </Animated.View>
         </Animated.View>
 
         {/* Index 1: 全局统一圆角悬浮毛玻璃搜索岛 */}
@@ -372,13 +387,15 @@ export default function VmDetailsScreen({ navigation }) {
               </View>
 
               {isSearchFocused && (
-                <TouchableOpacity
-                  style={styles.searchCancelBtn}
-                  onPress={handleExitSearch}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.searchCancelText}>取消</Text>
-                </TouchableOpacity>
+                <Animated.View style={{ opacity: searchAnim }}>
+                  <TouchableOpacity
+                    style={styles.searchCancelBtn}
+                    onPress={handleExitSearch}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.searchCancelText}>取消</Text>
+                  </TouchableOpacity>
+                </Animated.View>
               )}
             </TouchableOpacity>
 

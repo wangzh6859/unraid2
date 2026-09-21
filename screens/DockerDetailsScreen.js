@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Image, StyleSheet, Text, View, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity,
-  Modal, TextInput, Pressable, Platform, Linking, KeyboardAvoidingView, StatusBar, Keyboard, Animated,
+  Modal, TextInput, Pressable, Platform, Linking, KeyboardAvoidingView, StatusBar, Keyboard, Animated, Easing,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -43,7 +43,8 @@ export default function DockerDetailsScreen({ navigation, route }) {
     setIsSearchFocused(true);
     Animated.timing(searchAnim, {
       toValue: 1,
-      duration: 220,
+      duration: 300,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
     }).start();
     setTimeout(() => {
@@ -56,7 +57,6 @@ export default function DockerDetailsScreen({ navigation, route }) {
   };
 
   const handleExitSearch = () => {
-    setIsSearchFocused(false);
     Keyboard.dismiss();
     searchInputRef.current?.blur();
     composeSearchInputRef.current?.blur();
@@ -64,22 +64,29 @@ export default function DockerDetailsScreen({ navigation, route }) {
     setComposeSearchQuery('');
     Animated.timing(searchAnim, {
       toValue: 0,
-      duration: 200,
+      duration: 280,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
-    }).start();
+    }).start(() => {
+      setIsSearchFocused(false);
+    });
   };
 
-  const topHeaderMaxHeight = searchAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [240, STATUS_BAR_HEIGHT + 8],
+  const topHeaderHeight = searchAnim.interpolate({
+    inputRange: [0, 0.25, 1],
+    outputRange: [220, 220, STATUS_BAR_HEIGHT + 8],
   });
   const topHeaderOpacity = searchAnim.interpolate({
-    inputRange: [0, 0.6, 1],
-    outputRange: [1, 0.1, 0],
+    inputRange: [0, 0.5, 1],
+    outputRange: [1, 0.2, 0],
   });
   const topHeaderTranslateY = searchAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 30],
+    outputRange: [0, 48],
+  });
+  const topHeaderScale = searchAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0.92],
   });
 
   // 顶部分段切换：独立容器 vs Compose 堆栈
@@ -1060,47 +1067,55 @@ export default function DockerDetailsScreen({ navigation, route }) {
             />
           }
         >
-          {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕，搜索聚焦时下沉隐藏) */}
+          {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕，搜索聚焦时平滑下沉隐藏) */}
           <Animated.View
             style={[
               styles.topHeaderSection,
               {
-                maxHeight: topHeaderMaxHeight,
-                opacity: topHeaderOpacity,
-                transform: [{ translateY: topHeaderTranslateY }],
+                maxHeight: topHeaderHeight,
                 overflow: 'hidden',
               },
             ]}
             pointerEvents={isSearchFocused ? 'none' : 'auto'}
           >
-            <View style={styles.topNavHeaderRow}>
-              <View style={styles.titleWithBackRow}>
-                <View>
-                  <Text style={styles.navScreenTitle}>Docker 容器</Text>
-                  <Text style={styles.navScreenSub}>
-                    {composeRunningCount} 个堆栈运行中 · 共 {composeProjects.length} 个
-                  </Text>
+            <Animated.View
+              style={{
+                opacity: topHeaderOpacity,
+                transform: [
+                  { translateY: topHeaderTranslateY },
+                  { scale: topHeaderScale },
+                ],
+              }}
+            >
+              <View style={styles.topNavHeaderRow}>
+                <View style={styles.titleWithBackRow}>
+                  <View>
+                    <Text style={styles.navScreenTitle}>Docker 容器</Text>
+                    <Text style={styles.navScreenSub}>
+                      {composeRunningCount} 个堆栈运行中 · 共 {composeProjects.length} 个
+                    </Text>
+                  </View>
                 </View>
               </View>
-            </View>
-            {renderSegmentBar()}
-            {/* Compose 概览与快捷操作 */}
-            <View style={styles.composeHeroRow}>
-              <View style={styles.composeHeroCard}>
-                <Text style={styles.composeHeroNum}>{composeProjects.length}</Text>
-                <Text style={styles.composeHeroLabel}>总堆栈数</Text>
+              {renderSegmentBar()}
+              {/* Compose 概览与快捷操作 */}
+              <View style={styles.composeHeroRow}>
+                <View style={styles.composeHeroCard}>
+                  <Text style={styles.composeHeroNum}>{composeProjects.length}</Text>
+                  <Text style={styles.composeHeroLabel}>总堆栈数</Text>
+                </View>
+                <View style={styles.composeHeroCard}>
+                  <Text style={[styles.composeHeroNum, { color: colors.green }]}>{composeRunningCount}</Text>
+                  <Text style={styles.composeHeroLabel}>全服务运行</Text>
+                </View>
+                <View style={styles.composeHeroCard}>
+                  <Text style={[styles.composeHeroNum, { color: colors.amber }]}>
+                    {composeProjects.length - composeRunningCount}
+                  </Text>
+                  <Text style={styles.composeHeroLabel}>未完全运行</Text>
+                </View>
               </View>
-              <View style={styles.composeHeroCard}>
-                <Text style={[styles.composeHeroNum, { color: colors.green }]}>{composeRunningCount}</Text>
-                <Text style={styles.composeHeroLabel}>全服务运行</Text>
-              </View>
-              <View style={styles.composeHeroCard}>
-                <Text style={[styles.composeHeroNum, { color: colors.amber }]}>
-                  {composeProjects.length - composeRunningCount}
-                </Text>
-                <Text style={styles.composeHeroLabel}>未完全运行</Text>
-              </View>
-            </View>
+            </Animated.View>
           </Animated.View>
 
           {/* Index 1: 全局统一圆角悬浮毛玻璃搜索岛 */}
@@ -1318,51 +1333,59 @@ export default function DockerDetailsScreen({ navigation, route }) {
             style={[
               styles.topHeaderSection,
               {
-                maxHeight: topHeaderMaxHeight,
-                opacity: topHeaderOpacity,
-                transform: [{ translateY: topHeaderTranslateY }],
+                maxHeight: topHeaderHeight,
                 overflow: 'hidden',
               },
             ]}
             pointerEvents={isSearchFocused ? 'none' : 'auto'}
           >
-            <View style={styles.topNavHeaderRow}>
-              <View style={styles.titleWithBackRow}>
-                <View>
-                  <Text style={styles.navScreenTitle}>Docker 容器中枢</Text>
-                  <Text style={styles.navScreenSub}>
-                    {runningCount} 个容器正常运行 · 共 {dockers.length} 个
-                  </Text>
+            <Animated.View
+              style={{
+                opacity: topHeaderOpacity,
+                transform: [
+                  { translateY: topHeaderTranslateY },
+                  { scale: topHeaderScale },
+                ],
+              }}
+            >
+              <View style={styles.topNavHeaderRow}>
+                <View style={styles.titleWithBackRow}>
+                  <View>
+                    <Text style={styles.navScreenTitle}>Docker 容器中枢</Text>
+                    <Text style={styles.navScreenSub}>
+                      {runningCount} 个容器正常运行 · 共 {dockers.length} 个
+                    </Text>
+                  </View>
                 </View>
               </View>
-            </View>
-            {renderSegmentBar()}
-            {/* 1. 顶部 Bento 概览看板 (Hero Stats) */}
-            <View style={styles.heroRow}>
-              <View style={styles.heroCard}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                  <View style={[styles.heroDot, { backgroundColor: colors.green }]} />
-                  <Text style={styles.heroLabel}>运行中</Text>
+              {renderSegmentBar()}
+              {/* 1. 顶部 Bento 概览看板 (Hero Stats) */}
+              <View style={styles.heroRow}>
+                <View style={styles.heroCard}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                    <View style={[styles.heroDot, { backgroundColor: colors.green }]} />
+                    <Text style={styles.heroLabel}>运行中</Text>
+                  </View>
+                  <Text style={[styles.heroNum, { color: colors.green }]}>{runningCount}</Text>
                 </View>
-                <Text style={[styles.heroNum, { color: colors.green }]}>{runningCount}</Text>
-              </View>
 
-              <View style={styles.heroCard}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                  <View style={[styles.heroDot, { backgroundColor: colors.sub }]} />
-                  <Text style={styles.heroLabel}>已停止</Text>
+                <View style={styles.heroCard}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                    <View style={[styles.heroDot, { backgroundColor: colors.sub }]} />
+                    <Text style={styles.heroLabel}>已停止</Text>
+                  </View>
+                  <Text style={[styles.heroNum, { color: colors.textStrong }]}>{stoppedCount}</Text>
                 </View>
-                <Text style={[styles.heroNum, { color: colors.textStrong }]}>{stoppedCount}</Text>
-              </View>
 
-              <View style={styles.heroCard}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                  <Cpu size={11} color={colors.tempWarm} style={{ marginRight: 4 }} />
-                  <Text style={styles.heroLabel}>总负载</Text>
+                <View style={styles.heroCard}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                    <Cpu size={11} color={colors.tempWarm} style={{ marginRight: 4 }} />
+                    <Text style={styles.heroLabel}>总负载</Text>
+                  </View>
+                  <Text style={[styles.heroNum, { color: colors.tempWarm }]}>{totalCpuAgg}%</Text>
                 </View>
-                <Text style={[styles.heroNum, { color: colors.tempWarm }]}>{totalCpuAgg}%</Text>
               </View>
-            </View>
+            </Animated.View>
           </Animated.View>
 
           {/* Index 1: 全局统一圆角悬浮毛玻璃搜索岛 */}
