@@ -11,6 +11,7 @@ import {
   Search, Copy, Check, X, RefreshCw, Globe, Sliders, Box, Layers,
   ChevronDown, ChevronLeft, ArrowUpDown, Filter, Sparkles, ArrowUp, Zap, FileCode, Plus, CheckCircle2, AlertTriangle, AlertCircle, Trash2, Folder } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
+import Svg, { Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import GlassView from '../components/GlassView';
 import {
@@ -979,8 +980,20 @@ export default function DockerDetailsScreen({ navigation, route }) {
 
   return (
     <View style={styles.container}>
-      {/* 0. 顶部状态栏专属通透毛玻璃顶帽 (与吸顶搜索区无缝融为一体) */}
-      <GlassView border={false} style={styles.statusBarCap} />
+      {/* 0. 顶部状态栏氛围渐变过渡层 (消除全透明突兀割裂，使卡片向上平滑隐入顶端背景) */}
+      <View style={styles.topGradientFade} pointerEvents="none">
+        <Svg height={STATUS_BAR_HEIGHT + 28} width="100%">
+          <Defs>
+            <LinearGradient id="topAtmosphereDocker" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0" stopColor={colors.bg} stopOpacity="1" />
+              <Stop offset="0.65" stopColor={colors.bg} stopOpacity="0.85" />
+              <Stop offset="0.88" stopColor={colors.bg} stopOpacity="0.35" />
+              <Stop offset="1" stopColor={colors.bg} stopOpacity="0" />
+            </LinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width="100%" height={STATUS_BAR_HEIGHT + 28} fill="url(#topAtmosphereDocker)" />
+        </Svg>
+      </View>
 
       {dockerMode === 'compose' ? (
         <ScrollView
@@ -1038,51 +1051,53 @@ export default function DockerDetailsScreen({ navigation, route }) {
             </View>
           </View>
 
-          {/* Index 1: 搜索与新建堆栈 (到达顶部吸顶，并与顶部直接合并为一处毛玻璃悬浮岛) */}
-          <GlassView
-            border={false}
-            style={styles.stickyFilterSection}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              {navigation?.canGoBack?.() && (
-                <TouchableOpacity
-                  onPress={() => navigation.goBack()}
-                  style={styles.stickyBackBtn}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <ChevronLeft size={20} color={colors.textStrong} />
-                </TouchableOpacity>
-              )}
-              <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
-                <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="搜索 Compose 项目或服务..."
-                  placeholderTextColor={colors.muted}
-                  value={composeSearchQuery}
-                  onChangeText={setComposeSearchQuery}
-                  autoCapitalize="none"
-                />
-                {composeSearchQuery ? (
-                  <TouchableOpacity onPress={() => setComposeSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <X size={15} color={colors.sub} />
+          {/* Index 1: 全局统一圆角悬浮毛玻璃搜索岛 */}
+          <View style={styles.stickyIslandWrapper}>
+            <GlassView
+              border={true}
+              style={styles.floatingIslandCard}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                {navigation?.canGoBack?.() && (
+                  <TouchableOpacity
+                    onPress={() => navigation.goBack()}
+                    style={styles.stickyBackBtn}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <ChevronLeft size={20} color={colors.textStrong} />
                   </TouchableOpacity>
-                ) : null}
-              </View>
+                )}
+                <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
+                  <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="搜索 Compose 项目或服务..."
+                    placeholderTextColor={colors.muted}
+                    value={composeSearchQuery}
+                    onChangeText={setComposeSearchQuery}
+                    autoCapitalize="none"
+                  />
+                  {composeSearchQuery ? (
+                    <TouchableOpacity onPress={() => setComposeSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <X size={15} color={colors.sub} />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
 
-              <TouchableOpacity
-                style={styles.newStackBtn}
-                onPress={() => {
-                  setNewStackName('');
-                  setNewStackModalVisible(true);
-                }}
-                activeOpacity={0.8}
-              >
-                <Plus size={15} color="#ffffff" style={{ marginRight: 4 }} />
-                <Text style={styles.newStackBtnText}>新建堆栈</Text>
-              </TouchableOpacity>
-            </View>
-          </GlassView>
+                <TouchableOpacity
+                  style={styles.newStackBtn}
+                  onPress={() => {
+                    setNewStackName('');
+                    setNewStackModalVisible(true);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Plus size={15} color="#ffffff" style={{ marginRight: 4 }} />
+                  <Text style={styles.newStackBtnText}>新建堆栈</Text>
+                </TouchableOpacity>
+              </View>
+            </GlassView>
+          </View>
 
           {/* Index 2: Compose 堆栈列表 (在毛玻璃下向上滑动) */}
           <View style={styles.cardsListSection}>
@@ -1287,130 +1302,132 @@ export default function DockerDetailsScreen({ navigation, route }) {
             </View>
           </View>
 
-          {/* Index 1: 搜索框与状态筛选胶囊 (到达顶部吸顶，并与顶部直接合并为一处毛玻璃悬浮岛) */}
-          <GlassView
-            border={false}
-            style={styles.stickyFilterSection}
-          >
-            <View style={styles.searchBoxRow}>
-              {navigation?.canGoBack?.() && (
-                <TouchableOpacity
-                  onPress={() => navigation.goBack()}
-                  style={styles.stickyBackBtn}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <ChevronLeft size={20} color={colors.textStrong} />
-                </TouchableOpacity>
-              )}
-              <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
-                <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="搜索容器名称、镜像或端口..."
-                  placeholderTextColor={colors.muted}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                {searchQuery ? (
-                  <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <X size={15} color={colors.sub} />
+          {/* Index 1: 全局统一圆角悬浮毛玻璃搜索岛 */}
+          <View style={styles.stickyIslandWrapper}>
+            <GlassView
+              border={true}
+              style={styles.floatingIslandCard}
+            >
+              <View style={styles.searchBoxRow}>
+                {navigation?.canGoBack?.() && (
+                  <TouchableOpacity
+                    onPress={() => navigation.goBack()}
+                    style={styles.stickyBackBtn}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <ChevronLeft size={20} color={colors.textStrong} />
                   </TouchableOpacity>
-                ) : null}
+                )}
+                <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
+                  <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="搜索容器名称、镜像或端口..."
+                    placeholderTextColor={colors.muted}
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  {searchQuery ? (
+                    <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <X size={15} color={colors.sub} />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
               </View>
-            </View>
 
-            <View style={styles.filterRow}>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.filterScrollContainer}
-              >
-                <TouchableOpacity
-                  style={[styles.tabBtn, statusFilter === 'all' && styles.tabBtnActive]}
-                  onPress={() => setStatusFilter('all')}
-                  activeOpacity={0.7}
+              <View style={styles.filterRow}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.filterScrollContainer}
                 >
-                  <Text style={[styles.tabBtnText, statusFilter === 'all' && styles.tabBtnTextActive]}>
-                    全部 {dockers.length}
-                  </Text>
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.tabBtn, statusFilter === 'all' && styles.tabBtnActive]}
+                    onPress={() => setStatusFilter('all')}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.tabBtnText, statusFilter === 'all' && styles.tabBtnTextActive]}>
+                      全部 {dockers.length}
+                    </Text>
+                  </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[styles.tabBtn, statusFilter === 'running' && styles.tabBtnActive]}
-                  onPress={() => setStatusFilter('running')}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.tabBtnText, statusFilter === 'running' && styles.tabBtnTextActive]}>
-                    运行中 {runningCount}
-                  </Text>
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.tabBtn, statusFilter === 'running' && styles.tabBtnActive]}
+                    onPress={() => setStatusFilter('running')}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.tabBtnText, statusFilter === 'running' && styles.tabBtnTextActive]}>
+                      运行中 {runningCount}
+                    </Text>
+                  </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[styles.tabBtn, statusFilter === 'stopped' && styles.tabBtnActive]}
-                  onPress={() => setStatusFilter('stopped')}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.tabBtnText, statusFilter === 'stopped' && styles.tabBtnTextActive]}>
-                    已停止 {stoppedCount}
-                  </Text>
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.tabBtn, statusFilter === 'stopped' && styles.tabBtnActive]}
+                    onPress={() => setStatusFilter('stopped')}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.tabBtnText, statusFilter === 'stopped' && styles.tabBtnTextActive]}>
+                      已停止 {stoppedCount}
+                    </Text>
+                  </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[
-                    styles.tabBtn,
-                    statusFilter === 'updates' && styles.tabBtnActive,
-                    updateCount > 0 && styles.tabBtnUpdate,
-                    updateCount > 0 && statusFilter === 'updates' && styles.tabBtnUpdateActive,
-                  ]}
-                  onPress={() => setStatusFilter('updates')}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[
-                    styles.tabBtnText,
-                    statusFilter === 'updates' && styles.tabBtnTextActive,
-                    updateCount > 0 && statusFilter !== 'updates' && { color: '#f59e0b', fontWeight: 'bold' },
-                    updateCount > 0 && statusFilter === 'updates' && { color: '#ffffff', fontWeight: 'bold' },
-                  ]}>
-                    更新就绪 {updateCount}
-                  </Text>
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.tabBtn,
+                      statusFilter === 'updates' && styles.tabBtnActive,
+                      updateCount > 0 && styles.tabBtnUpdate,
+                      updateCount > 0 && statusFilter === 'updates' && styles.tabBtnUpdateActive,
+                    ]}
+                    onPress={() => setStatusFilter('updates')}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[
+                      styles.tabBtnText,
+                      statusFilter === 'updates' && styles.tabBtnTextActive,
+                      updateCount > 0 && statusFilter !== 'updates' && { color: '#f59e0b', fontWeight: 'bold' },
+                      updateCount > 0 && statusFilter === 'updates' && { color: '#ffffff', fontWeight: 'bold' },
+                    ]}>
+                      更新就绪 {updateCount}
+                    </Text>
+                  </TouchableOpacity>
 
-                {/* 检查更新按钮 */}
-                <TouchableOpacity
-                  style={[styles.tabBtn, styles.checkUpdateBtn]}
-                  onPress={handleCheckDockerUpdates}
-                  disabled={checkingUpdates}
-                  activeOpacity={0.7}
-                >
-                  {checkingUpdates ? (
-                    <ActivityIndicator size="small" color="#f59e0b" style={{ marginRight: 4 }} />
-                  ) : (
-                    <RefreshCw size={12} color="#f59e0b" style={{ marginRight: 4 }} />
-                  )}
-                  <Text style={[styles.tabBtnText, { color: '#f59e0b', fontWeight: '600' }]}>
-                    {checkingUpdates ? '正在检测...' : '检查更新'}
-                  </Text>
-                </TouchableOpacity>
+                  {/* 检查更新按钮 */}
+                  <TouchableOpacity
+                    style={[styles.tabBtn, styles.checkUpdateBtn]}
+                    onPress={handleCheckDockerUpdates}
+                    disabled={checkingUpdates}
+                    activeOpacity={0.7}
+                  >
+                    {checkingUpdates ? (
+                      <ActivityIndicator size="small" color="#f59e0b" style={{ marginRight: 4 }} />
+                    ) : (
+                      <RefreshCw size={12} color="#f59e0b" style={{ marginRight: 4 }} />
+                    )}
+                    <Text style={[styles.tabBtnText, { color: '#f59e0b', fontWeight: '600' }]}>
+                      {checkingUpdates ? '检测中...' : '检查更新'}
+                    </Text>
+                  </TouchableOpacity>
 
-                {/* 排序切换 */}
-                <TouchableOpacity
-                  style={styles.sortToggleBtn}
-                  onPress={() => {
-                    const next = sortRule === 'name' ? 'status' : sortRule === 'status' ? 'cpu' : 'name';
-                    setSortRule(next);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <ArrowUpDown size={12} color={colors.accent} style={{ marginRight: 4 }} />
-                  <Text style={styles.sortToggleText}>
-                    {sortRule === 'name' ? '按名称' : sortRule === 'status' ? '按状态' : '按负载'}
-                  </Text>
-                </TouchableOpacity>
-              </ScrollView>
-            </View>
-          </GlassView>
+                  {/* 排序切换 */}
+                  <TouchableOpacity
+                    style={styles.sortToggleBtn}
+                    onPress={() => {
+                      const next = sortRule === 'name' ? 'status' : sortRule === 'status' ? 'cpu' : 'name';
+                      setSortRule(next);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <ArrowUpDown size={12} color={colors.accent} style={{ marginRight: 4 }} />
+                    <Text style={styles.sortToggleText}>
+                      {sortRule === 'name' ? '按名称' : sortRule === 'status' ? '按状态' : '按负载'}
+                    </Text>
+                  </TouchableOpacity>
+                </ScrollView>
+              </View>
+            </GlassView>
+          </View>
 
           {/* Index 2: 现代化容器卡片列表 (在毛玻璃下向上滑动) */}
           <View style={styles.cardsListSection}>
@@ -2057,13 +2074,13 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     letterSpacing: -0.5,
   },
 
-  // Sticky & Filter Section
-  statusBarCap: {
+  // Top Atmospheric Gradient & Sticky Floating Island
+  topGradientFade: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    height: STATUS_BAR_HEIGHT,
+    height: STATUS_BAR_HEIGHT + 28,
     zIndex: 100,
   },
   mainScrollView: {
@@ -2105,24 +2122,33 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     marginTop: 2,
     fontWeight: '500',
   },
-  stickyFilterSection: {
+  stickyIslandWrapper: {
     paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 6,
+    backgroundColor: 'transparent',
+    zIndex: 20,
+  },
+  floatingIslandCard: {
+    borderRadius: 20,
+    paddingHorizontal: 14,
     paddingTop: 10,
     paddingBottom: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: isDark ? 0.25 : 0.06,
-    shadowRadius: 8,
-    zIndex: 10,
+    shadowRadius: 10,
+    elevation: 4,
+    overflow: 'hidden',
   },
   scrollContent: {
     flexGrow: 1,
   },
   cardsListSection: {
     paddingHorizontal: 16,
-    paddingTop: 10,
+    paddingTop: 6,
     paddingBottom: 110,
     gap: 12,
   },
