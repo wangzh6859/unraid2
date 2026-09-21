@@ -1,7 +1,7 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity,
-  TextInput, Platform, StatusBar, Keyboard
+  TextInput, Platform, StatusBar, Keyboard, Animated, Pressable,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -27,6 +27,49 @@ export default function VmDetailsScreen({ navigation }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'running' | 'stopped'
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+
+  const searchInputRef = useRef(null);
+  const searchAnim = useRef(new Animated.Value(0)).current;
+
+  const handleFocusSearch = () => {
+    setIsSearchFocused(true);
+    Animated.spring(searchAnim, {
+      toValue: 1,
+      friction: 9,
+      tension: 50,
+      useNativeDriver: false,
+    }).start();
+    setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 50);
+  };
+
+  const handleExitSearch = () => {
+    Keyboard.dismiss();
+    searchInputRef.current?.blur();
+    setSearchQuery('');
+    Animated.spring(searchAnim, {
+      toValue: 0,
+      friction: 9,
+      tension: 50,
+      useNativeDriver: false,
+    }).start(() => {
+      setIsSearchFocused(false);
+    });
+  };
+
+  const topHeaderMaxHeight = searchAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [180, 0],
+  });
+  const topHeaderOpacity = searchAnim.interpolate({
+    inputRange: [0, 0.7, 1],
+    outputRange: [1, 0.2, 0],
+  });
+  const topHeaderTranslateY = searchAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 45],
+  });
 
   // Modern Confirmation Dialog state
   const [confirmModal, setConfirmModal] = useState({
@@ -219,7 +262,7 @@ export default function VmDetailsScreen({ navigation }) {
     <View style={styles.container}>
       {/* 0. 顶部状态栏氛围渐变过渡层 (消除全透明突兀割裂，使卡片向上平滑隐入顶端背景) */}
       <View style={styles.topGradientFade} pointerEvents="none">
-        <Svg height={STATUS_BAR_HEIGHT + 20} width="100%" pointerEvents="none">
+        <Svg height={STATUS_BAR_HEIGHT + 24} width="100%" pointerEvents="none">
           <Defs>
             <LinearGradient id="topAtmosphereVm" x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0" stopColor={colors.bg} stopOpacity="1" />
@@ -228,7 +271,7 @@ export default function VmDetailsScreen({ navigation }) {
               <Stop offset="1" stopColor={colors.bg} stopOpacity="0" />
             </LinearGradient>
           </Defs>
-          <Rect x="0" y="0" width="100%" height={STATUS_BAR_HEIGHT + 20} fill="url(#topAtmosphereVm)" />
+          <Rect x="0" y="0" width="100%" height={STATUS_BAR_HEIGHT + 24} fill="url(#topAtmosphereVm)" />
         </Svg>
       </View>
 
@@ -238,6 +281,7 @@ export default function VmDetailsScreen({ navigation }) {
         stickyHeaderIndices={[1]}
         showsVerticalScrollIndicator={false}
         nestedScrollEnabled={true}
+        keyboardShouldPersistTaps="handled"
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -247,48 +291,57 @@ export default function VmDetailsScreen({ navigation }) {
           />
         }
       >
-        {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕，搜索聚焦时下沉隐藏) */}
-        {!isSearchFocused && (
-          <View style={styles.topHeaderSection}>
-            <View style={styles.topNavHeaderRow}>
-              <View style={styles.titleWithBackRow}>
-                <View>
-                  <Text style={styles.navScreenTitle}>虚拟机 (VM)</Text>
-                  <Text style={styles.navScreenSub}>
-                    {runningCount} 台正常运行 · 共 {vms.length} 台
-                  </Text>
-                </View>
-              </View>
-            </View>
-
-            {/* 1. 顶部 Bento 概览看板 */}
-            <View style={styles.heroRow}>
-              <View style={styles.heroCard}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                  <View style={[styles.heroDot, { backgroundColor: colors.green }]} />
-                  <Text style={styles.heroLabel}>运行中</Text>
-                </View>
-                <Text style={[styles.heroNum, { color: colors.green }]}>{runningCount}</Text>
-              </View>
-
-              <View style={styles.heroCard}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                  <View style={[styles.heroDot, { backgroundColor: colors.sub }]} />
-                  <Text style={styles.heroLabel}>未运行 / 挂起</Text>
-                </View>
-                <Text style={[styles.heroNum, { color: colors.textStrong }]}>{stoppedCount}</Text>
-              </View>
-
-              <View style={styles.heroCard}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                  <Monitor size={11} color={colors.pink} style={{ marginRight: 4 }} />
-                  <Text style={styles.heroLabel}>总虚拟机</Text>
-                </View>
-                <Text style={[styles.heroNum, { color: colors.pink }]}>{vms.length}</Text>
+        {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕，搜索聚焦时平滑下沉隐藏) */}
+        <Animated.View
+          style={[
+            styles.topHeaderSection,
+            {
+              maxHeight: topHeaderMaxHeight,
+              opacity: topHeaderOpacity,
+              transform: [{ translateY: topHeaderTranslateY }],
+              overflow: 'hidden',
+            },
+          ]}
+          pointerEvents={isSearchFocused ? 'none' : 'auto'}
+        >
+          <View style={styles.topNavHeaderRow}>
+            <View style={styles.titleWithBackRow}>
+              <View>
+                <Text style={styles.navScreenTitle}>虚拟机 (VM)</Text>
+                <Text style={styles.navScreenSub}>
+                  {runningCount} 台正常运行 · 共 {vms.length} 台
+                </Text>
               </View>
             </View>
           </View>
-        )}
+
+          {/* 1. 顶部 Bento 概览看板 */}
+          <View style={styles.heroRow}>
+            <View style={styles.heroCard}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                <View style={[styles.heroDot, { backgroundColor: colors.green }]} />
+                <Text style={styles.heroLabel}>运行中</Text>
+              </View>
+              <Text style={[styles.heroNum, { color: colors.green }]}>{runningCount}</Text>
+            </View>
+
+            <View style={styles.heroCard}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                <View style={[styles.heroDot, { backgroundColor: colors.sub }]} />
+                <Text style={styles.heroLabel}>未运行 / 挂起</Text>
+              </View>
+              <Text style={[styles.heroNum, { color: colors.textStrong }]}>{stoppedCount}</Text>
+            </View>
+
+            <View style={styles.heroCard}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                <Monitor size={11} color={colors.pink} style={{ marginRight: 4 }} />
+                <Text style={styles.heroLabel}>总虚拟机</Text>
+              </View>
+              <Text style={[styles.heroNum, { color: colors.pink }]}>{vms.length}</Text>
+            </View>
+          </View>
+        </Animated.View>
 
         {/* Index 1: 全局统一圆角悬浮毛玻璃搜索岛 */}
         <View style={[styles.stickyIslandWrapper, isSearchFocused && styles.stickyIslandFocused]}>
@@ -296,16 +349,21 @@ export default function VmDetailsScreen({ navigation }) {
             border={true}
             style={[styles.floatingIslandCard, isSearchFocused && styles.floatingIslandCardFocused]}
           >
-            <View style={styles.searchBoxRow}>
+            <TouchableOpacity
+              activeOpacity={1}
+              style={styles.searchBoxRow}
+              onPress={handleFocusSearch}
+            >
               <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
                 <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
                 <TextInput
+                  ref={searchInputRef}
                   style={styles.searchInput}
                   placeholder="搜索虚拟机名称..."
                   placeholderTextColor={colors.muted}
                   value={searchQuery}
                   onChangeText={setSearchQuery}
-                  onFocus={() => setIsSearchFocused(true)}
+                  onFocus={handleFocusSearch}
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
@@ -319,17 +377,13 @@ export default function VmDetailsScreen({ navigation }) {
               {isSearchFocused && (
                 <TouchableOpacity
                   style={styles.searchCancelBtn}
-                  onPress={() => {
-                    setSearchQuery('');
-                    setIsSearchFocused(false);
-                    Keyboard.dismiss();
-                  }}
+                  onPress={handleExitSearch}
                   activeOpacity={0.7}
                 >
                   <Text style={styles.searchCancelText}>取消</Text>
                 </TouchableOpacity>
               )}
-            </View>
+            </TouchableOpacity>
 
             <View style={styles.tabsRow}>
               <TouchableOpacity
@@ -516,6 +570,14 @@ export default function VmDetailsScreen({ navigation }) {
         onConfirm={confirmModal.onConfirm}
         onCancel={() => setConfirmModal(prev => ({ ...prev, visible: false }))}
       />
+
+      {/* 搜索聚焦时的全屏拦截蒙层：点击屏幕其余任意区域立即退出搜索聚焦 */}
+      {isSearchFocused && (
+        <Pressable
+          style={styles.searchBackdropOverlay}
+          onPress={handleExitSearch}
+        />
+      )}
     </View>
   );
 }
@@ -582,23 +644,27 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: STATUS_BAR_HEIGHT + 20,
-    zIndex: 100,
+    height: STATUS_BAR_HEIGHT + 24,
+    zIndex: 99,
   },
   mainScrollView: {
     flex: 1,
-    marginTop: STATUS_BAR_HEIGHT,
   },
   topHeaderSection: {
-    paddingTop: 8,
+    paddingTop: 0,
   },
   topNavHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: 6,
+    paddingTop: STATUS_BAR_HEIGHT + 6,
     paddingBottom: 4,
+  },
+  searchBackdropOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    zIndex: 18,
   },
   titleWithBackRow: {
     flexDirection: 'row',

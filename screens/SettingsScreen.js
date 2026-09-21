@@ -1775,12 +1775,11 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: STATUS_BAR_HEIGHT + 20,
+    height: STATUS_BAR_HEIGHT + 24,
     zIndex: 100,
   },
   mainScrollView: {
     flex: 1,
-    marginTop: STATUS_BAR_HEIGHT,
   },
   scrollContent: {
     paddingHorizontal: 16,
@@ -1788,7 +1787,7 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     paddingBottom: 110,
   },
   topHeaderSection: {
-    paddingTop: 4,
+    paddingTop: 0,
     marginBottom: 6,
   },
   topNavHeaderRow: {
@@ -1796,7 +1795,7 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 2,
-    paddingTop: 6,
+    paddingTop: STATUS_BAR_HEIGHT + 6,
     paddingBottom: 6,
   },
   titleWithBackRow: {

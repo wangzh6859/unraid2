@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo, useR
 import {
   StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator,
   KeyboardAvoidingView, Platform, ScrollView, Modal, BackHandler,
-  Pressable, RefreshControl, AppState, StatusBar, Keyboard,
+  Pressable, RefreshControl, AppState, StatusBar, Keyboard, Animated,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -141,6 +141,49 @@ export default function FilesScreen({ navigation }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('name'); // 'name' | 'date' | 'size'
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+
+  const searchInputRef = useRef(null);
+  const searchAnim = useRef(new Animated.Value(0)).current;
+
+  const handleFocusSearch = () => {
+    setIsSearchFocused(true);
+    Animated.spring(searchAnim, {
+      toValue: 1,
+      friction: 9,
+      tension: 50,
+      useNativeDriver: false,
+    }).start();
+    setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 50);
+  };
+
+  const handleExitSearch = () => {
+    Keyboard.dismiss();
+    searchInputRef.current?.blur();
+    setSearchQuery('');
+    Animated.spring(searchAnim, {
+      toValue: 0,
+      friction: 9,
+      tension: 50,
+      useNativeDriver: false,
+    }).start(() => {
+      setIsSearchFocused(false);
+    });
+  };
+
+  const topHeaderMaxHeight = searchAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [120, 0],
+  });
+  const topHeaderOpacity = searchAnim.interpolate({
+    inputRange: [0, 0.7, 1],
+    outputRange: [1, 0.2, 0],
+  });
+  const topHeaderTranslateY = searchAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 45],
+  });
 
   // Selection & UI Modals
   const [multiSelect, setMultiSelect] = useState(false);
@@ -1791,7 +1834,7 @@ export default function FilesScreen({ navigation }) {
     <View style={styles.fileContainer}>
       {/* 0. 顶部状态栏氛围渐变过渡层 */}
       <View style={styles.topGradientFade} pointerEvents="none">
-        <Svg height={STATUS_BAR_HEIGHT + 20} width="100%" pointerEvents="none">
+        <Svg height={STATUS_BAR_HEIGHT + 24} width="100%" pointerEvents="none">
           <Defs>
             <LinearGradient id="topAtmosphereFiles" x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0" stopColor={colors.bg} stopOpacity="1" />
@@ -1800,7 +1843,7 @@ export default function FilesScreen({ navigation }) {
               <Stop offset="1" stopColor={colors.bg} stopOpacity="0" />
             </LinearGradient>
           </Defs>
-          <Rect x="0" y="0" width="100%" height={STATUS_BAR_HEIGHT + 20} fill="url(#topAtmosphereFiles)" />
+          <Rect x="0" y="0" width="100%" height={STATUS_BAR_HEIGHT + 24} fill="url(#topAtmosphereFiles)" />
         </Svg>
       </View>
 
@@ -1820,112 +1863,123 @@ export default function FilesScreen({ navigation }) {
         }
       >
         {/* Index 0: 顶部大标题与操作按键 (搜索聚焦时平滑下沉隐藏) */}
-        {!isSearchFocused && (
-          <View style={styles.topHeaderSection}>
-            <View style={styles.topNavHeaderRow}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 10 }}>
-                {!isAtRoot && (
-                  <TouchableOpacity
-                    onPress={goBack}
-                    style={styles.navBackBtn}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <ChevronLeft color={colors.textStrong} size={22} />
-                  </TouchableOpacity>
-                )}
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.navScreenTitle}>文件管理</Text>
-                  <Text style={styles.navScreenSub} numberOfLines={1}>
-                    {isAtRoot ? 'Unraid 根共享库 (/mnt/user)' : currentFolderTitle}
-                  </Text>
-                </View>
-              </View>
-
-              {/* 右上角：传输任务中心 + 新建按钮 */}
-              <View style={styles.topNavActions}>
+        <Animated.View
+          style={[
+            styles.topHeaderSection,
+            {
+              maxHeight: topHeaderMaxHeight,
+              opacity: topHeaderOpacity,
+              transform: [{ translateY: topHeaderTranslateY }],
+              overflow: 'hidden',
+            },
+          ]}
+        >
+          <View style={styles.topNavHeaderRow}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 10 }}>
+              {!isAtRoot && (
                 <TouchableOpacity
-                  onPress={() => setIsTransferVisible(true)}
-                  style={styles.topActionBtn}
-                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                  accessibilityLabel="传输任务中心"
+                  onPress={goBack}
+                  style={styles.navBackBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  <ArrowDownUp color={colors.accent} size={18} />
-                  {activeTransferCount > 0 && (
-                    <View style={styles.transferBadge}>
-                      <Text style={styles.transferBadgeText}>{activeTransferCount}</Text>
-                    </View>
-                  )}
+                  <ChevronLeft color={colors.textStrong} size={22} />
                 </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={() => setIsMenuVisible(true)}
-                  style={[styles.topActionBtn, { marginLeft: 8 }]}
-                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                  accessibilityLabel="新建与上传"
-                >
-                  <Plus color={colors.textStrong} size={20} />
-                </TouchableOpacity>
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.navScreenTitle}>文件管理</Text>
+                <Text style={styles.navScreenSub} numberOfLines={1}>
+                  {isAtRoot ? 'Unraid 根共享库 (/mnt/user)' : currentFolderTitle}
+                </Text>
               </View>
             </View>
+
+            {/* 右上角：传输任务中心 + 新建按钮 */}
+            <View style={styles.topNavActions}>
+              <TouchableOpacity
+                onPress={() => setIsTransferVisible(true)}
+                style={styles.topActionBtn}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                accessibilityLabel="传输任务中心"
+              >
+                <ArrowDownUp color={colors.accent} size={18} />
+                {activeTransferCount > 0 && (
+                  <View style={styles.transferBadge}>
+                    <Text style={styles.transferBadgeText}>{activeTransferCount}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => setIsMenuVisible(true)}
+                style={[styles.topActionBtn, { marginLeft: 8 }]}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                accessibilityLabel="新建与上传"
+              >
+                <Plus color={colors.textStrong} size={20} />
+              </TouchableOpacity>
+            </View>
           </View>
-        )}
+        </Animated.View>
 
         {/* Index 1: 全局统一 20px 圆角悬浮毛玻璃搜索中枢岛 */}
         <View style={[styles.stickyIslandWrapper, isSearchFocused && styles.stickyIslandFocused]}>
-          <GlassView
-            border={true}
-            style={[styles.floatingIslandCard, isSearchFocused && styles.floatingIslandCardFocused]}
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={handleFocusSearch}
+            style={{ width: '100%' }}
           >
-            {/* 纯净全宽搜索输入框 + 排序胶囊 / 取消按钮 */}
-            <View style={styles.islandSearchRow}>
-              <View style={styles.searchBox}>
-                <Search color={colors.muted} size={15} style={{ marginRight: 8 }} />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="搜索当前目录..."
-                  placeholderTextColor={colors.muted}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  onFocus={() => setIsSearchFocused(true)}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                {searchQuery.length > 0 && (
-                  <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-                    <X color={colors.muted} size={15} />
+            <GlassView
+              border={true}
+              style={[styles.floatingIslandCard, isSearchFocused && styles.floatingIslandCardFocused]}
+            >
+              {/* 纯净全宽搜索输入框 + 排序胶囊 / 取消按钮 */}
+              <View style={styles.islandSearchRow}>
+                <View style={styles.searchBox}>
+                  <Search color={colors.muted} size={15} style={{ marginRight: 8 }} />
+                  <TextInput
+                    ref={searchInputRef}
+                    style={styles.searchInput}
+                    placeholder="搜索当前目录..."
+                    placeholderTextColor={colors.muted}
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    onFocus={handleFocusSearch}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  {searchQuery.length > 0 && (
+                    <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                      <X color={colors.muted} size={15} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {!isSearchFocused ? (
+                  <TouchableOpacity
+                    style={styles.sortToggleBtn}
+                    onPress={() => {
+                      const modes = ['name', 'date', 'size'];
+                      const next = modes[(modes.indexOf(sortBy) + 1) % modes.length];
+                      setSortBy(next);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.sortToggleText}>
+                      {sortBy === 'name' ? '按名称' : sortBy === 'date' ? '按时间' : '按大小'}
+                    </Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.searchCancelBtn}
+                    onPress={handleExitSearch}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.searchCancelText}>取消</Text>
                   </TouchableOpacity>
                 )}
               </View>
-
-              {!isSearchFocused ? (
-                <TouchableOpacity
-                  style={styles.sortToggleBtn}
-                  onPress={() => {
-                    const modes = ['name', 'date', 'size'];
-                    const next = modes[(modes.indexOf(sortBy) + 1) % modes.length];
-                    setSortBy(next);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.sortToggleText}>
-                    {sortBy === 'name' ? '按名称' : sortBy === 'date' ? '按时间' : '按大小'}
-                  </Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={styles.searchCancelBtn}
-                  onPress={() => {
-                    setSearchQuery('');
-                    setIsSearchFocused(false);
-                    Keyboard.dismiss();
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.searchCancelText}>取消</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </GlassView>
+            </GlassView>
+          </TouchableOpacity>
         </View>
 
         {/* Index 2: 文件条目列表 */}
@@ -2068,12 +2122,24 @@ export default function FilesScreen({ navigation }) {
         />
       )}
 
-      {/* 现代化悬浮毛玻璃新建操作菜单 (FloatingGlassActionMenu) */}
-      {isMenuVisible && (
-        <View style={styles.menuOverlayContainer} pointerEvents="box-none">
+      {/* 现代化悬浮毛玻璃新建操作菜单 (FloatingGlassActionMenu) - 全局原生 Modal 彻底遮盖底部 Dock 栏 */}
+      <Modal
+        visible={isMenuVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setIsMenuVisible(false)}
+      >
+        <View style={styles.menuOverlayContainer}>
           <Pressable style={styles.menuBackdrop} onPress={() => setIsMenuVisible(false)} />
           <GlassView border={true} borderRadius={20} style={styles.dropdownMenu}>
-            <TouchableOpacity style={styles.menuItem} onPress={handleUpload} activeOpacity={0.7}>
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                setIsMenuVisible(false);
+                handleUpload();
+              }}
+              activeOpacity={0.7}
+            >
               <View style={[styles.menuItemIconBox, { backgroundColor: 'rgba(56, 189, 248, 0.15)' }]}>
                 <UploadCloud color={colors.accent} size={18} />
               </View>
@@ -2114,7 +2180,7 @@ export default function FilesScreen({ navigation }) {
             </TouchableOpacity>
           </GlassView>
         </View>
-      )}
+      </Modal>
 
       {/* Create Folder Modal */}
       <Modal visible={mkdirVisible} transparent animationType="fade" onRequestClose={() => setMkdirVisible(false)}>
@@ -2621,6 +2687,14 @@ export default function FilesScreen({ navigation }) {
         onConfirm={confirmDialog.onConfirm}
         onCancel={() => setConfirmDialog(prev => ({ ...prev, visible: false }))}
       />
+
+      {/* 搜索聚焦时的全屏拦截蒙层：点击屏幕其余任意区域立即退出搜索聚焦 */}
+      {isSearchFocused && (
+        <Pressable
+          style={styles.searchBackdropOverlay}
+          onPress={handleExitSearch}
+        />
+      )}
     </View>
   );
 }
@@ -2645,18 +2719,17 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: STATUS_BAR_HEIGHT + 20,
+    height: STATUS_BAR_HEIGHT + 24,
     zIndex: 100,
   },
   mainScrollView: {
     flex: 1,
-    marginTop: STATUS_BAR_HEIGHT,
   },
   scrollContent: {
     flexGrow: 1,
   },
   topHeaderSection: {
-    paddingTop: 8,
+    paddingTop: 0,
     paddingHorizontal: 16,
     paddingBottom: 4,
   },
@@ -2664,8 +2737,13 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: 6,
+    paddingTop: STATUS_BAR_HEIGHT + 6,
     paddingBottom: 4,
+  },
+  searchBackdropOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    zIndex: 18,
   },
   topNavActions: {
     flexDirection: 'row',
@@ -2953,7 +3031,7 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   },
   dropdownMenu: {
     position: 'absolute',
-    top: STATUS_BAR_HEIGHT + 48,
+    top: STATUS_BAR_HEIGHT + 52,
     right: 16,
     borderRadius: 20,
     padding: 6,
