@@ -13,6 +13,7 @@ import { useTheme } from '../ThemeContext';
 import Svg, { Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import GlassView from '../components/GlassView';
+import { BlurView } from 'expo-blur';
 
 const STATUS_BAR_HEIGHT = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 44;
 
@@ -29,6 +30,7 @@ export default function VmDetailsScreen({ navigation }) {
   const [isSearchFocused, setIsSearchFocused] = useState(false);
 
   const searchInputRef = useRef(null);
+  const focusedSearchInputRef = useRef(null);
   const searchAnim = useRef(new Animated.Value(0)).current;
 
   const handleFocusSearch = () => {
@@ -40,12 +42,13 @@ export default function VmDetailsScreen({ navigation }) {
       useNativeDriver: false,
     }).start();
     setTimeout(() => {
-      searchInputRef.current?.focus();
-    }, 40);
+      focusedSearchInputRef.current?.focus();
+    }, 50);
   };
 
   const handleExitSearch = () => {
     Keyboard.dismiss();
+    focusedSearchInputRef.current?.blur();
     searchInputRef.current?.blur();
     setSearchQuery('');
     Animated.timing(searchAnim, {
@@ -58,21 +61,14 @@ export default function VmDetailsScreen({ navigation }) {
     });
   };
 
-  const topHeaderHeight = searchAnim.interpolate({
-    inputRange: [0, 0.25, 1],
-    outputRange: [180, 180, STATUS_BAR_HEIGHT + 8],
-  });
-  const topHeaderOpacity = searchAnim.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: [1, 0.2, 0],
-  });
-  const topHeaderTranslateY = searchAnim.interpolate({
+  // 全页面下沉与景深缩放动效
+  const pageSinkTranslateY = searchAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 45],
+    outputRange: [0, 24],
   });
-  const topHeaderScale = searchAnim.interpolate({
+  const pageSinkScale = searchAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [1, 0.92],
+    outputRange: [1, 0.96],
   });
 
   // Modern Confirmation Dialog state
@@ -262,6 +258,135 @@ export default function VmDetailsScreen({ navigation }) {
     );
   }
 
+  const renderVmItem = (vm, index) => {
+    const isRunning = vm.status === 'running';
+    const isPaused = vm.status === 'paused';
+    const isOperating = operatingVm === vm.name;
+
+    return (
+      <View key={vm.name || index} style={styles.vmCard}>
+        {/* 上层 */}
+        <View style={styles.cardUpperTier}>
+          <View style={[styles.avatar, { backgroundColor: isRunning ? 'rgba(236, 72, 153, 0.15)' : 'rgba(148, 163, 184, 0.15)' }]}>
+            <Monitor size={20} color={isRunning ? colors.pink : colors.sub} />
+          </View>
+
+          <View style={styles.nameBlock}>
+            <Text style={styles.vmTitle} numberOfLines={1}>{vm.name}</Text>
+            <View style={styles.metaBadgeRow}>
+              <View style={[styles.statusBadge, {
+                backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : isPaused ? 'rgba(245, 158, 11, 0.12)' : 'rgba(148, 163, 184, 0.12)'
+              }]}>
+                <View style={[styles.statusDotSmall, {
+                  backgroundColor: isRunning ? colors.green : isPaused ? colors.amber : colors.sub
+                }]} />
+                <Text style={[styles.statusBadgeText, {
+                  color: isRunning ? colors.green : isPaused ? colors.amber : colors.sub
+                }]}>
+                  {isRunning ? '运行中' : isPaused ? '已挂起' : '已关机'}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          {/* 核心配置指标 */}
+          <View style={styles.specPillsCol}>
+            <View style={styles.specPill}>
+              <Cpu size={10} color={colors.accent} style={{ marginRight: 3 }} />
+              <Text style={[styles.specPillText, { color: colors.accent }]}>{vm.cores || 2} vCPU</Text>
+            </View>
+            <View style={[styles.specPill, { marginTop: 4 }]}>
+              <Database size={10} color={colors.tempWarm} style={{ marginRight: 3 }} />
+              <Text style={[styles.specPillText, { color: colors.tempWarm }]}>{formatVmMemory(vm.memory)}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* 下层：操作栏 */}
+        <View style={styles.cardLowerTier}>
+          <Text style={styles.actionPromptText}>
+            {isOperating ? '正在下发指令...' : isRunning ? '虚拟机正在执行任务' : isPaused ? '虚拟机已被冻结挂起' : '虚拟机处于关机状态'}
+          </Text>
+
+          <View style={styles.mgmtBtnGroup}>
+            {isOperating ? (
+              <ActivityIndicator size="small" color={colors.accent} style={{ marginRight: 8 }} />
+            ) : null}
+
+            {isRunning && (
+              <>
+                <TouchableOpacity
+                  style={styles.circleActionBtn}
+                  onPress={() => handlePauseVm(vm.name)}
+                  disabled={isOperating}
+                  activeOpacity={0.7}
+                  accessibilityLabel="挂起虚拟机"
+                >
+                  <Pause size={14} color={colors.amber} />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.circleActionBtn}
+                  onPress={() => handleStopVm(vm.name)}
+                  disabled={isOperating}
+                  activeOpacity={0.7}
+                  accessibilityLabel="正常关机"
+                >
+                  <Power size={14} color={colors.red} />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.circleActionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}
+                  onPress={() => handleForceStopVm(vm.name)}
+                  disabled={isOperating}
+                  activeOpacity={0.7}
+                  accessibilityLabel="强制断电"
+                >
+                  <ShieldAlert size={14} color={colors.red} />
+                </TouchableOpacity>
+              </>
+            )}
+
+            {isPaused && (
+              <>
+                <TouchableOpacity
+                  style={[styles.primaryActionBtn, { backgroundColor: colors.green }]}
+                  onPress={() => handleResumeVm(vm.name)}
+                  disabled={isOperating}
+                  activeOpacity={0.8}
+                >
+                  <Play size={13} color="#ffffff" style={{ marginRight: 4 }} />
+                  <Text style={styles.primaryActionBtnText}>恢复运行</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.circleActionBtn}
+                  onPress={() => handleForceStopVm(vm.name)}
+                  disabled={isOperating}
+                  activeOpacity={0.7}
+                >
+                  <Power size={14} color={colors.red} />
+                </TouchableOpacity>
+              </>
+            )}
+
+            {!isRunning && !isPaused && (
+              <TouchableOpacity
+                style={[styles.primaryActionBtn, { backgroundColor: colors.green }]}
+                onPress={() => handleStartVm(vm.name)}
+                disabled={isOperating}
+                activeOpacity={0.8}
+              >
+                <Play size={13} color="#ffffff" style={{ marginRight: 4 }} />
+                <Text style={styles.primaryActionBtnText}>启动虚拟机</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </View>
+    );
+  };
+
   return (
     <View style={styles.container}>
       {/* 0. 顶部状态栏氛围渐变过渡层 */}
@@ -279,42 +404,34 @@ export default function VmDetailsScreen({ navigation }) {
         </Svg>
       </View>
 
-      <ScrollView
-        style={styles.mainScrollView}
-        contentContainerStyle={styles.scrollContent}
-        stickyHeaderIndices={[1]}
-        showsVerticalScrollIndicator={false}
-        nestedScrollEnabled={true}
-        keyboardShouldPersistTaps="handled"
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.accent}
-            colors={[colors.accent]}
-          />
-        }
+      {/* 1. 主页面内容 (搜索激活时整体平滑下沉 translateY: 0 -> 24, scale: 1 -> 0.96) */}
+      <Animated.View
+        style={{
+          flex: 1,
+          transform: [
+            { translateY: pageSinkTranslateY },
+            { scale: pageSinkScale },
+          ],
+        }}
+        pointerEvents={isSearchFocused ? 'none' : 'auto'}
       >
-        {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕，搜索聚焦时平滑下沉隐藏) */}
-        <Animated.View
-          style={[
-            styles.topHeaderSection,
-            {
-              maxHeight: topHeaderHeight,
-              overflow: 'hidden',
-            },
-          ]}
-          pointerEvents={isSearchFocused ? 'none' : 'auto'}
+        <ScrollView
+          style={styles.mainScrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          nestedScrollEnabled={true}
+          keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.accent}
+              colors={[colors.accent]}
+            />
+          }
         >
-          <Animated.View
-            style={{
-              opacity: topHeaderOpacity,
-              transform: [
-                { translateY: topHeaderTranslateY },
-                { scale: topHeaderScale },
-              ],
-            }}
-          >
+          {/* 顶部标题与统计概览 */}
+          <View style={styles.topHeaderSection}>
             <View style={styles.topNavHeaderRow}>
               <View style={styles.titleWithBackRow}>
                 <View>
@@ -352,225 +469,189 @@ export default function VmDetailsScreen({ navigation }) {
                 <Text style={[styles.heroNum, { color: colors.pink }]}>{vms.length}</Text>
               </View>
             </View>
-          </Animated.View>
-        </Animated.View>
-
-        {/* Index 1: 全局统一圆角悬浮毛玻璃搜索岛 */}
-        <View style={[styles.stickyIslandWrapper, isSearchFocused && styles.stickyIslandFocused]}>
-          <GlassView
-            border={true}
-            style={[styles.floatingIslandCard, isSearchFocused && styles.floatingIslandCardFocused]}
-          >
-            <TouchableOpacity
-              activeOpacity={1}
-              style={styles.searchBoxRow}
-              onPress={handleFocusSearch}
-            >
-              <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
-                <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
-                <TextInput
-                  ref={searchInputRef}
-                  style={styles.searchInput}
-                  placeholder="搜索虚拟机名称..."
-                  placeholderTextColor={colors.muted}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  onFocus={handleFocusSearch}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                {searchQuery ? (
-                  <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <X size={15} color={colors.sub} />
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-
-              {isSearchFocused && (
-                <Animated.View style={{ opacity: searchAnim }}>
-                  <TouchableOpacity
-                    style={styles.searchCancelBtn}
-                    onPress={handleExitSearch}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.searchCancelText}>取消</Text>
-                  </TouchableOpacity>
-                </Animated.View>
-              )}
-            </TouchableOpacity>
-
-            <View style={styles.tabsRow}>
-              <TouchableOpacity
-                style={[styles.tabBtn, statusFilter === 'all' && styles.tabBtnActive]}
-                onPress={() => setStatusFilter('all')}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.tabBtnText, statusFilter === 'all' && styles.tabBtnTextActive]}>
-                  全部 {vms.length}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.tabBtn, statusFilter === 'running' && styles.tabBtnActive]}
-                onPress={() => setStatusFilter('running')}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.tabBtnText, statusFilter === 'running' && styles.tabBtnTextActive]}>
-                  运行中 {runningCount}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.tabBtn, statusFilter === 'stopped' && styles.tabBtnActive]}
-                onPress={() => setStatusFilter('stopped')}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.tabBtnText, statusFilter === 'stopped' && styles.tabBtnTextActive]}>
-                  未运行 {stoppedCount}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </GlassView>
-        </View>
-
-        {/* Index 2: 虚拟机卡片列表 (在毛玻璃下向上滑动) */}
-        <View style={styles.cardsListSection}>
-        {filteredVms.map((vm, index) => {
-          const isRunning = vm.status === 'running';
-          const isPaused = vm.status === 'paused';
-          const isOperating = operatingVm === vm.name;
-
-          return (
-            <View key={vm.name || index} style={styles.vmCard}>
-              {/* 上层 */}
-              <View style={styles.cardUpperTier}>
-                <View style={[styles.avatar, { backgroundColor: isRunning ? 'rgba(236, 72, 153, 0.15)' : 'rgba(148, 163, 184, 0.15)' }]}>
-                  <Monitor size={20} color={isRunning ? colors.pink : colors.sub} />
-                </View>
-
-                <View style={styles.nameBlock}>
-                  <Text style={styles.vmTitle} numberOfLines={1}>{vm.name}</Text>
-                  <View style={styles.metaBadgeRow}>
-                    <View style={[styles.statusBadge, {
-                      backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : isPaused ? 'rgba(245, 158, 11, 0.12)' : 'rgba(148, 163, 184, 0.12)'
-                    }]}>
-                      <View style={[styles.statusDotSmall, {
-                        backgroundColor: isRunning ? colors.green : isPaused ? colors.amber : colors.sub
-                      }]} />
-                      <Text style={[styles.statusBadgeText, {
-                        color: isRunning ? colors.green : isPaused ? colors.amber : colors.sub
-                      }]}>
-                        {isRunning ? '运行中' : isPaused ? '已挂起' : '已关机'}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-
-                {/* 核心配置指标 */}
-                <View style={styles.specPillsCol}>
-                  <View style={styles.specPill}>
-                    <Cpu size={10} color={colors.accent} style={{ marginRight: 3 }} />
-                    <Text style={[styles.specPillText, { color: colors.accent }]}>{vm.cores || 2} vCPU</Text>
-                  </View>
-                  <View style={[styles.specPill, { marginTop: 4 }]}>
-                    <Database size={10} color={colors.tempWarm} style={{ marginRight: 3 }} />
-                    <Text style={[styles.specPillText, { color: colors.tempWarm }]}>{formatVmMemory(vm.memory)}</Text>
-                  </View>
-                </View>
-              </View>
-
-              {/* 下层：操作栏 */}
-              <View style={styles.cardLowerTier}>
-                <Text style={styles.actionPromptText}>
-                  {isOperating ? '正在下发指令...' : isRunning ? '虚拟机正在执行任务' : isPaused ? '虚拟机已被冻结挂起' : '虚拟机处于关机状态'}
-                </Text>
-
-                <View style={styles.mgmtBtnGroup}>
-                  {isOperating ? (
-                    <ActivityIndicator size="small" color={colors.accent} style={{ marginRight: 8 }} />
-                  ) : null}
-
-                  {isRunning && (
-                    <>
-                      <TouchableOpacity
-                        style={styles.circleActionBtn}
-                        onPress={() => handlePauseVm(vm.name)}
-                        disabled={isOperating}
-                        activeOpacity={0.7}
-                        accessibilityLabel="挂起虚拟机"
-                      >
-                        <Pause size={14} color={colors.amber} />
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={styles.circleActionBtn}
-                        onPress={() => handleStopVm(vm.name)}
-                        disabled={isOperating}
-                        activeOpacity={0.7}
-                        accessibilityLabel="正常关机"
-                      >
-                        <Power size={14} color={colors.red} />
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={[styles.circleActionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}
-                        onPress={() => handleForceStopVm(vm.name)}
-                        disabled={isOperating}
-                        activeOpacity={0.7}
-                        accessibilityLabel="强制断电"
-                      >
-                        <ShieldAlert size={14} color={colors.red} />
-                      </TouchableOpacity>
-                    </>
-                  )}
-
-                  {isPaused && (
-                    <>
-                      <TouchableOpacity
-                        style={[styles.primaryActionBtn, { backgroundColor: colors.green }]}
-                        onPress={() => handleResumeVm(vm.name)}
-                        disabled={isOperating}
-                        activeOpacity={0.8}
-                      >
-                        <Play size={13} color="#ffffff" style={{ marginRight: 4 }} />
-                        <Text style={styles.primaryActionBtnText}>恢复运行</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={styles.circleActionBtn}
-                        onPress={() => handleForceStopVm(vm.name)}
-                        disabled={isOperating}
-                        activeOpacity={0.7}
-                      >
-                        <Power size={14} color={colors.red} />
-                      </TouchableOpacity>
-                    </>
-                  )}
-
-                  {!isRunning && !isPaused && (
-                    <TouchableOpacity
-                      style={[styles.primaryActionBtn, { backgroundColor: colors.green }]}
-                      onPress={() => handleStartVm(vm.name)}
-                      disabled={isOperating}
-                      activeOpacity={0.8}
-                    >
-                      <Play size={13} color="#ffffff" style={{ marginRight: 4 }} />
-                      <Text style={styles.primaryActionBtnText}>启动虚拟机</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </View>
-            </View>
-          );
-        })}
-
-        {filteredVms.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Monitor size={42} color={colors.muted} style={{ marginBottom: 12 }} />
-            <Text style={styles.emptyTitle}>暂无虚拟机</Text>
-            <Text style={styles.emptySub}>当前 Unraid 未配置或未匹配到符合条件的虚拟机</Text>
           </View>
-        ) : null}
-        </View>
-      </ScrollView>
+
+          {/* 常规状态下的搜索岛 */}
+          <View style={styles.stickyIslandWrapper}>
+            <GlassView border={true} style={styles.floatingIslandCard}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={styles.searchBoxRow}
+                onPress={handleFocusSearch}
+              >
+                <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
+                  <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
+                  <Text style={{ fontSize: 13, color: colors.muted, flex: 1 }}>
+                    搜索虚拟机名称...
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              <View style={styles.tabsRow}>
+                <TouchableOpacity
+                  style={[styles.tabBtn, statusFilter === 'all' && styles.tabBtnActive]}
+                  onPress={() => setStatusFilter('all')}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                >
+                  <Text style={[styles.tabBtnText, statusFilter === 'all' && styles.tabBtnTextActive]}>
+                    全部 {vms.length}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.tabBtn, statusFilter === 'running' && styles.tabBtnActive]}
+                  onPress={() => setStatusFilter('running')}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                >
+                  <Text style={[styles.tabBtnText, statusFilter === 'running' && styles.tabBtnTextActive]}>
+                    运行中 {runningCount}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.tabBtn, statusFilter === 'stopped' && styles.tabBtnActive]}
+                  onPress={() => setStatusFilter('stopped')}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                >
+                  <Text style={[styles.tabBtnText, statusFilter === 'stopped' && styles.tabBtnTextActive]}>
+                    未运行 {stoppedCount}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </GlassView>
+          </View>
+
+          {/* 虚拟机卡片列表 */}
+          <View style={styles.cardsListSection}>
+            {filteredVms.map(renderVmItem)}
+
+            {filteredVms.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Monitor size={42} color={colors.muted} style={{ marginBottom: 12 }} />
+                <Text style={styles.emptyTitle}>暂无虚拟机</Text>
+                <Text style={styles.emptySub}>当前 Unraid 未配置或未匹配到符合条件的虚拟机</Text>
+              </View>
+            ) : null}
+          </View>
+        </ScrollView>
+      </Animated.View>
+
+      {/* 2. 全屏毛玻璃下潜虚化遮罩 (如同图2中的整体下潜并模糊) */}
+      {isSearchFocused && (
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              zIndex: 120,
+              opacity: searchAnim,
+            },
+          ]}
+        >
+          <BlurView
+            intensity={Platform.OS === 'android' ? 25 : 35}
+            tint={isDark ? 'dark' : 'light'}
+            style={StyleSheet.absoluteFill}
+          />
+          <View
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: isDark ? 'rgba(15, 23, 42, 0.55)' : 'rgba(0, 0, 0, 0.35)' },
+            ]}
+          />
+          <Pressable style={StyleSheet.absoluteFill} onPress={handleExitSearch} />
+        </Animated.View>
+      )}
+
+      {/* 3. 搜索聚焦时悬浮于顶部的光效搜索岛 (保持图三的精致光效与安全区距离) */}
+      {isSearchFocused && (
+        <Animated.View
+          style={[
+            styles.floatingSearchIsland,
+            {
+              top: STATUS_BAR_HEIGHT + 10,
+              opacity: searchAnim,
+              transform: [
+                {
+                  translateY: searchAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [12, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <View style={styles.floatingSearchGlowCard}>
+            <Search size={16} color={colors.accent} style={{ marginRight: 8 }} />
+            <TextInput
+              ref={focusedSearchInputRef}
+              style={styles.floatingSearchInput}
+              placeholder="搜索虚拟机名称..."
+              placeholderTextColor={colors.muted}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoFocus={true}
+            />
+            {searchQuery ? (
+              <TouchableOpacity
+                onPress={() => setSearchQuery('')}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={{ padding: 4 }}
+              >
+                <X size={15} color={colors.sub} />
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              style={styles.floatingCancelBtn}
+              onPress={handleExitSearch}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.floatingCancelText}>取消</Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      )}
+
+      {/* 4. 搜索结果显示在搜索框下面 */}
+      {isSearchFocused && (
+        <Animated.View
+          style={[
+            styles.floatingSearchResultsArea,
+            {
+              top: STATUS_BAR_HEIGHT + 66,
+              opacity: searchAnim,
+              transform: [
+                {
+                  translateY: searchAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [16, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: 160 }}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {filteredVms.length > 0 ? (
+              filteredVms.map(renderVmItem)
+            ) : (
+              <View style={styles.searchEmptyCard}>
+                <Search size={32} color={colors.muted} style={{ marginBottom: 8 }} />
+                <Text style={styles.searchEmptyTitle}>未找到相关虚拟机</Text>
+                <Text style={styles.searchEmptySub}>换个名称试试看吧</Text>
+              </View>
+            )}
+          </ScrollView>
+        </Animated.View>
+      )}
 
       {/* Modern Confirm Modal */}
       <ModernConfirmDialog
@@ -584,14 +665,6 @@ export default function VmDetailsScreen({ navigation }) {
         onConfirm={confirmModal.onConfirm}
         onCancel={() => setConfirmModal(prev => ({ ...prev, visible: false }))}
       />
-
-      {/* 搜索聚焦时的全屏拦截蒙层：点击屏幕其余任意区域立即退出搜索聚焦 */}
-      {isSearchFocused && (
-        <Pressable
-          style={styles.searchBackdropOverlay}
-          onPress={handleExitSearch}
-        />
-      )}
     </View>
   );
 }
@@ -675,14 +748,67 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     paddingTop: STATUS_BAR_HEIGHT + 6,
     paddingBottom: 4,
   },
-  searchBackdropOverlay: {
+  // Floating Search with Glowing Halo (图3精致光效)
+  floatingSearchIsland: {
     position: 'absolute',
-    top: STATUS_BAR_HEIGHT + 115,
+    left: 16,
+    right: 16,
+    zIndex: 150,
+  },
+  floatingSearchGlowCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 48,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: isDark ? 'rgba(30, 41, 59, 0.96)' : 'rgba(255, 255, 255, 0.98)',
+    borderWidth: 1.5,
+    borderColor: isDark ? 'rgba(56, 189, 248, 0.7)' : 'rgba(14, 165, 233, 0.65)',
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.45,
+    shadowRadius: 14,
+    elevation: 14,
+  },
+  floatingSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: colors.textStrong,
+    paddingVertical: 0,
+  },
+  floatingCancelBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    marginLeft: 4,
+  },
+  floatingCancelText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.accent,
+  },
+  floatingSearchResultsArea: {
+    position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'transparent',
-    zIndex: 50,
+    zIndex: 140,
+  },
+  searchEmptyCard: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 20,
+  },
+  searchEmptyTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textStrong,
+    marginBottom: 6,
+  },
+  searchEmptySub: {
+    fontSize: 13,
+    color: colors.sub,
+    textAlign: 'center',
   },
   titleWithBackRow: {
     flexDirection: 'row',

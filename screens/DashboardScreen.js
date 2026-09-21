@@ -1624,7 +1624,6 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   },
   mainScrollView: {
     flex: 1,
-    marginTop: STATUS_BAR_HEIGHT,
   },
   container: {
     flex: 1,
@@ -1632,7 +1631,7 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   },
   content: {
     padding: 16,
-    paddingTop: 8,
+    paddingTop: STATUS_BAR_HEIGHT + 8,
     paddingBottom: 110,
   },
   center: {

@@ -20,6 +20,7 @@ import { getDownloadDir, formatBytes } from '../utils/cacheManager';
 import FilePreviewer from '../components/FilePreviewer';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import GlassView from '../components/GlassView';
+import { BlurView } from 'expo-blur';
 import backgroundTransferManager from '../utils/backgroundTransferManager';
 import { apiFetch, apiFetchJson, resetNetworkPool } from '../utils/apiClient';
 import { BUNDLED_API_VERSION, BUNDLED_API_CODE } from '../utils/bundledApi';
@@ -143,28 +144,30 @@ export default function FilesScreen({ navigation }) {
   const [isSearchFocused, setIsSearchFocused] = useState(false);
 
   const searchInputRef = useRef(null);
+  const focusedSearchInputRef = useRef(null);
   const searchAnim = useRef(new Animated.Value(0)).current;
 
   const handleFocusSearch = () => {
     setIsSearchFocused(true);
     Animated.timing(searchAnim, {
       toValue: 1,
-      duration: 300,
+      duration: 250,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
     }).start();
     setTimeout(() => {
-      searchInputRef.current?.focus();
-    }, 40);
+      focusedSearchInputRef.current?.focus();
+    }, 50);
   };
 
   const handleExitSearch = () => {
     Keyboard.dismiss();
+    focusedSearchInputRef.current?.blur();
     searchInputRef.current?.blur();
     setSearchQuery('');
     Animated.timing(searchAnim, {
       toValue: 0,
-      duration: 280,
+      duration: 220,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
     }).start(() => {
@@ -172,21 +175,14 @@ export default function FilesScreen({ navigation }) {
     });
   };
 
-  const topHeaderHeight = searchAnim.interpolate({
-    inputRange: [0, 0.25, 1],
-    outputRange: [110, 110, STATUS_BAR_HEIGHT + 8],
-  });
-  const topHeaderOpacity = searchAnim.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: [1, 0.2, 0],
-  });
-  const topHeaderTranslateY = searchAnim.interpolate({
+  // 全页面下沉与景深缩放动效 (如同图2中的整体下潜)
+  const pageSinkTranslateY = searchAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 36],
+    outputRange: [0, 24],
   });
-  const topHeaderScale = searchAnim.interpolate({
+  const pageSinkScale = searchAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [1, 0.92],
+    outputRange: [1, 0.96],
   });
 
   // Selection & UI Modals
@@ -1834,6 +1830,54 @@ export default function FilesScreen({ navigation }) {
   const pathSegments = currentPath.split('/').filter(Boolean);
   const currentFolderTitle = isAtRoot ? '根共享库 (/mnt/user)' : decodeURIComponent(pathSegments[pathSegments.length - 1] || '文件');
 
+  const renderFileRow = (item, index) => {
+    const sel = isSelected(item.path);
+    return (
+      <TouchableOpacity
+        key={item.path || index}
+        style={[styles.fileRow, sel && styles.fileRowSelected]}
+        onPress={() => handleFileClick(item)}
+        onLongPress={() => handleLongPress(item)}
+        delayLongPress={350}
+        activeOpacity={0.7}
+      >
+        <View style={styles.fileIconBox}>
+          {item.isFolder ? (
+            <Folder color={colors.accent} size={24} fill="rgba(59, 130, 246, 0.2)" />
+          ) : isArchiveFile(item.name) ? (
+            <Archive color={colors.green} size={24} />
+          ) : (
+            <File color={colors.sub} size={24} />
+          )}
+        </View>
+
+        <View style={styles.fileInfo}>
+          <Text style={styles.fileName} numberOfLines={1}>{item.name}</Text>
+          <View style={styles.fileMetaRow}>
+            <Text style={styles.fileSize}>
+              {item.isFolder ? '文件夹' : formatBytes(item.size)}
+            </Text>
+            {item.mtime ? <Text style={styles.fileDate}>{item.mtime}</Text> : null}
+          </View>
+        </View>
+
+        {multiSelect && (
+          <TouchableOpacity
+            style={styles.checkbox}
+            onPress={() => toggleSelect(item)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
+          >
+            {sel ? (
+              <CheckCircle color={colors.accent} size={24} />
+            ) : (
+              <Circle color={colors.muted} size={24} />
+            )}
+          </TouchableOpacity>
+        )}
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <View style={styles.fileContainer}>
       {/* 0. 顶部状态栏氛围渐变过渡层 */}
@@ -1851,41 +1895,33 @@ export default function FilesScreen({ navigation }) {
         </Svg>
       </View>
 
-      <ScrollView
-        style={styles.mainScrollView}
-        contentContainerStyle={styles.scrollContent}
-        stickyHeaderIndices={[1]}
-        showsVerticalScrollIndicator={false}
-        nestedScrollEnabled={true}
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.accent}
-            colors={[colors.accent]}
-          />
-        }
+      {/* 1. 主页面内容 (搜索激活时整体平滑下沉 translateY: 0 -> 24, scale: 1 -> 0.96) */}
+      <Animated.View
+        style={{
+          flex: 1,
+          transform: [
+            { translateY: pageSinkTranslateY },
+            { scale: pageSinkScale },
+          ],
+        }}
+        pointerEvents={isSearchFocused ? 'none' : 'auto'}
       >
-        {/* Index 0: 顶部大标题与操作按键 (搜索聚焦时平滑下沉隐藏) */}
-        <Animated.View
-          style={[
-            styles.topHeaderSection,
-            {
-              maxHeight: topHeaderHeight,
-              overflow: 'hidden',
-            },
-          ]}
-          pointerEvents={isSearchFocused ? 'none' : 'auto'}
+        <ScrollView
+          style={styles.mainScrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          nestedScrollEnabled={true}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.accent}
+              colors={[colors.accent]}
+            />
+          }
         >
-          <Animated.View
-            style={{
-              opacity: topHeaderOpacity,
-              transform: [
-                { translateY: topHeaderTranslateY },
-                { scale: topHeaderScale },
-              ],
-            }}
-          >
+          {/* 顶部大标题与操作按键 */}
+          <View style={styles.topHeaderSection}>
             <View style={styles.topNavHeaderRow}>
               <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 10 }}>
                 {!isAtRoot && (
@@ -1931,135 +1967,174 @@ export default function FilesScreen({ navigation }) {
                 </TouchableOpacity>
               </View>
             </View>
-          </Animated.View>
-        </Animated.View>
+          </View>
 
-        {/* Index 1: 全局统一 20px 圆角悬浮毛玻璃搜索中枢岛 */}
-        <View style={[styles.stickyIslandWrapper, isSearchFocused && styles.stickyIslandFocused]}>
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={handleFocusSearch}
-            style={{ width: '100%' }}
-          >
-            <GlassView
-              border={true}
-              style={[styles.floatingIslandCard, isSearchFocused && styles.floatingIslandCardFocused]}
-            >
-              {/* 纯净全宽搜索输入框 + 排序胶囊 / 取消按钮 */}
-              <View style={styles.islandSearchRow}>
+          {/* 常规状态下的搜索岛 */}
+          <View style={styles.stickyIslandWrapper}>
+            <GlassView border={true} style={styles.floatingIslandCard}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={styles.islandSearchRow}
+                onPress={handleFocusSearch}
+              >
                 <View style={styles.searchBox}>
-                  <Search color={colors.muted} size={15} style={{ marginRight: 8 }} />
-                  <TextInput
-                    ref={searchInputRef}
-                    style={styles.searchInput}
-                    placeholder="搜索当前目录..."
-                    placeholderTextColor={colors.muted}
-                    value={searchQuery}
-                    onChangeText={setSearchQuery}
-                    onFocus={handleFocusSearch}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                  {searchQuery.length > 0 && (
-                    <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-                      <X color={colors.muted} size={15} />
-                    </TouchableOpacity>
-                  )}
+                  <Search color={colors.sub} size={15} style={{ marginRight: 8 }} />
+                  <Text style={{ fontSize: 13, color: colors.muted, flex: 1 }}>
+                    搜索当前目录...
+                  </Text>
                 </View>
 
-                {!isSearchFocused ? (
-                  <TouchableOpacity
-                    style={styles.sortToggleBtn}
-                    onPress={() => {
-                      const modes = ['name', 'date', 'size'];
-                      const next = modes[(modes.indexOf(sortBy) + 1) % modes.length];
-                      setSortBy(next);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.sortToggleText}>
-                      {sortBy === 'name' ? '按名称' : sortBy === 'date' ? '按时间' : '按大小'}
-                    </Text>
-                  </TouchableOpacity>
-                ) : (
-                  <Animated.View style={{ opacity: searchAnim }}>
-                    <TouchableOpacity
-                      style={styles.searchCancelBtn}
-                      onPress={handleExitSearch}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.searchCancelText}>取消</Text>
-                    </TouchableOpacity>
-                  </Animated.View>
-                )}
-              </View>
-            </GlassView>
-          </TouchableOpacity>
-        </View>
-
-        {/* Index 2: 文件条目列表 */}
-        <View style={styles.cardsListSection}>
-          {isLoadingList && !isRefreshing ? (
-            <View style={styles.listCenter}>
-              <ActivityIndicator size="large" color={colors.accent} />
-              <Text style={[styles.emptyText, { marginTop: 12 }]}>正在加载文件列表...</Text>
-            </View>
-          ) : filteredFiles.length === 0 ? (
-            <View style={styles.listCenter}>
-              <FolderOpen color={colors.muted} size={48} style={{ marginBottom: 12 }} />
-              <Text style={styles.emptyText}>当前目录无内容，下拉可刷新</Text>
-            </View>
-          ) : (
-            filteredFiles.map((item, index) => {
-              const sel = isSelected(item.path);
-              return (
                 <TouchableOpacity
-                  key={item.path || index}
-                  style={[styles.fileRow, sel && styles.fileRowSelected]}
-                  onPress={() => handleFileClick(item)}
-                  onLongPress={() => handleLongPress(item)}
-                  delayLongPress={350}
+                  style={styles.sortToggleBtn}
+                  onPress={() => {
+                    const modes = ['name', 'date', 'size'];
+                    const next = modes[(modes.indexOf(sortBy) + 1) % modes.length];
+                    setSortBy(next);
+                  }}
                   activeOpacity={0.7}
                 >
-                  <View style={styles.fileIconBox}>
-                    {item.isFolder ? (
-                      <Folder color={colors.accent} size={24} fill="rgba(59, 130, 246, 0.2)" />
-                    ) : isArchiveFile(item.name) ? (
-                      <Archive color={colors.green} size={24} />
-                    ) : (
-                      <File color={colors.sub} size={24} />
-                    )}
-                  </View>
-
-                  <View style={styles.fileInfo}>
-                    <Text style={styles.fileName} numberOfLines={1}>{item.name}</Text>
-                    <View style={styles.fileMetaRow}>
-                      <Text style={styles.fileSize}>
-                        {item.isFolder ? '文件夹' : formatBytes(item.size)}
-                      </Text>
-                      {item.mtime ? <Text style={styles.fileDate}>{item.mtime}</Text> : null}
-                    </View>
-                  </View>
-
-                  {multiSelect && (
-                    <TouchableOpacity
-                      style={styles.checkbox}
-                      onPress={() => toggleSelect(item)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
-                    >
-                      {sel ? (
-                        <CheckCircle color={colors.accent} size={24} />
-                      ) : (
-                        <Circle color={colors.muted} size={24} />
-                      )}
-                    </TouchableOpacity>
-                  )}
+                  <Text style={styles.sortToggleText}>
+                    {sortBy === 'name' ? '按名称' : sortBy === 'date' ? '按时间' : '按大小'}
+                  </Text>
                 </TouchableOpacity>
-              );
-            })
-          )}
-        </View>
-      </ScrollView>
+              </TouchableOpacity>
+            </GlassView>
+          </View>
+
+          {/* 文件条目列表 */}
+          <View style={styles.cardsListSection}>
+            {isLoadingList && !isRefreshing ? (
+              <View style={styles.listCenter}>
+                <ActivityIndicator size="large" color={colors.accent} />
+                <Text style={[styles.emptyText, { marginTop: 12 }]}>正在加载文件列表...</Text>
+              </View>
+            ) : filteredFiles.length === 0 ? (
+              <View style={styles.listCenter}>
+                <FolderOpen color={colors.muted} size={48} style={{ marginBottom: 12 }} />
+                <Text style={styles.emptyText}>当前目录无内容，下拉可刷新</Text>
+              </View>
+            ) : (
+              filteredFiles.map(renderFileRow)
+            )}
+          </View>
+        </ScrollView>
+      </Animated.View>
+
+      {/* 2. 全屏毛玻璃下潜虚化遮罩 (如同图2中的整体下潜并模糊) */}
+      {isSearchFocused && (
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              zIndex: 120,
+              opacity: searchAnim,
+            },
+          ]}
+        >
+          <BlurView
+            intensity={Platform.OS === 'android' ? 25 : 35}
+            tint={isDark ? 'dark' : 'light'}
+            style={StyleSheet.absoluteFill}
+          />
+          <View
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: isDark ? 'rgba(15, 23, 42, 0.55)' : 'rgba(0, 0, 0, 0.35)' },
+            ]}
+          />
+          <Pressable style={StyleSheet.absoluteFill} onPress={handleExitSearch} />
+        </Animated.View>
+      )}
+
+      {/* 3. 搜索聚焦时悬浮于顶部的光效搜索岛 (保持图三的精致光效与安全区距离) */}
+      {isSearchFocused && (
+        <Animated.View
+          style={[
+            styles.floatingSearchIsland,
+            {
+              top: STATUS_BAR_HEIGHT + 10,
+              opacity: searchAnim,
+              transform: [
+                {
+                  translateY: searchAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [12, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <View style={styles.floatingSearchGlowCard}>
+            <Search size={16} color={colors.accent} style={{ marginRight: 8 }} />
+            <TextInput
+              ref={focusedSearchInputRef}
+              style={styles.floatingSearchInput}
+              placeholder="搜索当前目录..."
+              placeholderTextColor={colors.muted}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoFocus={true}
+            />
+            {searchQuery ? (
+              <TouchableOpacity
+                onPress={() => setSearchQuery('')}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={{ padding: 4 }}
+              >
+                <X size={15} color={colors.sub} />
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              style={styles.floatingCancelBtn}
+              onPress={handleExitSearch}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.floatingCancelText}>取消</Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      )}
+
+      {/* 4. 搜索结果显示在搜索框下面 */}
+      {isSearchFocused && (
+        <Animated.View
+          style={[
+            styles.floatingSearchResultsArea,
+            {
+              top: STATUS_BAR_HEIGHT + 66,
+              opacity: searchAnim,
+              transform: [
+                {
+                  translateY: searchAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [16, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: 160 }}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {filteredFiles.length > 0 ? (
+              filteredFiles.map(renderFileRow)
+            ) : (
+              <View style={styles.searchEmptyCard}>
+                <Search size={32} color={colors.muted} style={{ marginBottom: 8 }} />
+                <Text style={styles.searchEmptyTitle}>未找到相关文件</Text>
+                <Text style={styles.searchEmptySub}>换个文件或目录名试试看吧</Text>
+              </View>
+            )}
+          </ScrollView>
+        </Animated.View>
+      )}
 
       {/* Multi-Select Bottom Action Bar */}
       {multiSelect && (
@@ -2703,14 +2778,6 @@ export default function FilesScreen({ navigation }) {
         onConfirm={confirmDialog.onConfirm}
         onCancel={() => setConfirmDialog(prev => ({ ...prev, visible: false }))}
       />
-
-      {/* 搜索聚焦时的全屏拦截蒙层：点击屏幕其余任意区域立即退出搜索聚焦 */}
-      {isSearchFocused && (
-        <Pressable
-          style={styles.searchBackdropOverlay}
-          onPress={handleExitSearch}
-        />
-      )}
     </View>
   );
 }
@@ -2756,14 +2823,67 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     paddingTop: STATUS_BAR_HEIGHT + 6,
     paddingBottom: 4,
   },
-  searchBackdropOverlay: {
+  // Floating Search with Glowing Halo (图3精致光效)
+  floatingSearchIsland: {
     position: 'absolute',
-    top: STATUS_BAR_HEIGHT + 68,
+    left: 16,
+    right: 16,
+    zIndex: 150,
+  },
+  floatingSearchGlowCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 48,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: isDark ? 'rgba(30, 41, 59, 0.96)' : 'rgba(255, 255, 255, 0.98)',
+    borderWidth: 1.5,
+    borderColor: isDark ? 'rgba(56, 189, 248, 0.7)' : 'rgba(14, 165, 233, 0.65)',
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.45,
+    shadowRadius: 14,
+    elevation: 14,
+  },
+  floatingSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: colors.textStrong,
+    paddingVertical: 0,
+  },
+  floatingCancelBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    marginLeft: 4,
+  },
+  floatingCancelText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.accent,
+  },
+  floatingSearchResultsArea: {
+    position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'transparent',
-    zIndex: 50,
+    zIndex: 140,
+  },
+  searchEmptyCard: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 20,
+  },
+  searchEmptyTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textStrong,
+    marginBottom: 6,
+  },
+  searchEmptySub: {
+    fontSize: 13,
+    color: colors.sub,
+    textAlign: 'center',
   },
   topNavActions: {
     flexDirection: 'row',

@@ -14,6 +14,7 @@ import { useTheme } from '../ThemeContext';
 import Svg, { Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
 import ModernConfirmDialog from '../components/ModernConfirmDialog';
 import GlassView from '../components/GlassView';
+import { BlurView } from 'expo-blur';
 import {
   getProxyConfig, getDockerAliases, saveDockerAlias,
   removeDockerAlias, resolveDockerWebUrl,
@@ -37,6 +38,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
 
   const searchInputRef = useRef(null);
   const composeSearchInputRef = useRef(null);
+  const focusedSearchInputRef = useRef(null);
   const searchAnim = useRef(new Animated.Value(0)).current;
 
   const handleFocusSearch = () => {
@@ -48,16 +50,13 @@ export default function DockerDetailsScreen({ navigation, route }) {
       useNativeDriver: false,
     }).start();
     setTimeout(() => {
-      if (dockerMode === 'compose') {
-        composeSearchInputRef.current?.focus();
-      } else {
-        searchInputRef.current?.focus();
-      }
-    }, 40);
+      focusedSearchInputRef.current?.focus();
+    }, 50);
   };
 
   const handleExitSearch = () => {
     Keyboard.dismiss();
+    focusedSearchInputRef.current?.blur();
     searchInputRef.current?.blur();
     composeSearchInputRef.current?.blur();
     setSearchQuery('');
@@ -72,21 +71,14 @@ export default function DockerDetailsScreen({ navigation, route }) {
     });
   };
 
-  const topHeaderHeight = searchAnim.interpolate({
-    inputRange: [0, 0.25, 1],
-    outputRange: [220, 220, STATUS_BAR_HEIGHT + 8],
-  });
-  const topHeaderOpacity = searchAnim.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: [1, 0.2, 0],
-  });
-  const topHeaderTranslateY = searchAnim.interpolate({
+  // 全页面下沉与向深处景深缩放 (如同图2中的整体下潜)
+  const pageSinkTranslateY = searchAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 48],
+    outputRange: [0, 24],
   });
-  const topHeaderScale = searchAnim.interpolate({
+  const pageSinkScale = searchAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [1, 0.92],
+    outputRange: [1, 0.96],
   });
 
   // 顶部分段切换：独立容器 vs Compose 堆栈
@@ -1033,6 +1025,287 @@ export default function DockerDetailsScreen({ navigation, route }) {
     </View>
   );
 
+  const renderComposeItem = (project, idx) => {
+    const isRunning = project.status === 'running';
+    const isPartial = project.status === 'partial';
+    const actLoading = composeActionLoading[project.name];
+
+    return (
+      <View key={project.name || idx} style={styles.composeCard}>
+        {/* Header */}
+        <View style={styles.composeCardHeader}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+            <View style={[styles.composeIconBox, { backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : isPartial ? 'rgba(245, 158, 11, 0.12)' : 'rgba(148, 163, 184, 0.12)' }]}>
+              <Layers size={18} color={isRunning ? colors.green : isPartial ? colors.amber : colors.sub} />
+            </View>
+            <View style={{ marginLeft: 10, flex: 1 }}>
+              <Text style={styles.composeCardTitle} numberOfLines={1}>{project.name}</Text>
+              <Text style={styles.composeCardPath} numberOfLines={1}>{project.yaml_file || project.path}</Text>
+            </View>
+          </View>
+
+          {/* 状态徽标 */}
+          <View style={[styles.composeStatusBadge, {
+            backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : isPartial ? 'rgba(245, 158, 11, 0.12)' : 'rgba(148, 163, 184, 0.12)'
+          }]}>
+            <View style={[styles.statusDotSmall, {
+              backgroundColor: isRunning ? colors.green : isPartial ? colors.amber : colors.sub
+            }]} />
+            <Text style={[styles.composeStatusBadgeText, {
+              color: isRunning ? colors.green : isPartial ? colors.amber : colors.sub
+            }]}>
+              {isRunning ? '运行中' : isPartial ? '部分运行' : '已停止'}
+              {project.total_count > 0 ? ` (${project.running_count || 0}/${project.total_count})` : ''}
+            </Text>
+          </View>
+        </View>
+
+        {/* 包含服务标签列表 */}
+        {project.services && project.services.length > 0 && (
+          <View style={styles.composeServicesRow}>
+            <Text style={styles.composeServicesLabel}>服务:</Text>
+            <View style={styles.composeServiceTagsWrap}>
+              {project.services.map((srv, sIdx) => (
+                <View key={sIdx} style={styles.composeServiceChip}>
+                  <Text style={styles.composeServiceChipText}>{srv}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {/* Action Bar */}
+        <View style={styles.composeActionsRow}>
+          {/* 查看配置与日志 */}
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <TouchableOpacity
+              style={styles.composeConfigBtn}
+              onPress={() => openYamlModal(project)}
+              activeOpacity={0.7}
+            >
+              <FileCode size={13} color={colors.accent} style={{ marginRight: 4 }} />
+              <Text style={styles.composeConfigBtnText}>配置</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.composeConfigBtn}
+              onPress={() => openComposeLogs(project)}
+              activeOpacity={0.7}
+            >
+              <Terminal size={13} color={colors.accent} style={{ marginRight: 4 }} />
+              <Text style={styles.composeConfigBtnText}>日志</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* 生命周期操作 (Up, Down, Restart, Pull) */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <TouchableOpacity
+              style={styles.circleActionBtn}
+              onPress={() => executeComposeAction(project.name, 'pull')}
+              disabled={!!actLoading}
+              activeOpacity={0.7}
+              accessibilityLabel="拉取最新镜像"
+            >
+              {actLoading === 'pull' ? (
+                <ActivityIndicator size="small" color={colors.amber} />
+              ) : (
+                <ArrowUp size={14} color="#f59e0b" />
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.circleActionBtn}
+              onPress={() => executeComposeAction(project.name, 'restart')}
+              disabled={!!actLoading}
+              activeOpacity={0.7}
+              accessibilityLabel="重启堆栈"
+            >
+              {actLoading === 'restart' ? (
+                <ActivityIndicator size="small" color={colors.sub} />
+              ) : (
+                <RotateCw size={14} color={colors.sub} />
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.circleActionBtn, {
+                backgroundColor: isRunning ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)'
+              }]}
+              onPress={() => executeComposeAction(project.name, isRunning ? 'down' : 'up')}
+              disabled={!!actLoading}
+              activeOpacity={0.7}
+            >
+              {actLoading === (isRunning ? 'down' : 'up') ? (
+                <ActivityIndicator size="small" color={isRunning ? colors.red : colors.green} />
+              ) : isRunning ? (
+                <Power size={14} color={colors.red} />
+              ) : (
+                <Play size={14} color={colors.green} />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    );
+  };
+
+  const renderDockerItem = (docker, index) => {
+    const rawMem = String(docker.memory || docker.mem || '');
+    const shortMemory = rawMem.includes(' / ') ? rawMem.split(' / ')[0].trim() : (rawMem || '0B');
+    const cpuVal = docker.cpu !== undefined && docker.cpu !== null ? String(docker.cpu) : '0%';
+    const cpuText = cpuVal.includes('%') ? cpuVal : `${cpuVal}%`;
+    const isRunning = docker.status === 'running';
+    const defaultWebInfo = { targetUrl: '', proxyUrl: '', rawInternalUrl: '', isCustom: false, isProxy: false, isFullUrl: false, alias: '' };
+    const webUiInfo = (typeof resolveDockerWebUrl === 'function')
+      ? (resolveDockerWebUrl(docker, serverUrl, proxyConfig, dockerAliases) || defaultWebInfo)
+      : defaultWebInfo;
+    const hasWebAccess = !!(webUiInfo.targetUrl || docker.port || docker.ports);
+    const hasCustomAlias = !!dockerAliases[docker.name];
+    const avatarBg = getAvatarColor(docker.name);
+    const initial = (docker.name || 'D').slice(0, 2).toUpperCase();
+
+    return (
+      <View key={docker.name || index} style={styles.dockerCard}>
+        {/* 上层：头像 + 名称 + 状态呼吸灯 + 端口 */}
+        <View style={styles.cardUpperTier}>
+          <View style={[styles.avatar, { backgroundColor: avatarBg }]}>
+            <Text style={styles.avatarText}>{initial}</Text>
+          </View>
+
+          <View style={styles.nameBlock}>
+            <Text style={styles.dockerTitle} numberOfLines={1}>
+              {docker.name}
+            </Text>
+            <View style={styles.metaBadgeRow}>
+              <View style={[styles.statusBadge, { backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : 'rgba(148, 163, 184, 0.12)' }]}>
+                <View style={[styles.statusDotSmall, { backgroundColor: isRunning ? colors.green : colors.sub }]} />
+                <Text style={[styles.statusBadgeText, { color: isRunning ? colors.green : colors.sub }]}>
+                  {isRunning ? '运行中' : '已停止'}
+                </Text>
+              </View>
+
+              {docker.update_available && (
+                <TouchableOpacity
+                  style={[
+                    styles.updateBadge,
+                    docker.update_status === 'ready' && styles.updateBadgeReady
+                  ]}
+                  onPress={() => handleUpdateDocker(docker.name, docker.update_status)}
+                  disabled={updatingDocker === docker.name}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  accessibilityLabel={docker.update_status_text || "可更新"}
+                >
+                  {updatingDocker === docker.name ? (
+                    <ActivityIndicator size="small" color={docker.update_status === 'ready' ? "#10b981" : "#f59e0b"} style={{ marginRight: 4 }} />
+                  ) : docker.update_status === 'ready' ? (
+                    <RotateCw size={11} color="#10b981" style={{ marginRight: 3 }} />
+                  ) : (
+                    <ArrowUp size={11} color="#f59e0b" style={{ marginRight: 3 }} />
+                  )}
+                  <Text style={[
+                    styles.updateBadgeText,
+                    docker.update_status === 'ready' && styles.updateBadgeTextReady
+                  ]}>
+                    {updatingDocker === docker.name 
+                      ? '更新中...' 
+                      : (docker.update_status === 'ready' ? '更新就绪 · 升级' : '更新 · 升级')}
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              {docker.port ? (
+                <View style={styles.portBadge}>
+                  <Text style={styles.portBadgeText}>:{docker.port}</Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
+
+          {/* 资源胶囊 */}
+          {isRunning ? (
+            <View style={styles.resourcePillsCol}>
+              <View style={styles.resourcePill}>
+                <Cpu size={10} color={colors.tempWarm} style={{ marginRight: 3 }} />
+                <Text style={[styles.resourcePillText, { color: colors.tempWarm }]}>{cpuText}</Text>
+              </View>
+              <View style={[styles.resourcePill, { marginTop: 4 }]}>
+                <Database size={10} color={colors.accent} style={{ marginRight: 3 }} />
+                <Text style={[styles.resourcePillText, { color: colors.accent }]}>{shortMemory}</Text>
+              </View>
+            </View>
+          ) : null}
+        </View>
+
+        {/* 下层：Action Bar 交互操作栏 */}
+        <View style={styles.cardLowerTier}>
+          <View style={styles.webActionGroup}>
+            {hasWebAccess ? (
+              <TouchableOpacity
+                style={styles.webLaunchPill}
+                onPress={() => handleLaunchWebUI(docker, webUiInfo)}
+                onLongPress={() => handleShowWebUiOptions(docker, webUiInfo)}
+                activeOpacity={0.7}
+              >
+                {openingDocker === docker.name ? (
+                  <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 5 }} />
+                ) : (
+                  <Globe size={13} color="#ffffff" style={{ marginRight: 5 }} />
+                )}
+                <Text style={styles.webLaunchPillText}>Web</Text>
+                <ExternalLink size={11} color="#ffffff" style={{ marginLeft: 3, opacity: 0.85 }} />
+              </TouchableOpacity>
+            ) : null}
+
+            <TouchableOpacity
+              style={[styles.customConfigPill, hasCustomAlias && styles.customConfigPillActive]}
+              onPress={() => handleOpenAliasModal(docker, webUiInfo)}
+              activeOpacity={0.7}
+            >
+              <Sliders size={12} color={hasCustomAlias ? colors.accent : colors.sub} style={{ marginRight: 4 }} />
+              <Text style={[styles.customConfigPillText, hasCustomAlias && { color: colors.accent, fontWeight: 'bold' }]}>
+                {hasCustomAlias ? '已定制' : '定制'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* 容器操作按键群 */}
+          <View style={styles.mgmtBtnGroup}>
+            <TouchableOpacity
+              style={styles.circleActionBtn}
+              onPress={() => openLogsModal(docker)}
+              activeOpacity={0.7}
+            >
+              <Terminal size={14} color={colors.accent} />
+            </TouchableOpacity>
+
+            {isRunning ? (
+              <TouchableOpacity
+                style={styles.circleActionBtn}
+                onPress={() => handleRestartDocker(docker.name)}
+                activeOpacity={0.7}
+              >
+                <RotateCw size={14} color={colors.sub} />
+              </TouchableOpacity>
+            ) : null}
+
+            <TouchableOpacity
+              style={[styles.circleActionBtn, { backgroundColor: isRunning ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)' }]}
+              onPress={() => (isRunning ? handleStopDocker(docker.name) : handleStartDocker(docker.name))}
+              activeOpacity={0.7}
+            >
+              {isRunning ? (
+                <Power size={14} color={colors.red} />
+              ) : (
+                <Play size={14} color={colors.green} />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    );
+  };
+
   return (
     <View style={styles.container}>
       {/* 0. 顶部状态栏氛围渐变过渡层 */}
@@ -1050,43 +1323,35 @@ export default function DockerDetailsScreen({ navigation, route }) {
         </Svg>
       </View>
 
-      {dockerMode === 'compose' ? (
-        <ScrollView
-          style={styles.mainScrollView}
-          contentContainerStyle={styles.scrollContent}
-          stickyHeaderIndices={[1]}
-          showsVerticalScrollIndicator={false}
-          nestedScrollEnabled={true}
-          keyboardShouldPersistTaps="handled"
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={colors.accent}
-              colors={[colors.accent]}
-            />
-          }
-        >
-          {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕，搜索聚焦时平滑下沉隐藏) */}
-          <Animated.View
-            style={[
-              styles.topHeaderSection,
-              {
-                maxHeight: topHeaderHeight,
-                overflow: 'hidden',
-              },
-            ]}
-            pointerEvents={isSearchFocused ? 'none' : 'auto'}
+      {/* 1. 主页面内容 (搜索激活时整体平滑下沉 translateY: 0 -> 24, scale: 1 -> 0.96) */}
+      <Animated.View
+        style={{
+          flex: 1,
+          transform: [
+            { translateY: pageSinkTranslateY },
+            { scale: pageSinkScale },
+          ],
+        }}
+        pointerEvents={isSearchFocused ? 'none' : 'auto'}
+      >
+        {dockerMode === 'compose' ? (
+          <ScrollView
+            style={styles.mainScrollView}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            nestedScrollEnabled={true}
+            keyboardShouldPersistTaps="handled"
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor={colors.accent}
+                colors={[colors.accent]}
+              />
+            }
           >
-            <Animated.View
-              style={{
-                opacity: topHeaderOpacity,
-                transform: [
-                  { translateY: topHeaderTranslateY },
-                  { scale: topHeaderScale },
-                ],
-              }}
-            >
+            {/* 顶部标题与统计概览 */}
+            <View style={styles.topHeaderSection}>
               <View style={styles.topNavHeaderRow}>
                 <View style={styles.titleWithBackRow}>
                   <View>
@@ -1098,7 +1363,6 @@ export default function DockerDetailsScreen({ navigation, route }) {
                 </View>
               </View>
               {renderSegmentBar()}
-              {/* Compose 概览与快捷操作 */}
               <View style={styles.composeHeroRow}>
                 <View style={styles.composeHeroCard}>
                   <Text style={styles.composeHeroNum}>{composeProjects.length}</Text>
@@ -1115,40 +1379,23 @@ export default function DockerDetailsScreen({ navigation, route }) {
                   <Text style={styles.composeHeroLabel}>未完全运行</Text>
                 </View>
               </View>
-            </Animated.View>
-          </Animated.View>
+            </View>
 
-          {/* Index 1: 全局统一圆角悬浮毛玻璃搜索岛 */}
-          <View style={[styles.stickyIslandWrapper, isSearchFocused && styles.stickyIslandFocused]}>
-            <GlassView
-              border={true}
-              style={[styles.floatingIslandCard, isSearchFocused && styles.floatingIslandCardFocused]}
-            >
-              <TouchableOpacity
-                activeOpacity={1}
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
-                onPress={handleFocusSearch}
-              >
-                <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
-                  <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
-                  <TextInput
-                    ref={composeSearchInputRef}
-                    style={styles.searchInput}
-                    placeholder="搜索 Compose 项目或服务..."
-                    placeholderTextColor={colors.muted}
-                    value={composeSearchQuery}
-                    onChangeText={setComposeSearchQuery}
-                    onFocus={handleFocusSearch}
-                    autoCapitalize="none"
-                  />
-                  {composeSearchQuery ? (
-                    <TouchableOpacity onPress={() => setComposeSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                      <X size={15} color={colors.sub} />
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
+            {/* 常规状态下的搜索岛 */}
+            <View style={styles.stickyIslandWrapper}>
+              <GlassView border={true} style={styles.floatingIslandCard}>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                  onPress={handleFocusSearch}
+                >
+                  <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
+                    <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
+                    <Text style={{ fontSize: 13, color: colors.muted, flex: 1 }}>
+                      搜索 Compose 项目或服务...
+                    </Text>
+                  </View>
 
-                {!isSearchFocused ? (
                   <TouchableOpacity
                     style={styles.newStackBtn}
                     onPress={() => {
@@ -1160,194 +1407,43 @@ export default function DockerDetailsScreen({ navigation, route }) {
                     <Plus size={15} color="#ffffff" style={{ marginRight: 4 }} />
                     <Text style={styles.newStackBtnText}>新建堆栈</Text>
                   </TouchableOpacity>
-                ) : (
-                  <TouchableOpacity
-                    style={styles.searchCancelBtn}
-                    onPress={handleExitSearch}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.searchCancelText}>取消</Text>
-                  </TouchableOpacity>
-                )}
-              </TouchableOpacity>
-            </GlassView>
-          </View>
+                </TouchableOpacity>
+              </GlassView>
+            </View>
 
-          {/* Index 2: Compose 堆栈列表 (在毛玻璃下向上滑动) */}
-          <View style={styles.cardsListSection}>
-            {filteredComposeProjects.map((project, idx) => {
-              const isRunning = project.status === 'running';
-              const isPartial = project.status === 'partial';
-              const isStopped = project.status === 'stopped';
-              const actLoading = composeActionLoading[project.name];
+            {/* Compose 堆栈列表 */}
+            <View style={styles.cardsListSection}>
+              {filteredComposeProjects.map(renderComposeItem)}
 
-              return (
-                <View key={project.name || idx} style={styles.composeCard}>
-                  {/* Header */}
-                  <View style={styles.composeCardHeader}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-                      <View style={[styles.composeIconBox, { backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : isPartial ? 'rgba(245, 158, 11, 0.12)' : 'rgba(148, 163, 184, 0.12)' }]}>
-                        <Layers size={18} color={isRunning ? colors.green : isPartial ? colors.amber : colors.sub} />
-                      </View>
-                      <View style={{ marginLeft: 10, flex: 1 }}>
-                        <Text style={styles.composeCardTitle} numberOfLines={1}>{project.name}</Text>
-                        <Text style={styles.composeCardPath} numberOfLines={1}>{project.yaml_file || project.path}</Text>
-                      </View>
-                    </View>
-
-                    {/* 状态徽标 */}
-                    <View style={[styles.composeStatusBadge, {
-                      backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : isPartial ? 'rgba(245, 158, 11, 0.12)' : 'rgba(148, 163, 184, 0.12)'
-                    }]}>
-                      <View style={[styles.statusDotSmall, {
-                        backgroundColor: isRunning ? colors.green : isPartial ? colors.amber : colors.sub
-                      }]} />
-                      <Text style={[styles.composeStatusBadgeText, {
-                        color: isRunning ? colors.green : isPartial ? colors.amber : colors.sub
-                      }]}>
-                        {isRunning ? '运行中' : isPartial ? '部分运行' : '已停止'}
-                        {project.total_count > 0 ? ` (${project.running_count || 0}/${project.total_count})` : ''}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {/* 包含服务标签列表 */}
-                  {project.services && project.services.length > 0 && (
-                    <View style={styles.composeServicesRow}>
-                      <Text style={styles.composeServicesLabel}>服务:</Text>
-                      <View style={styles.composeServiceTagsWrap}>
-                        {project.services.map((srv, sIdx) => (
-                          <View key={sIdx} style={styles.composeServiceChip}>
-                            <Text style={styles.composeServiceChipText}>{srv}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    </View>
-                  )}
-
-                  {/* Action Bar */}
-                  <View style={styles.composeActionsRow}>
-                    {/* 查看配置与日志 */}
-                    <View style={{ flexDirection: 'row', gap: 6 }}>
-                      <TouchableOpacity
-                        style={styles.composeConfigBtn}
-                        onPress={() => openYamlModal(project)}
-                        activeOpacity={0.7}
-                      >
-                        <FileCode size={13} color={colors.accent} style={{ marginRight: 4 }} />
-                        <Text style={styles.composeConfigBtnText}>配置</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={styles.composeConfigBtn}
-                        onPress={() => openComposeLogs(project)}
-                        activeOpacity={0.7}
-                      >
-                        <Terminal size={13} color={colors.accent} style={{ marginRight: 4 }} />
-                        <Text style={styles.composeConfigBtnText}>日志</Text>
-                      </TouchableOpacity>
-                    </View>
-
-                    {/* 生命周期操作 (Up, Down, Restart, Pull) */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <TouchableOpacity
-                        style={styles.circleActionBtn}
-                        onPress={() => executeComposeAction(project.name, 'pull')}
-                        disabled={!!actLoading}
-                        activeOpacity={0.7}
-                        accessibilityLabel="拉取最新镜像"
-                      >
-                        {actLoading === 'pull' ? (
-                          <ActivityIndicator size="small" color={colors.amber} />
-                        ) : (
-                          <ArrowUp size={14} color="#f59e0b" />
-                        )}
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={styles.circleActionBtn}
-                        onPress={() => executeComposeAction(project.name, 'restart')}
-                        disabled={!!actLoading}
-                        activeOpacity={0.7}
-                        accessibilityLabel="重启堆栈"
-                      >
-                        {actLoading === 'restart' ? (
-                          <ActivityIndicator size="small" color={colors.sub} />
-                        ) : (
-                          <RotateCw size={14} color={colors.sub} />
-                        )}
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={[styles.circleActionBtn, {
-                          backgroundColor: isRunning ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)'
-                        }]}
-                        onPress={() => executeComposeAction(project.name, isRunning ? 'down' : 'up')}
-                        disabled={!!actLoading}
-                        activeOpacity={0.7}
-                      >
-                        {actLoading === (isRunning ? 'down' : 'up') ? (
-                          <ActivityIndicator size="small" color={isRunning ? colors.red : colors.green} />
-                        ) : isRunning ? (
-                          <Power size={14} color={colors.red} />
-                        ) : (
-                          <Play size={14} color={colors.green} />
-                        )}
-                      </TouchableOpacity>
-                    </View>
-                  </View>
+              {filteredComposeProjects.length === 0 && !composeLoading && (
+                <View style={styles.emptyContainer}>
+                  <Layers size={42} color={colors.muted} style={{ marginBottom: 12 }} />
+                  <Text style={styles.emptyTitle}>暂无 Compose 堆栈</Text>
+                  <Text style={styles.emptySub}>
+                    点击右上角「新建堆栈」创建新项目，或在 Unraid compose.manager 插件中添加。
+                  </Text>
                 </View>
-              );
-            })}
-
-            {filteredComposeProjects.length === 0 && !composeLoading && (
-              <View style={styles.emptyContainer}>
-                <Layers size={42} color={colors.muted} style={{ marginBottom: 12 }} />
-                <Text style={styles.emptyTitle}>暂无 Compose 堆栈</Text>
-                <Text style={styles.emptySub}>
-                  点击右上角「新建堆栈」创建新项目，或在 Unraid compose.manager 插件中添加。
-                </Text>
-              </View>
-            )}
-          </View>
-        </ScrollView>
-      ) : (
-        <ScrollView
-          style={styles.mainScrollView}
-          contentContainerStyle={styles.scrollContent}
-          stickyHeaderIndices={[1]}
-          showsVerticalScrollIndicator={false}
-          nestedScrollEnabled={true}
-          keyboardShouldPersistTaps="handled"
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={colors.accent}
-              colors={[colors.accent]}
-            />
-          }
-        >
-          {/* Index 0: 搜索框以上的内容 (随页面上滑而向上滚动移出屏幕，搜索聚焦时平滑下沉隐藏) */}
-          <Animated.View
-            style={[
-              styles.topHeaderSection,
-              {
-                maxHeight: topHeaderHeight,
-                overflow: 'hidden',
-              },
-            ]}
-            pointerEvents={isSearchFocused ? 'none' : 'auto'}
+              )}
+            </View>
+          </ScrollView>
+        ) : (
+          <ScrollView
+            style={styles.mainScrollView}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            nestedScrollEnabled={true}
+            keyboardShouldPersistTaps="handled"
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor={colors.accent}
+                colors={[colors.accent]}
+              />
+            }
           >
-            <Animated.View
-              style={{
-                opacity: topHeaderOpacity,
-                transform: [
-                  { translateY: topHeaderTranslateY },
-                  { scale: topHeaderScale },
-                ],
-              }}
-            >
+            {/* 顶部标题与 Bento 概览看板 */}
+            <View style={styles.topHeaderSection}>
               <View style={styles.topNavHeaderRow}>
                 <View style={styles.titleWithBackRow}>
                   <View>
@@ -1359,7 +1455,6 @@ export default function DockerDetailsScreen({ navigation, route }) {
                 </View>
               </View>
               {renderSegmentBar()}
-              {/* 1. 顶部 Bento 概览看板 (Hero Stats) */}
               <View style={styles.heroRow}>
                 <View style={styles.heroCard}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
@@ -1385,313 +1480,271 @@ export default function DockerDetailsScreen({ navigation, route }) {
                   <Text style={[styles.heroNum, { color: colors.tempWarm }]}>{totalCpuAgg}%</Text>
                 </View>
               </View>
-            </Animated.View>
-          </Animated.View>
+            </View>
 
-          {/* Index 1: 全局统一圆角悬浮毛玻璃搜索岛 */}
-          <View style={[styles.stickyIslandWrapper, isSearchFocused && styles.stickyIslandFocused]}>
-            <GlassView
-              border={true}
-              style={[styles.floatingIslandCard, isSearchFocused && styles.floatingIslandCardFocused]}
-            >
-              <TouchableOpacity
-                activeOpacity={1}
-                style={styles.searchBoxRow}
-                onPress={handleFocusSearch}
-              >
-                <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
-                  <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
-                  <TextInput
-                    ref={searchInputRef}
-                    style={styles.searchInput}
-                    placeholder="搜索容器名称、镜像或端口..."
-                    placeholderTextColor={colors.muted}
-                    value={searchQuery}
-                    onChangeText={setSearchQuery}
-                    onFocus={handleFocusSearch}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                  {searchQuery ? (
-                    <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                      <X size={15} color={colors.sub} />
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
-
-                {isSearchFocused && (
-                  <TouchableOpacity
-                    style={styles.searchCancelBtn}
-                    onPress={handleExitSearch}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.searchCancelText}>取消</Text>
-                  </TouchableOpacity>
-                )}
-              </TouchableOpacity>
-
-              <View style={styles.filterRow}>
-                <ScrollView
-                  horizontal
-                  nestedScrollEnabled={true}
-                  keyboardShouldPersistTaps="handled"
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.filterScrollContainer}
+            {/* 常规状态下的搜索岛 */}
+            <View style={styles.stickyIslandWrapper}>
+              <GlassView border={true} style={styles.floatingIslandCard}>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.searchBoxRow}
+                  onPress={handleFocusSearch}
                 >
-                  <TouchableOpacity
-                    style={[styles.tabBtn, statusFilter === 'all' && styles.tabBtnActive]}
-                    onPress={() => setStatusFilter('all')}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.tabBtnText, statusFilter === 'all' && styles.tabBtnTextActive]}>
-                      全部 {dockers.length}
+                  <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
+                    <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
+                    <Text style={{ fontSize: 13, color: colors.muted, flex: 1 }}>
+                      搜索容器名称、镜像或端口...
                     </Text>
-                  </TouchableOpacity>
+                  </View>
+                </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[styles.tabBtn, statusFilter === 'running' && styles.tabBtnActive]}
-                    onPress={() => setStatusFilter('running')}
-                    activeOpacity={0.7}
+                {/* 筛选标签条：扩大点击与横滑判定区域 */}
+                <View style={styles.filterRow}>
+                  <ScrollView
+                    horizontal
+                    nestedScrollEnabled={true}
+                    keyboardShouldPersistTaps="handled"
+                    showsHorizontalScrollIndicator={false}
+                    overScrollMode="never"
+                    contentContainerStyle={styles.filterScrollContainer}
                   >
-                    <Text style={[styles.tabBtnText, statusFilter === 'running' && styles.tabBtnTextActive]}>
-                      运行中 {runningCount}
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.tabBtn, statusFilter === 'stopped' && styles.tabBtnActive]}
-                    onPress={() => setStatusFilter('stopped')}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.tabBtnText, statusFilter === 'stopped' && styles.tabBtnTextActive]}>
-                      已停止 {stoppedCount}
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.tabBtn,
-                      statusFilter === 'updates' && styles.tabBtnActive,
-                      updateCount > 0 && styles.tabBtnUpdate,
-                      updateCount > 0 && statusFilter === 'updates' && styles.tabBtnUpdateActive,
-                    ]}
-                    onPress={() => setStatusFilter('updates')}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[
-                      styles.tabBtnText,
-                      statusFilter === 'updates' && styles.tabBtnTextActive,
-                      updateCount > 0 && statusFilter !== 'updates' && { color: '#f59e0b', fontWeight: 'bold' },
-                      updateCount > 0 && statusFilter === 'updates' && { color: '#ffffff', fontWeight: 'bold' },
-                    ]}>
-                      更新就绪 {updateCount}
-                    </Text>
-                  </TouchableOpacity>
-
-                  {/* 检查更新按钮 */}
-                  <TouchableOpacity
-                    style={[styles.tabBtn, styles.checkUpdateBtn]}
-                    onPress={handleCheckDockerUpdates}
-                    disabled={checkingUpdates}
-                    activeOpacity={0.7}
-                  >
-                    {checkingUpdates ? (
-                      <ActivityIndicator size="small" color="#f59e0b" style={{ marginRight: 4 }} />
-                    ) : (
-                      <RefreshCw size={12} color="#f59e0b" style={{ marginRight: 4 }} />
-                    )}
-                    <Text style={[styles.tabBtnText, { color: '#f59e0b', fontWeight: '600' }]}>
-                      {checkingUpdates ? '检测中...' : '检查更新'}
-                    </Text>
-                  </TouchableOpacity>
-
-                  {/* 排序切换 */}
-                  <TouchableOpacity
-                    style={styles.sortToggleBtn}
-                    onPress={() => {
-                      const next = sortRule === 'name' ? 'status' : sortRule === 'status' ? 'cpu' : 'name';
-                      setSortRule(next);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <ArrowUpDown size={12} color={colors.accent} style={{ marginRight: 4 }} />
-                    <Text style={styles.sortToggleText}>
-                      {sortRule === 'name' ? '按名称' : sortRule === 'status' ? '按状态' : '按负载'}
-                    </Text>
-                  </TouchableOpacity>
-                </ScrollView>
-              </View>
-            </GlassView>
-          </View>
-
-          {/* Index 2: 现代化容器卡片列表 (在毛玻璃下向上滑动) */}
-          <View style={styles.cardsListSection}>
-            {processedDockers.map((docker, index) => {
-              const rawMem = String(docker.memory || docker.mem || '');
-              const shortMemory = rawMem.includes(' / ') ? rawMem.split(' / ')[0].trim() : (rawMem || '0B');
-              const cpuVal = docker.cpu !== undefined && docker.cpu !== null ? String(docker.cpu) : '0%';
-              const cpuText = cpuVal.includes('%') ? cpuVal : `${cpuVal}%`;
-              const isRunning = docker.status === 'running';
-              const defaultWebInfo = { targetUrl: '', proxyUrl: '', rawInternalUrl: '', isCustom: false, isProxy: false, isFullUrl: false, alias: '' };
-              const webUiInfo = (typeof resolveDockerWebUrl === 'function')
-                ? (resolveDockerWebUrl(docker, serverUrl, proxyConfig, dockerAliases) || defaultWebInfo)
-                : defaultWebInfo;
-              const hasWebAccess = !!(webUiInfo.targetUrl || docker.port || docker.ports);
-              const hasCustomAlias = !!dockerAliases[docker.name];
-              const avatarBg = getAvatarColor(docker.name);
-              const initial = (docker.name || 'D').slice(0, 2).toUpperCase();
-
-              return (
-                <View key={docker.name || index} style={styles.dockerCard}>
-                  {/* 上层：头像 + 名称 + 状态呼吸灯 + 端口 */}
-                  <View style={styles.cardUpperTier}>
-                    <View style={[styles.avatar, { backgroundColor: avatarBg }]}>
-                      <Text style={styles.avatarText}>{initial}</Text>
-                    </View>
-
-                    <View style={styles.nameBlock}>
-                      <Text style={styles.dockerTitle} numberOfLines={1}>
-                        {docker.name}
+                    <TouchableOpacity
+                      style={[styles.tabBtn, statusFilter === 'all' && styles.tabBtnActive]}
+                      onPress={() => setStatusFilter('all')}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                    >
+                      <Text style={[styles.tabBtnText, statusFilter === 'all' && styles.tabBtnTextActive]}>
+                        全部 {dockers.length}
                       </Text>
-                      <View style={styles.metaBadgeRow}>
-                        <View style={[styles.statusBadge, { backgroundColor: isRunning ? 'rgba(16, 185, 129, 0.12)' : 'rgba(148, 163, 184, 0.12)' }]}>
-                          <View style={[styles.statusDotSmall, { backgroundColor: isRunning ? colors.green : colors.sub }]} />
-                          <Text style={[styles.statusBadgeText, { color: isRunning ? colors.green : colors.sub }]}>
-                            {isRunning ? '运行中' : '已停止'}
-                          </Text>
-                        </View>
+                    </TouchableOpacity>
 
-                        {docker.update_available && (
-                          <TouchableOpacity
-                            style={[
-                              styles.updateBadge,
-                              docker.update_status === 'ready' && styles.updateBadgeReady
-                            ]}
-                            onPress={() => handleUpdateDocker(docker.name, docker.update_status)}
-                            disabled={updatingDocker === docker.name}
-                            activeOpacity={0.7}
-                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                            accessibilityLabel={docker.update_status_text || "可更新"}
-                          >
-                            {updatingDocker === docker.name ? (
-                              <ActivityIndicator size="small" color={docker.update_status === 'ready' ? "#10b981" : "#f59e0b"} style={{ marginRight: 4 }} />
-                            ) : docker.update_status === 'ready' ? (
-                              <RotateCw size={11} color="#10b981" style={{ marginRight: 3 }} />
-                            ) : (
-                              <ArrowUp size={11} color="#f59e0b" style={{ marginRight: 3 }} />
-                            )}
-                            <Text style={[
-                              styles.updateBadgeText,
-                              docker.update_status === 'ready' && styles.updateBadgeTextReady
-                            ]}>
-                              {updatingDocker === docker.name 
-                                ? '更新中...' 
-                                : (docker.update_status === 'ready' ? '更新就绪 · 升级' : '更新 · 升级')}
-                            </Text>
-                          </TouchableOpacity>
-                        )}
+                    <TouchableOpacity
+                      style={[styles.tabBtn, statusFilter === 'running' && styles.tabBtnActive]}
+                      onPress={() => setStatusFilter('running')}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                    >
+                      <Text style={[styles.tabBtnText, statusFilter === 'running' && styles.tabBtnTextActive]}>
+                        运行中 {runningCount}
+                      </Text>
+                    </TouchableOpacity>
 
-                        {docker.port ? (
-                          <View style={styles.portBadge}>
-                            <Text style={styles.portBadgeText}>:{docker.port}</Text>
-                          </View>
-                        ) : null}
-                      </View>
-                    </View>
+                    <TouchableOpacity
+                      style={[styles.tabBtn, statusFilter === 'stopped' && styles.tabBtnActive]}
+                      onPress={() => setStatusFilter('stopped')}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                    >
+                      <Text style={[styles.tabBtnText, statusFilter === 'stopped' && styles.tabBtnTextActive]}>
+                        已停止 {stoppedCount}
+                      </Text>
+                    </TouchableOpacity>
 
-                    {/* 资源胶囊 */}
-                    {isRunning ? (
-                      <View style={styles.resourcePillsCol}>
-                        <View style={styles.resourcePill}>
-                          <Cpu size={10} color={colors.tempWarm} style={{ marginRight: 3 }} />
-                          <Text style={[styles.resourcePillText, { color: colors.tempWarm }]}>{cpuText}</Text>
-                        </View>
-                        <View style={[styles.resourcePill, { marginTop: 4 }]}>
-                          <Database size={10} color={colors.accent} style={{ marginRight: 3 }} />
-                          <Text style={[styles.resourcePillText, { color: colors.accent }]}>{shortMemory}</Text>
-                        </View>
-                      </View>
-                    ) : null}
-                  </View>
+                    <TouchableOpacity
+                      style={[
+                        styles.tabBtn,
+                        statusFilter === 'updates' && styles.tabBtnActive,
+                        updateCount > 0 && styles.tabBtnUpdate,
+                        updateCount > 0 && statusFilter === 'updates' && styles.tabBtnUpdateActive,
+                      ]}
+                      onPress={() => setStatusFilter('updates')}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                    >
+                      <Text style={[
+                        styles.tabBtnText,
+                        statusFilter === 'updates' && styles.tabBtnTextActive,
+                        updateCount > 0 && statusFilter !== 'updates' && { color: '#f59e0b', fontWeight: 'bold' },
+                        updateCount > 0 && statusFilter === 'updates' && { color: '#ffffff', fontWeight: 'bold' },
+                      ]}>
+                        更新就绪 {updateCount}
+                      </Text>
+                    </TouchableOpacity>
 
-                  {/* 下层：Action Bar 交互操作栏 */}
-                  <View style={styles.cardLowerTier}>
-                    <View style={styles.webActionGroup}>
-                      {hasWebAccess ? (
-                        <TouchableOpacity
-                          style={styles.webLaunchPill}
-                          onPress={() => handleLaunchWebUI(docker, webUiInfo)}
-                          onLongPress={() => handleShowWebUiOptions(docker, webUiInfo)}
-                          activeOpacity={0.7}
-                        >
-                          {openingDocker === docker.name ? (
-                            <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 5 }} />
-                          ) : (
-                            <Globe size={13} color="#ffffff" style={{ marginRight: 5 }} />
-                          )}
-                          <Text style={styles.webLaunchPillText}>Web</Text>
-                          <ExternalLink size={11} color="#ffffff" style={{ marginLeft: 3, opacity: 0.85 }} />
-                        </TouchableOpacity>
-                      ) : null}
+                    {/* 检查更新按钮 */}
+                    <TouchableOpacity
+                      style={[styles.tabBtn, styles.checkUpdateBtn]}
+                      onPress={handleCheckDockerUpdates}
+                      disabled={checkingUpdates}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                    >
+                      {checkingUpdates ? (
+                        <ActivityIndicator size="small" color="#f59e0b" style={{ marginRight: 4 }} />
+                      ) : (
+                        <RefreshCw size={12} color="#f59e0b" style={{ marginRight: 4 }} />
+                      )}
+                      <Text style={[styles.tabBtnText, { color: '#f59e0b', fontWeight: '600' }]}>
+                        {checkingUpdates ? '检测中...' : '检查更新'}
+                      </Text>
+                    </TouchableOpacity>
 
-                      <TouchableOpacity
-                        style={[styles.customConfigPill, hasCustomAlias && styles.customConfigPillActive]}
-                        onPress={() => handleOpenAliasModal(docker, webUiInfo)}
-                        activeOpacity={0.7}
-                      >
-                        <Sliders size={12} color={hasCustomAlias ? colors.accent : colors.sub} style={{ marginRight: 4 }} />
-                        <Text style={[styles.customConfigPillText, hasCustomAlias && { color: colors.accent, fontWeight: 'bold' }]}>
-                          {hasCustomAlias ? '已定制' : '定制'}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-
-                    {/* 容器操作按键群 */}
-                    <View style={styles.mgmtBtnGroup}>
-                      <TouchableOpacity
-                        style={styles.circleActionBtn}
-                        onPress={() => openLogsModal(docker)}
-                        activeOpacity={0.7}
-                      >
-                        <Terminal size={14} color={colors.accent} />
-                      </TouchableOpacity>
-
-                      {isRunning ? (
-                        <TouchableOpacity
-                          style={styles.circleActionBtn}
-                          onPress={() => handleRestartDocker(docker.name)}
-                          activeOpacity={0.7}
-                        >
-                          <RotateCw size={14} color={colors.sub} />
-                        </TouchableOpacity>
-                      ) : null}
-
-                      <TouchableOpacity
-                        style={[styles.circleActionBtn, { backgroundColor: isRunning ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)' }]}
-                        onPress={() => (isRunning ? handleStopDocker(docker.name) : handleStartDocker(docker.name))}
-                        activeOpacity={0.7}
-                      >
-                        {isRunning ? (
-                          <Power size={14} color={colors.red} />
-                        ) : (
-                          <Play size={14} color={colors.green} />
-                        )}
-                      </TouchableOpacity>
-                    </View>
-                  </View>
+                    {/* 排序切换 */}
+                    <TouchableOpacity
+                      style={styles.sortToggleBtn}
+                      onPress={() => {
+                        const next = sortRule === 'name' ? 'status' : sortRule === 'status' ? 'cpu' : 'name';
+                        setSortRule(next);
+                      }}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                    >
+                      <ArrowUpDown size={12} color={colors.accent} style={{ marginRight: 4 }} />
+                      <Text style={styles.sortToggleText}>
+                        {sortRule === 'name' ? '按名称' : sortRule === 'status' ? '按状态' : '按负载'}
+                      </Text>
+                    </TouchableOpacity>
+                  </ScrollView>
                 </View>
-              );
-            })}
+              </GlassView>
+            </View>
 
-            {processedDockers.length === 0 ? (
-              <View style={styles.emptyContainer}>
-                <Box size={42} color={colors.muted} style={{ marginBottom: 12 }} />
-                <Text style={styles.emptyTitle}>未匹配到任何容器</Text>
-                <Text style={styles.emptySub}>尝试切换上方筛选标签或搜索关键字</Text>
-              </View>
+            {/* 容器卡片列表 */}
+            <View style={styles.cardsListSection}>
+              {processedDockers.map(renderDockerItem)}
+
+              {processedDockers.length === 0 ? (
+                <View style={styles.emptyContainer}>
+                  <Box size={42} color={colors.muted} style={{ marginBottom: 12 }} />
+                  <Text style={styles.emptyTitle}>未匹配到任何容器</Text>
+                  <Text style={styles.emptySub}>尝试切换上方筛选标签或搜索关键字</Text>
+                </View>
+              ) : null}
+            </View>
+          </ScrollView>
+        )}
+      </Animated.View>
+
+      {/* 2. 搜索聚焦时的全屏模糊沉降遮罩 (如同图2中的下潜蒙层) */}
+      {isSearchFocused && (
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              opacity: searchAnim,
+              zIndex: 120,
+            },
+          ]}
+        >
+          <BlurView
+            intensity={Platform.OS === 'android' ? 25 : 35}
+            tint={isDark ? 'dark' : 'light'}
+            style={StyleSheet.absoluteFill}
+          />
+          <View
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: isDark ? 'rgba(15, 23, 42, 0.55)' : 'rgba(0, 0, 0, 0.35)' },
+            ]}
+          />
+          <Pressable style={StyleSheet.absoluteFill} onPress={handleExitSearch} />
+        </Animated.View>
+      )}
+
+      {/* 3. 搜索聚焦时悬浮于顶部的光效搜索岛 (保持图三的精致光效与安全区距离) */}
+      {isSearchFocused && (
+        <Animated.View
+          style={[
+            styles.floatingSearchIsland,
+            {
+              top: STATUS_BAR_HEIGHT + 10,
+              opacity: searchAnim,
+              transform: [
+                {
+                  translateY: searchAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [12, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <View style={styles.floatingSearchGlowCard}>
+            <Search size={16} color={colors.accent} style={{ marginRight: 8 }} />
+            <TextInput
+              ref={focusedSearchInputRef}
+              style={styles.floatingSearchInput}
+              placeholder={dockerMode === 'compose' ? "搜索 Compose 项目或服务..." : "搜索容器名称、镜像或端口..."}
+              placeholderTextColor={colors.muted}
+              value={dockerMode === 'compose' ? composeSearchQuery : searchQuery}
+              onChangeText={dockerMode === 'compose' ? setComposeSearchQuery : setSearchQuery}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoFocus={true}
+            />
+            {(dockerMode === 'compose' ? composeSearchQuery : searchQuery) ? (
+              <TouchableOpacity
+                onPress={() => {
+                  if (dockerMode === 'compose') setComposeSearchQuery('');
+                  else setSearchQuery('');
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={{ padding: 4 }}
+              >
+                <X size={15} color={colors.sub} />
+              </TouchableOpacity>
             ) : null}
+            <TouchableOpacity
+              style={styles.floatingCancelBtn}
+              onPress={handleExitSearch}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.floatingCancelText}>取消</Text>
+            </TouchableOpacity>
           </View>
-        </ScrollView>
+        </Animated.View>
+      )}
+
+      {/* 4. 搜索结果显示在搜索框下面 */}
+      {isSearchFocused && (
+        <Animated.View
+          style={[
+            styles.floatingSearchResultsArea,
+            {
+              top: STATUS_BAR_HEIGHT + 66,
+              opacity: searchAnim,
+              transform: [
+                {
+                  translateY: searchAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [16, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: 160 }}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {dockerMode === 'compose' ? (
+              filteredComposeProjects.length > 0 ? (
+                filteredComposeProjects.map(renderComposeItem)
+              ) : (
+                <View style={styles.searchEmptyCard}>
+                  <Search size={32} color={colors.muted} style={{ marginBottom: 8 }} />
+                  <Text style={styles.searchEmptyTitle}>未找到相关 Compose 堆栈</Text>
+                  <Text style={styles.searchEmptySub}>换个关键词试试看吧</Text>
+                </View>
+              )
+            ) : (
+              processedDockers.length > 0 ? (
+                processedDockers.map(renderDockerItem)
+              ) : (
+                <View style={styles.searchEmptyCard}>
+                  <Search size={32} color={colors.muted} style={{ marginBottom: 8 }} />
+                  <Text style={styles.searchEmptyTitle}>未找到相关容器</Text>
+                  <Text style={styles.searchEmptySub}>换个名称、镜像或端口试试看吧</Text>
+                </View>
+              )
+            )}
+          </ScrollView>
+        </Animated.View>
       )}
 
       {/* 4. 自定义反代配置弹窗 */}
@@ -2067,14 +2120,6 @@ export default function DockerDetailsScreen({ navigation, route }) {
         onConfirm={confirmDialog.onConfirm}
         onCancel={() => setConfirmDialog(prev => ({ ...prev, visible: false }))}
       />
-
-      {/* 搜索聚焦时的全屏拦截蒙层：点击屏幕其余任意区域立即退出搜索聚焦 */}
-      {isSearchFocused && (
-        <Pressable
-          style={styles.searchBackdropOverlay}
-          onPress={handleExitSearch}
-        />
-      )}
     </View>
   );
 }
@@ -2317,8 +2362,8 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   filterScrollContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingVertical: 2,
+    gap: 8,
+    paddingVertical: 6,
     paddingRight: 16,
   },
   checkUpdateBtn: {
@@ -2331,18 +2376,21 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    minHeight: 48,
+    paddingTop: 6,
+    paddingBottom: 2,
   },
   tabsRow: {
     flexDirection: 'row',
-    gap: 6,
+    gap: 8,
   },
   tabBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: 20,
-    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
     borderWidth: 1,
-    borderColor: isDark ? 'rgba(255, 255, 255, 0.09)' : 'rgba(0, 0, 0, 0.06)',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)',
   },
   tabBtnActive: {
     backgroundColor: colors.accent,
@@ -2363,6 +2411,68 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   },
   tabBtnTextActive: {
     color: '#ffffff',
+  },
+  // Floating Search with Glowing Halo (图3精致光效)
+  floatingSearchIsland: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    zIndex: 150,
+  },
+  floatingSearchGlowCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 48,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: isDark ? 'rgba(30, 41, 59, 0.96)' : 'rgba(255, 255, 255, 0.98)',
+    borderWidth: 1.5,
+    borderColor: isDark ? 'rgba(56, 189, 248, 0.7)' : 'rgba(14, 165, 233, 0.65)',
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.45,
+    shadowRadius: 14,
+    elevation: 14,
+  },
+  floatingSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: colors.textStrong,
+    paddingVertical: 0,
+  },
+  floatingCancelBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    marginLeft: 4,
+  },
+  floatingCancelText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.accent,
+  },
+  floatingSearchResultsArea: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 140,
+  },
+  searchEmptyCard: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 20,
+  },
+  searchEmptyTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textStrong,
+    marginBottom: 6,
+  },
+  searchEmptySub: {
+    fontSize: 13,
+    color: colors.sub,
+    textAlign: 'center',
   },
   sortToggleBtn: {
     flexDirection: 'row',
