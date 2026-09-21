@@ -41,10 +41,9 @@ export default function DockerDetailsScreen({ navigation, route }) {
 
   const handleFocusSearch = () => {
     setIsSearchFocused(true);
-    Animated.spring(searchAnim, {
+    Animated.timing(searchAnim, {
       toValue: 1,
-      friction: 9,
-      tension: 50,
+      duration: 220,
       useNativeDriver: false,
     }).start();
     setTimeout(() => {
@@ -53,36 +52,34 @@ export default function DockerDetailsScreen({ navigation, route }) {
       } else {
         searchInputRef.current?.focus();
       }
-    }, 50);
+    }, 40);
   };
 
   const handleExitSearch = () => {
+    setIsSearchFocused(false);
     Keyboard.dismiss();
     searchInputRef.current?.blur();
     composeSearchInputRef.current?.blur();
     setSearchQuery('');
     setComposeSearchQuery('');
-    Animated.spring(searchAnim, {
+    Animated.timing(searchAnim, {
       toValue: 0,
-      friction: 9,
-      tension: 50,
+      duration: 200,
       useNativeDriver: false,
-    }).start(() => {
-      setIsSearchFocused(false);
-    });
+    }).start();
   };
 
   const topHeaderMaxHeight = searchAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [220, 0],
+    outputRange: [240, STATUS_BAR_HEIGHT + 8],
   });
   const topHeaderOpacity = searchAnim.interpolate({
-    inputRange: [0, 0.7, 1],
-    outputRange: [1, 0.2, 0],
+    inputRange: [0, 0.6, 1],
+    outputRange: [1, 0.1, 0],
   });
   const topHeaderTranslateY = searchAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 45],
+    outputRange: [0, 30],
   });
 
   // 顶部分段切换：独立容器 vs Compose 堆栈
@@ -1031,9 +1028,9 @@ export default function DockerDetailsScreen({ navigation, route }) {
 
   return (
     <View style={styles.container}>
-      {/* 0. 顶部状态栏氛围渐变过渡层 (消除全透明突兀割裂，使卡片向上平滑隐入顶端背景) */}
-      <View style={styles.topGradientFade} pointerEvents="none">
-        <Svg height={STATUS_BAR_HEIGHT + 24} width="100%" pointerEvents="none">
+      {/* 0. 顶部状态栏氛围渐变过渡层 */}
+      <View style={[styles.topGradientFade, isSearchFocused && { opacity: 0 }]} pointerEvents="none">
+        <Svg height={STATUS_BAR_HEIGHT} width="100%" pointerEvents="none">
           <Defs>
             <LinearGradient id="topAtmosphereDocker" x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0" stopColor={colors.bg} stopOpacity="1" />
@@ -1042,7 +1039,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
               <Stop offset="1" stopColor={colors.bg} stopOpacity="0" />
             </LinearGradient>
           </Defs>
-          <Rect x="0" y="0" width="100%" height={STATUS_BAR_HEIGHT + 24} fill="url(#topAtmosphereDocker)" />
+          <Rect x="0" y="0" width="100%" height={STATUS_BAR_HEIGHT} fill="url(#topAtmosphereDocker)" />
         </Svg>
       </View>
 
@@ -2163,8 +2160,8 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: STATUS_BAR_HEIGHT + 24,
-    zIndex: 99,
+    height: STATUS_BAR_HEIGHT,
+    zIndex: 10,
   },
   mainScrollView: {
     flex: 1,
@@ -2181,9 +2178,13 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     paddingBottom: 4,
   },
   searchBackdropOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.35)',
-    zIndex: 18,
+    position: 'absolute',
+    top: STATUS_BAR_HEIGHT + 115,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'transparent',
+    zIndex: 50,
   },
   titleWithBackRow: {
     flexDirection: 'row',

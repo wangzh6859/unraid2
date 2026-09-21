@@ -147,42 +147,39 @@ export default function FilesScreen({ navigation }) {
 
   const handleFocusSearch = () => {
     setIsSearchFocused(true);
-    Animated.spring(searchAnim, {
+    Animated.timing(searchAnim, {
       toValue: 1,
-      friction: 9,
-      tension: 50,
+      duration: 220,
       useNativeDriver: false,
     }).start();
     setTimeout(() => {
       searchInputRef.current?.focus();
-    }, 50);
+    }, 40);
   };
 
   const handleExitSearch = () => {
+    setIsSearchFocused(false);
     Keyboard.dismiss();
     searchInputRef.current?.blur();
     setSearchQuery('');
-    Animated.spring(searchAnim, {
+    Animated.timing(searchAnim, {
       toValue: 0,
-      friction: 9,
-      tension: 50,
+      duration: 200,
       useNativeDriver: false,
-    }).start(() => {
-      setIsSearchFocused(false);
-    });
+    }).start();
   };
 
   const topHeaderMaxHeight = searchAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [120, 0],
+    outputRange: [120, STATUS_BAR_HEIGHT + 8],
   });
   const topHeaderOpacity = searchAnim.interpolate({
-    inputRange: [0, 0.7, 1],
-    outputRange: [1, 0.2, 0],
+    inputRange: [0, 0.6, 1],
+    outputRange: [1, 0.1, 0],
   });
   const topHeaderTranslateY = searchAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 45],
+    outputRange: [0, 25],
   });
 
   // Selection & UI Modals
@@ -1833,8 +1830,8 @@ export default function FilesScreen({ navigation }) {
   return (
     <View style={styles.fileContainer}>
       {/* 0. 顶部状态栏氛围渐变过渡层 */}
-      <View style={styles.topGradientFade} pointerEvents="none">
-        <Svg height={STATUS_BAR_HEIGHT + 24} width="100%" pointerEvents="none">
+      <View style={[styles.topGradientFade, isSearchFocused && { opacity: 0 }]} pointerEvents="none">
+        <Svg height={STATUS_BAR_HEIGHT} width="100%" pointerEvents="none">
           <Defs>
             <LinearGradient id="topAtmosphereFiles" x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0" stopColor={colors.bg} stopOpacity="1" />
@@ -1843,7 +1840,7 @@ export default function FilesScreen({ navigation }) {
               <Stop offset="1" stopColor={colors.bg} stopOpacity="0" />
             </LinearGradient>
           </Defs>
-          <Rect x="0" y="0" width="100%" height={STATUS_BAR_HEIGHT + 24} fill="url(#topAtmosphereFiles)" />
+          <Rect x="0" y="0" width="100%" height={STATUS_BAR_HEIGHT} fill="url(#topAtmosphereFiles)" />
         </Svg>
       </View>
 
@@ -2122,16 +2119,17 @@ export default function FilesScreen({ navigation }) {
         />
       )}
 
-      {/* 现代化悬浮毛玻璃新建操作菜单 (FloatingGlassActionMenu) - 全局原生 Modal 彻底遮盖底部 Dock 栏 */}
+      {/* 现代化悬浮新建操作菜单 (FloatingActionMenu) - 全局原生 Modal 且 statusBarTranslucent 保证坐标与状态栏 100% 贴合 */}
       <Modal
         visible={isMenuVisible}
         transparent={true}
+        statusBarTranslucent={true}
         animationType="fade"
         onRequestClose={() => setIsMenuVisible(false)}
       >
         <View style={styles.menuOverlayContainer}>
           <Pressable style={styles.menuBackdrop} onPress={() => setIsMenuVisible(false)} />
-          <GlassView border={true} borderRadius={20} style={styles.dropdownMenu}>
+          <View style={styles.dropdownMenu}>
             <TouchableOpacity
               style={styles.menuItem}
               onPress={() => {
@@ -2178,7 +2176,7 @@ export default function FilesScreen({ navigation }) {
               </View>
               <Text style={styles.menuText}>刷新目录</Text>
             </TouchableOpacity>
-          </GlassView>
+          </View>
         </View>
       </Modal>
 
@@ -2719,8 +2717,8 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: STATUS_BAR_HEIGHT + 24,
-    zIndex: 100,
+    height: STATUS_BAR_HEIGHT,
+    zIndex: 10,
   },
   mainScrollView: {
     flex: 1,
@@ -2741,9 +2739,13 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     paddingBottom: 4,
   },
   searchBackdropOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.35)',
-    zIndex: 18,
+    position: 'absolute',
+    top: STATUS_BAR_HEIGHT + 68,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'transparent',
+    zIndex: 50,
   },
   topNavActions: {
     flexDirection: 'row',
@@ -3027,20 +3029,23 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   },
   menuBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    backgroundColor: 'transparent',
   },
   dropdownMenu: {
     position: 'absolute',
-    top: STATUS_BAR_HEIGHT + 52,
+    top: STATUS_BAR_HEIGHT + 45,
     right: 16,
-    borderRadius: 20,
+    borderRadius: 16,
     padding: 6,
-    width: 175,
-    elevation: 16,
+    width: 165,
+    backgroundColor: isDark ? 'rgba(30, 41, 59, 0.94)' : 'rgba(255, 255, 255, 0.94)',
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
+    elevation: 12,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: isDark ? 0.4 : 0.15,
-    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: isDark ? 0.35 : 0.12,
+    shadowRadius: 14,
     zIndex: 100000,
     overflow: 'hidden',
   },

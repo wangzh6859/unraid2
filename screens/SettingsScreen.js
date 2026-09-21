@@ -1775,8 +1775,8 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: STATUS_BAR_HEIGHT + 24,
-    zIndex: 100,
+    height: STATUS_BAR_HEIGHT,
+    zIndex: 10,
   },
   mainScrollView: {
     flex: 1,
