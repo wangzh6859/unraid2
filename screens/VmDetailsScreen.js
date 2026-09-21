@@ -250,15 +250,6 @@ export default function VmDetailsScreen({ navigation }) {
         <View style={styles.topHeaderSection}>
           <View style={styles.topNavHeaderRow}>
             <View style={styles.titleWithBackRow}>
-              {navigation?.canGoBack?.() && (
-                <TouchableOpacity
-                  onPress={() => navigation.goBack()}
-                  style={styles.navBackBtn}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <ChevronLeft size={22} color={colors.textStrong} />
-                </TouchableOpacity>
-              )}
               <View>
                 <Text style={styles.navScreenTitle}>虚拟机 (VM)</Text>
                 <Text style={styles.navScreenSub}>

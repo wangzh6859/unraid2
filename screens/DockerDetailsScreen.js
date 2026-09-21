@@ -33,6 +33,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
   const [sortRule, setSortRule] = useState('name'); // 'name' | 'status' | 'cpu' // 'status' | 'name' | 'cpu'
   const [openingDocker, setOpeningDocker] = useState(null);
   const [updatingDocker, setUpdatingDocker] = useState(null);
+  const [mainScrollEnabled, setMainScrollEnabled] = useState(true);
 
   // 顶部分段切换：独立容器 vs Compose 堆栈
   const [dockerMode, setDockerMode] = useState('containers'); // 'containers' | 'compose'
@@ -1002,6 +1003,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
           stickyHeaderIndices={[1]}
           showsVerticalScrollIndicator={false}
           nestedScrollEnabled={true}
+          scrollEnabled={mainScrollEnabled}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -1015,15 +1017,6 @@ export default function DockerDetailsScreen({ navigation, route }) {
           <View style={styles.topHeaderSection}>
             <View style={styles.topNavHeaderRow}>
               <View style={styles.titleWithBackRow}>
-                {navigation?.canGoBack?.() && (
-                  <TouchableOpacity
-                    onPress={() => navigation.goBack()}
-                    style={styles.navBackBtn}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <ChevronLeft size={22} color={colors.textStrong} />
-                  </TouchableOpacity>
-                )}
                 <View>
                   <Text style={styles.navScreenTitle}>Docker 容器</Text>
                   <Text style={styles.navScreenSub}>
@@ -1236,6 +1229,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
           stickyHeaderIndices={[1]}
           showsVerticalScrollIndicator={false}
           nestedScrollEnabled={true}
+          scrollEnabled={mainScrollEnabled}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -1249,15 +1243,6 @@ export default function DockerDetailsScreen({ navigation, route }) {
           <View style={styles.topHeaderSection}>
             <View style={styles.topNavHeaderRow}>
               <View style={styles.titleWithBackRow}>
-                {navigation?.canGoBack?.() && (
-                  <TouchableOpacity
-                    onPress={() => navigation.goBack()}
-                    style={styles.navBackBtn}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <ChevronLeft size={22} color={colors.textStrong} />
-                  </TouchableOpacity>
-                )}
                 <View>
                   <Text style={styles.navScreenTitle}>Docker 容器中枢</Text>
                   <Text style={styles.navScreenSub}>
@@ -1321,7 +1306,13 @@ export default function DockerDetailsScreen({ navigation, route }) {
                 </View>
               </View>
 
-              <View style={styles.filterRow}>
+              <View
+                style={styles.filterRow}
+                onStartShouldSetResponderCapture={() => true}
+                onTouchStart={() => setMainScrollEnabled(false)}
+                onTouchEnd={() => setMainScrollEnabled(true)}
+                onTouchCancel={() => setMainScrollEnabled(true)}
+              >
                 <ScrollView
                   horizontal
                   nestedScrollEnabled={true}
@@ -1330,6 +1321,12 @@ export default function DockerDetailsScreen({ navigation, route }) {
                   scrollEventThrottle={16}
                   showsHorizontalScrollIndicator={false}
                   contentContainerStyle={styles.filterScrollContainer}
+                  onTouchStart={() => setMainScrollEnabled(false)}
+                  onTouchEnd={() => setMainScrollEnabled(true)}
+                  onTouchCancel={() => setMainScrollEnabled(true)}
+                  onScrollBeginDrag={() => setMainScrollEnabled(false)}
+                  onScrollEndDrag={() => setMainScrollEnabled(true)}
+                  onMomentumScrollEnd={() => setMainScrollEnabled(true)}
                 >
                   <TouchableOpacity
                     style={[styles.tabBtn, statusFilter === 'all' && styles.tabBtnActive]}

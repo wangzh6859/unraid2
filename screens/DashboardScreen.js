@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   StyleSheet, Text, View, ScrollView, RefreshControl, TouchableOpacity,
   TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Modal,
-  Linking, Dimensions, AppState
+  Linking, Dimensions, AppState, StatusBar
 } from 'react-native';
 import { apiFetch, apiFetchJson, resetNetworkPool } from '../utils/apiClient';
 import Svg, { Path, Circle, Defs, LinearGradient, Stop, G, Rect } from 'react-native-svg';
@@ -64,6 +64,8 @@ function generateSmoothWave(dataPoints, width, height, padTop = 10, padBottom = 
   const area = `${path} L ${last.x} ${height} L ${points[0].x} ${height} Z`;
   return { path, area };
 }
+
+const STATUS_BAR_HEIGHT = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 44;
 
 // -------------------------------------------------------------
 // Component
@@ -727,12 +729,27 @@ export default function DashboardScreen({ navigation }) {
   }
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
-      showsVerticalScrollIndicator={false}
-    >
+    <View style={styles.screenWrapper}>
+      {/* 0. 顶部状态栏氛围渐变过渡层 */}
+      <View style={styles.topGradientFade} pointerEvents="none">
+        <Svg height={STATUS_BAR_HEIGHT + 20} width="100%" pointerEvents="none">
+          <Defs>
+            <LinearGradient id="topAtmosphereDashboard" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0" stopColor={colors.bg} stopOpacity="1" />
+              <Stop offset="0.6" stopColor={colors.bg} stopOpacity="0.75" />
+              <Stop offset="1" stopColor={colors.bg} stopOpacity="0" />
+            </LinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width="100%" height={STATUS_BAR_HEIGHT + 20} fill="url(#topAtmosphereDashboard)" />
+        </Svg>
+      </View>
+
+      <ScrollView
+        style={styles.mainScrollView}
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
+        showsVerticalScrollIndicator={false}
+      >
       {/* 1. 顶部微光胶囊导航条 (Header Bar) */}
       <View style={styles.headerBar}>
         <View style={styles.headerLeft}>
@@ -1547,7 +1564,8 @@ export default function DashboardScreen({ navigation }) {
         onConfirm={confirmDialog.onConfirm}
         onCancel={() => setConfirmDialog(prev => ({ ...prev, visible: false }))}
       />
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -1592,13 +1610,29 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  screenWrapper: {
+    flex: 1,
+    backgroundColor: colors.bg,
+  },
+  topGradientFade: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: STATUS_BAR_HEIGHT + 20,
+    zIndex: 100,
+  },
+  mainScrollView: {
+    flex: 1,
+    marginTop: STATUS_BAR_HEIGHT,
+  },
   container: {
     flex: 1,
     backgroundColor: colors.bg,
   },
   content: {
     padding: 16,
-    paddingTop: Platform.OS === 'ios' ? 44 : 24,
+    paddingTop: 8,
     paddingBottom: 110,
   },
   center: {
@@ -1670,6 +1704,8 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingTop: 6,
+    paddingBottom: 4,
     marginBottom: 16,
     paddingHorizontal: 2,
   },

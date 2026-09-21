@@ -1750,6 +1750,8 @@ export default function FilesScreen({ navigation }) {
     return list;
   }, [fileList, searchQuery, sortBy]);
 
+  const activeTransferCount = useMemo(() => transfers.filter(t => t.status === 'transferring' || t.status === 'pending').length, [transfers]);
+
   // If checking authentication
   if (checkingAuth) {
     return (
@@ -1783,7 +1785,6 @@ export default function FilesScreen({ navigation }) {
 
   const pathSegments = currentPath.split('/').filter(Boolean);
   const currentFolderTitle = isAtRoot ? '根共享库 (/mnt/user)' : decodeURIComponent(pathSegments[pathSegments.length - 1] || '文件');
-  const activeTransferCount = useMemo(() => transfers.filter(t => t.status === 'transferring' || t.status === 'pending').length, [transfers]);
 
   return (
     <View style={styles.fileContainer}>
