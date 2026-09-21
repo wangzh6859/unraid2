@@ -262,8 +262,19 @@ export default function VmDetailsScreen({ navigation }) {
   const runningCount = useMemo(() => vms.filter(v => v.status === 'running').length, [vms]);
   const stoppedCount = useMemo(() => vms.length - runningCount, [vms, runningCount]);
 
-  // 过滤
-  const filteredVms = useMemo(() => {
+  // 虚拟机：背景列表（仅按状态过滤，绝不随搜索词过滤，保持背景完整下潜）
+  const backgroundVms = useMemo(() => {
+    let list = [...vms];
+    if (statusFilter === 'running') {
+      list = list.filter(v => v.status === 'running');
+    } else if (statusFilter === 'stopped') {
+      list = list.filter(v => v.status !== 'running');
+    }
+    return list;
+  }, [vms, statusFilter]);
+
+  // 虚拟机：前置悬浮搜索结果列表
+  const searchedVms = useMemo(() => {
     let list = [...vms];
     if (statusFilter === 'running') {
       list = list.filter(v => v.status === 'running');
@@ -499,21 +510,30 @@ export default function VmDetailsScreen({ navigation }) {
             </View>
           </View>
 
-          {/* 常规状态下的搜索岛 */}
-          <Animated.View style={[styles.stickyIslandWrapper, { opacity: staticSearchOpacity }]}>
+          {/* 常规状态下的搜索岛与停泊舱 */}
+          <View style={styles.stickyIslandWrapper}>
             <GlassView border={true} style={styles.floatingIslandCard}>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.searchBoxRow}
-                onPress={handleFocusSearch}
-              >
-                <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
-                  <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
-                  <Text style={{ fontSize: 13, color: colors.muted, flex: 1 }}>
-                    搜索虚拟机名称...
+              {isSearchFocused ? (
+                <View style={styles.searchDockPlaceholder}>
+                  <Sparkles size={14} color={colors.pink} style={{ marginRight: 6 }} />
+                  <Text style={[styles.searchDockPlaceholderText, { color: colors.pink }]}>
+                    虚拟机检索中 · 键入以即时过滤
                   </Text>
                 </View>
-              </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.searchBoxRow}
+                  onPress={handleFocusSearch}
+                >
+                  <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
+                    <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
+                    <Text style={{ fontSize: 13, color: colors.muted, flex: 1 }}>
+                      搜索虚拟机名称...
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              )}
 
               <View style={styles.tabsRow}>
                 <TouchableOpacity
@@ -548,13 +568,13 @@ export default function VmDetailsScreen({ navigation }) {
                 </TouchableOpacity>
               </View>
             </GlassView>
-          </Animated.View>
+          </View>
 
           {/* 虚拟机卡片列表 */}
           <View style={styles.cardsListSection}>
-            {filteredVms.map(renderVmItem)}
+            {backgroundVms.map(renderVmItem)}
 
-            {filteredVms.length === 0 ? (
+            {backgroundVms.length === 0 ? (
               <View style={styles.emptyContainer}>
                 <Monitor size={42} color={colors.muted} style={{ marginBottom: 12 }} />
                 <Text style={styles.emptyTitle}>暂无虚拟机</Text>
@@ -661,8 +681,8 @@ export default function VmDetailsScreen({ navigation }) {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            {filteredVms.length > 0 ? (
-              filteredVms.map(renderVmItem)
+            {searchedVms.length > 0 ? (
+              searchedVms.map(renderVmItem)
             ) : (
               <View style={styles.searchEmptyCard}>
                 <Search size={32} color={colors.muted} style={{ marginBottom: 8 }} />
@@ -917,6 +937,23 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: isDark ? 0.2 : 0.04,
     shadowRadius: 3,
+  },
+  searchDockPlaceholder: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: isDark ? 'rgba(236, 72, 153, 0.08)' : 'rgba(236, 72, 153, 0.06)',
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(236, 72, 153, 0.3)' : 'rgba(236, 72, 153, 0.25)',
+    borderStyle: 'dashed',
+    marginBottom: 10,
+  },
+  searchDockPlaceholderText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.pink,
   },
   searchInput: {
     flex: 1,

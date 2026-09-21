@@ -1804,8 +1804,22 @@ export default function FilesScreen({ navigation }) {
     });
   }, [navigation, isConfigured, currentPath, isAtRoot, goBack, multiSelect, selected.size, colors, styles]);
 
-  // Filter & Sorting
-  const filteredFiles = useMemo(() => {
+  // 文件：背景列表（仅按排序规则排列，绝不随搜索词过滤，保持背景完整下潜）
+  const backgroundFiles = useMemo(() => {
+    let list = [...fileList];
+    list.sort((a, b) => {
+      if (a.isFolder && !b.isFolder) return -1;
+      if (!a.isFolder && b.isFolder) return 1;
+      if (sortBy === 'name') return a.name.localeCompare(b.name);
+      if (sortBy === 'size') return (b.size || 0) - (a.size || 0);
+      if (sortBy === 'date') return (b.mtime || '').localeCompare(a.mtime || '');
+      return 0;
+    });
+    return list;
+  }, [fileList, sortBy]);
+
+  // 文件：前置悬浮搜索结果列表
+  const searchedFiles = useMemo(() => {
     let list = [...fileList];
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -1997,37 +2011,46 @@ export default function FilesScreen({ navigation }) {
             </View>
           </View>
 
-          {/* 常规状态下的搜索岛 */}
-          <Animated.View style={[styles.stickyIslandWrapper, { opacity: staticSearchOpacity }]}>
+          {/* 常规状态下的搜索岛与停泊舱 */}
+          <View style={styles.stickyIslandWrapper}>
             <GlassView border={true} style={styles.floatingIslandCard}>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.islandSearchRow}
-                onPress={handleFocusSearch}
-              >
-                <View style={styles.searchBox}>
-                  <Search color={colors.sub} size={15} style={{ marginRight: 8 }} />
-                  <Text style={{ fontSize: 13, color: colors.muted, flex: 1 }}>
-                    搜索当前目录...
+              {isSearchFocused ? (
+                <View style={[styles.searchDockPlaceholder, { marginBottom: 0 }]}>
+                  <Sparkles size={14} color={colors.accent} style={{ marginRight: 6 }} />
+                  <Text style={styles.searchDockPlaceholderText}>
+                    文件与路径检索中 · 键入以即时定位
                   </Text>
                 </View>
-
+              ) : (
                 <TouchableOpacity
-                  style={styles.sortToggleBtn}
-                  onPress={() => {
-                    const modes = ['name', 'date', 'size'];
-                    const next = modes[(modes.indexOf(sortBy) + 1) % modes.length];
-                    setSortBy(next);
-                  }}
-                  activeOpacity={0.7}
+                  activeOpacity={0.85}
+                  style={styles.islandSearchRow}
+                  onPress={handleFocusSearch}
                 >
-                  <Text style={styles.sortToggleText}>
-                    {sortBy === 'name' ? '按名称' : sortBy === 'date' ? '按时间' : '按大小'}
-                  </Text>
+                  <View style={styles.searchBox}>
+                    <Search color={colors.sub} size={15} style={{ marginRight: 8 }} />
+                    <Text style={{ fontSize: 13, color: colors.muted, flex: 1 }}>
+                      搜索当前目录...
+                    </Text>
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.sortToggleBtn}
+                    onPress={() => {
+                      const modes = ['name', 'date', 'size'];
+                      const next = modes[(modes.indexOf(sortBy) + 1) % modes.length];
+                      setSortBy(next);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.sortToggleText}>
+                      {sortBy === 'name' ? '按名称' : sortBy === 'date' ? '按时间' : '按大小'}
+                    </Text>
+                  </TouchableOpacity>
                 </TouchableOpacity>
-              </TouchableOpacity>
+              )}
             </GlassView>
-          </Animated.View>
+          </View>
 
           {/* 文件条目列表 */}
           <View style={styles.cardsListSection}>
@@ -2036,13 +2059,13 @@ export default function FilesScreen({ navigation }) {
                 <ActivityIndicator size="large" color={colors.accent} />
                 <Text style={[styles.emptyText, { marginTop: 12 }]}>正在加载文件列表...</Text>
               </View>
-            ) : filteredFiles.length === 0 ? (
+            ) : backgroundFiles.length === 0 ? (
               <View style={styles.listCenter}>
                 <FolderOpen color={colors.muted} size={48} style={{ marginBottom: 12 }} />
                 <Text style={styles.emptyText}>当前目录无内容，下拉可刷新</Text>
               </View>
             ) : (
-              filteredFiles.map(renderFileRow)
+              backgroundFiles.map(renderFileRow)
             )}
           </View>
         </ScrollView>
@@ -2144,8 +2167,8 @@ export default function FilesScreen({ navigation }) {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            {filteredFiles.length > 0 ? (
-              filteredFiles.map(renderFileRow)
+            {searchedFiles.length > 0 ? (
+              searchedFiles.map(renderFileRow)
             ) : (
               <View style={styles.searchEmptyCard}>
                 <Search size={32} color={colors.muted} style={{ marginBottom: 8 }} />
@@ -3043,6 +3066,23 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     height: 38,
     borderWidth: 1,
     borderColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.06)',
+  },
+  searchDockPlaceholder: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: isDark ? 'rgba(56, 189, 248, 0.08)' : 'rgba(2, 132, 199, 0.06)',
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(56, 189, 248, 0.3)' : 'rgba(2, 132, 199, 0.25)',
+    borderStyle: 'dashed',
+  },
+  searchDockPlaceholderText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.accent,
   },
   searchInput: {
     flex: 1,

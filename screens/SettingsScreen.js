@@ -10,6 +10,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import Svg, { Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
+import { BlurView } from 'expo-blur';
 import GlassView from '../components/GlassView';
 import {
   HardDrive, Settings as SettingsIcon, ShieldCheck, Info, Server,
@@ -1033,8 +1034,8 @@ export default function SettingsScreen({ navigation }) {
         <Text style={styles.sectionTitle}>主控连接凭证</Text>
         <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <TouchableOpacity style={styles.row} onPress={editServerUrl}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
-            <Server color={colors.accent} size={20} />
+          <View style={styles.iconBox}>
+            <Server color={colors.accent} size={22} />
           </View>
           <View style={styles.infoBox}>
             <Text style={styles.rowTitle}>服务器地址</Text>
@@ -1046,8 +1047,8 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.divider} />
 
         <TouchableOpacity style={styles.row} onPress={editApiToken}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(139, 92, 246, 0.15)' }]}>
-            <Key color={colors.purple} size={20} />
+          <View style={styles.iconBox}>
+            <Key color={colors.purple} size={22} />
           </View>
           <View style={styles.infoBox}>
             <Text style={styles.rowTitle}>统一 API Token</Text>
@@ -1059,8 +1060,8 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.divider} />
 
         <TouchableOpacity style={styles.row} onPress={handleUnraidLogout}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
-            <LogOut color={colors.red} size={20} />
+          <View style={styles.iconBox}>
+            <LogOut color={colors.red} size={22} />
           </View>
           <View style={styles.infoBox}>
             <Text style={[styles.rowTitle, { color: colors.red }]}>清除凭据</Text>
@@ -1073,8 +1074,8 @@ export default function SettingsScreen({ navigation }) {
       <Text style={styles.sectionTitle}>服务器电源控制</Text>
       <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <TouchableOpacity style={styles.row} onPress={handleServerReboot} disabled={powerLoading}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}>
-            <RotateCw color={colors.amber} size={20} />
+          <View style={styles.iconBox}>
+            <RotateCw color={colors.amber} size={22} />
           </View>
           <View style={styles.infoBox}>
             <Text style={[styles.rowTitle, { color: colors.amber }]}>重启服务器 (Reboot)</Text>
@@ -1088,8 +1089,8 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.divider} />
 
         <TouchableOpacity style={styles.row} onPress={handleServerPoweroff} disabled={powerLoading}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
-            <Power color={colors.red} size={20} />
+          <View style={styles.iconBox}>
+            <Power color={colors.red} size={22} />
           </View>
           <View style={styles.infoBox}>
             <Text style={[styles.rowTitle, { color: colors.red }]}>关闭服务器 (Poweroff)</Text>
@@ -1105,8 +1106,8 @@ export default function SettingsScreen({ navigation }) {
       <Text style={styles.sectionTitle}>网络唤醒 (Wake-on-LAN)</Text>
       <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <TouchableOpacity style={styles.row} onPress={editWolMac}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
-            <Zap color={colors.accent} size={20} />
+          <View style={styles.iconBox}>
+            <Zap color={colors.accent} size={22} />
           </View>
           <View style={styles.infoBox}>
             <Text style={styles.rowTitle}>服务器物理 MAC</Text>
@@ -1120,8 +1121,8 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.divider} />
 
         <TouchableOpacity style={styles.row} onPress={editWolBroadcastIp}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
-            <Radio color={colors.green} size={20} />
+          <View style={styles.iconBox}>
+            <Radio color={colors.green} size={22} />
           </View>
           <View style={styles.infoBox}>
             <Text style={styles.rowTitle}>局域网广播 IP</Text>
@@ -1133,8 +1134,8 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.divider} />
 
         <TouchableOpacity style={styles.row} onPress={editWolPort}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(139, 92, 246, 0.15)' }]}>
-            <Key color={colors.purple} size={20} />
+          <View style={styles.iconBox}>
+            <Key color={colors.purple} size={22} />
           </View>
           <View style={styles.infoBox}>
             <Text style={styles.rowTitle}>唤醒端口 (UDP)</Text>
@@ -1146,8 +1147,8 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.divider} />
 
         <TouchableOpacity style={styles.row} onPress={handleTestWol} disabled={wolTesting}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}>
-            <Zap color={colors.amber} size={20} />
+          <View style={styles.iconBox}>
+            <Zap color={colors.amber} size={22} />
           </View>
           <View style={styles.infoBox}>
             <Text style={[styles.rowTitle, { color: colors.amber }]}>立即测试唤醒包</Text>
@@ -1167,7 +1168,7 @@ export default function SettingsScreen({ navigation }) {
       <Text style={styles.sectionTitle}>Docker 反代与 Web 界面</Text>
       <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <View style={styles.row}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+          <View style={styles.iconBox}>
             <Globe color={colors.accent} size={20} />
           </View>
           <View style={styles.infoBox}>
@@ -1187,7 +1188,7 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.divider} />
 
         <TouchableOpacity style={styles.row} onPress={editProxyTemplate}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+          <View style={styles.iconBox}>
             <ExternalLink color={colors.green} size={20} />
           </View>
           <View style={styles.infoBox}>
@@ -1202,7 +1203,7 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.divider} />
 
         <TouchableOpacity style={styles.row} onPress={openAliasesModal}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(139, 92, 246, 0.15)' }]}>
+          <View style={styles.iconBox}>
             <Sliders color={colors.purple} size={20} />
           </View>
           <View style={styles.infoBox}>
@@ -1221,7 +1222,7 @@ export default function SettingsScreen({ navigation }) {
       <Text style={styles.sectionTitle}>安全防护与生物识别</Text>
       <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <View style={styles.row}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+          <View style={styles.iconBox}>
             <Fingerprint color={colors.accent} size={20} />
           </View>
           <View style={styles.infoBox}>
@@ -1241,7 +1242,7 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.divider} />
 
         <View style={styles.row}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
+          <View style={styles.iconBox}>
             <ShieldAlert color={colors.red} size={20} />
           </View>
           <View style={styles.infoBox}>
@@ -1263,7 +1264,7 @@ export default function SettingsScreen({ navigation }) {
       <Text style={styles.sectionTitle}>传输与后台保活</Text>
       <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <View style={styles.row}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+          <View style={styles.iconBox}>
             <Activity color={colors.green || '#10b981'} size={20} />
           </View>
           <View style={styles.infoBox}>
@@ -1285,7 +1286,7 @@ export default function SettingsScreen({ navigation }) {
       <Text style={styles.sectionTitle}>外观与沉浸显示</Text>
       <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <View style={styles.row}>
-          <View style={[styles.iconBox, { backgroundColor: isDark ? 'rgba(139, 92, 246, 0.15)' : 'rgba(245, 158, 11, 0.15)' }]}>
+          <View style={styles.iconBox}>
             {isDark ? <Moon color={colors.purple} size={20} /> : <Sun color={colors.amber} size={20} />}
           </View>
           <View style={styles.infoBox}>
@@ -1345,7 +1346,7 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.divider} />
 
         <View style={styles.row}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+          <View style={styles.iconBox}>
             <FolderDown color={colors.accent} size={20} />
           </View>
           <View style={styles.infoBox}>
@@ -1359,7 +1360,7 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.divider} />
 
         <TouchableOpacity style={styles.row} onPress={openLimitInput}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}>
+          <View style={styles.iconBox}>
             <Info color={colors.amber} size={20} />
           </View>
           <View style={styles.infoBox}>
@@ -1372,7 +1373,7 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.divider} />
 
         <TouchableOpacity style={styles.row} onPress={clearPreviewCacheHandler} disabled={isClearing}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
+          <View style={styles.iconBox}>
             {isClearing ? <ActivityIndicator color={colors.red} size="small" /> : <Trash2 color={colors.red} size={20} />}
           </View>
           <View style={styles.infoBox}>
@@ -1386,7 +1387,7 @@ export default function SettingsScreen({ navigation }) {
       <Text style={styles.sectionTitle}>底层核心架构</Text>
       <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <View style={styles.row}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+          <View style={styles.iconBox}>
             <ShieldCheck color={colors.accent} size={20} />
           </View>
           <View style={styles.infoBox}>
@@ -1396,7 +1397,7 @@ export default function SettingsScreen({ navigation }) {
         </View>
         <View style={styles.divider} />
         <View style={styles.row}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+          <View style={styles.iconBox}>
             <CheckCircle color={colors.green} size={20} />
           </View>
           <View style={styles.infoBox}>
@@ -1410,7 +1411,7 @@ export default function SettingsScreen({ navigation }) {
       <Text style={styles.sectionTitle}>软件版本与在线更新</Text>
       <GlassView border={true} borderRadius={20} style={styles.glassCard}>
         <View style={styles.row}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+          <View style={styles.iconBox}>
             <Sparkles color={colors.accent} size={20} />
           </View>
           <TouchableOpacity
@@ -1451,7 +1452,7 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.divider} />
 
         <View style={styles.row}>
-          <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+          <View style={styles.iconBox}>
             <ShieldCheck color={colors.green} size={20} />
           </View>
           <View style={styles.infoBox}>
@@ -1484,10 +1485,22 @@ export default function SettingsScreen({ navigation }) {
       </GlassView>
 
       {/* Server Config Input Modal */}
-      <Modal visible={serverEditVisible} transparent animationType="fade" onRequestClose={() => setServerEditVisible(false)}>
+      <Modal visible={serverEditVisible} transparent animationType="fade" onRequestClose={() => setServerEditVisible(false)} statusBarTranslucent>
         <KeyboardAvoidingView style={styles.overlayCenter} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <BlurView
+            intensity={Platform.OS === 'android' ? 45 : 55}
+            tint={isDark ? 'dark' : 'light'}
+            style={StyleSheet.absoluteFill}
+          />
+          <View
+            pointerEvents="none"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: colors.glass?.modalBackdrop || (isDark ? 'rgba(0, 0, 0, 0.55)' : 'rgba(0, 0, 0, 0.25)') },
+            ]}
+          />
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setServerEditVisible(false)} />
-          <View style={styles.limitBox}>
+          <GlassView border={true} borderRadius={24} style={styles.limitBox}>
             <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
               {serverEditField === 'url' ? (
                 <Server color={colors.accent} size={28} />
@@ -1537,15 +1550,27 @@ export default function SettingsScreen({ navigation }) {
                 <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>保存并生效</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </GlassView>
         </KeyboardAvoidingView>
       </Modal>
 
       {/* Cache Limit Input Modal */}
-      <Modal visible={limitVisible} transparent animationType="fade" onRequestClose={() => setLimitVisible(false)}>
+      <Modal visible={limitVisible} transparent animationType="fade" onRequestClose={() => setLimitVisible(false)} statusBarTranslucent>
         <KeyboardAvoidingView style={styles.overlayCenter} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <BlurView
+            intensity={Platform.OS === 'android' ? 45 : 55}
+            tint={isDark ? 'dark' : 'light'}
+            style={StyleSheet.absoluteFill}
+          />
+          <View
+            pointerEvents="none"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: colors.glass?.modalBackdrop || (isDark ? 'rgba(0, 0, 0, 0.55)' : 'rgba(0, 0, 0, 0.25)') },
+            ]}
+          />
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setLimitVisible(false)} />
-          <View style={styles.limitBox}>
+          <GlassView border={true} borderRadius={24} style={styles.limitBox}>
             <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(16, 185, 129, 0.12)' }]}>
               <HardDrive color={colors.green} size={28} />
             </View>
@@ -1568,15 +1593,27 @@ export default function SettingsScreen({ navigation }) {
                 <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>保存</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </GlassView>
         </KeyboardAvoidingView>
       </Modal>
 
       {/* Docker Reverse Proxy Template Edit Modal */}
-      <Modal visible={proxyEditVisible} transparent animationType="fade" onRequestClose={() => setProxyEditVisible(false)}>
+      <Modal visible={proxyEditVisible} transparent animationType="fade" onRequestClose={() => setProxyEditVisible(false)} statusBarTranslucent>
         <KeyboardAvoidingView style={styles.overlayCenter} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <BlurView
+            intensity={Platform.OS === 'android' ? 45 : 55}
+            tint={isDark ? 'dark' : 'light'}
+            style={StyleSheet.absoluteFill}
+          />
+          <View
+            pointerEvents="none"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: colors.glass?.modalBackdrop || (isDark ? 'rgba(0, 0, 0, 0.55)' : 'rgba(0, 0, 0, 0.25)') },
+            ]}
+          />
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setProxyEditVisible(false)} />
-          <View style={styles.limitBox}>
+          <GlassView border={true} borderRadius={24} style={styles.limitBox}>
             <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
               <Globe color={colors.accent} size={28} />
             </View>
@@ -1613,15 +1650,27 @@ export default function SettingsScreen({ navigation }) {
                 <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>保存生效</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </GlassView>
         </KeyboardAvoidingView>
       </Modal>
 
       {/* Docker Custom Reverse Proxy & Aliases Management Modal */}
-      <Modal visible={aliasesModalVisible} transparent animationType="fade" onRequestClose={() => setAliasesModalVisible(false)}>
+      <Modal visible={aliasesModalVisible} transparent animationType="fade" onRequestClose={() => setAliasesModalVisible(false)} statusBarTranslucent>
         <View style={styles.overlayCenter}>
+          <BlurView
+            intensity={Platform.OS === 'android' ? 45 : 55}
+            tint={isDark ? 'dark' : 'light'}
+            style={StyleSheet.absoluteFill}
+          />
+          <View
+            pointerEvents="none"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: colors.glass?.modalBackdrop || (isDark ? 'rgba(0, 0, 0, 0.55)' : 'rgba(0, 0, 0, 0.25)') },
+            ]}
+          />
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setAliasesModalVisible(false)} />
-          <View style={[styles.limitBox, { width: '100%', maxWidth: 360, maxHeight: '80%', alignItems: 'stretch' }]}>
+          <GlassView border={true} borderRadius={24} style={[styles.limitBox, { width: '100%', maxWidth: 360, maxHeight: '80%', alignItems: 'stretch' }]}>
             <View style={{ alignItems: 'center' }}>
               <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(139, 92, 246, 0.12)' }]}>
                 <Sliders color={colors.purple} size={28} />
@@ -1704,15 +1753,27 @@ export default function SettingsScreen({ navigation }) {
                 <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>完成</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </GlassView>
         </View>
       </Modal>
 
       {/* In-App Software Update Modal */}
-      <Modal visible={updateModalVisible} transparent animationType="fade" onRequestClose={() => setUpdateModalVisible(false)}>
+      <Modal visible={updateModalVisible} transparent animationType="fade" onRequestClose={() => setUpdateModalVisible(false)} statusBarTranslucent>
         <View style={styles.overlayCenter}>
+          <BlurView
+            intensity={Platform.OS === 'android' ? 45 : 55}
+            tint={isDark ? 'dark' : 'light'}
+            style={StyleSheet.absoluteFill}
+          />
+          <View
+            pointerEvents="none"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: colors.glass?.modalBackdrop || (isDark ? 'rgba(0, 0, 0, 0.55)' : 'rgba(0, 0, 0, 0.25)') },
+            ]}
+          />
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setUpdateModalVisible(false)} />
-          <View style={[styles.updateCard, { backgroundColor: colors.card }]}>
+          <GlassView border={true} borderRadius={24} style={styles.updateCard}>
             <View style={[styles.dialogIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.14)' }]}>
               <Sparkles color={colors.accent} size={28} />
             </View>
@@ -1744,7 +1805,7 @@ export default function SettingsScreen({ navigation }) {
                 <Text style={[styles.renameBtnText, { color: '#ffffff' }]}>立即下载安装</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </GlassView>
         </View>
       </Modal>
 
@@ -1881,10 +1942,8 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     paddingVertical: 14,
   },
   iconBox: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    width: 28,
+    height: 28,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 14,
@@ -1931,7 +1990,7 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   divider: {
     height: 1,
     backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
-    marginLeft: 70,
+    marginLeft: 58,
   },
 
   btnRow: {
@@ -1960,7 +2019,7 @@ const createStyles = (colors, isDark) => StyleSheet.create({
 
   overlayCenter: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.65)',
+    backgroundColor: 'transparent',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
@@ -1968,14 +2027,11 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   limitBox: {
     width: '100%',
     maxWidth: 340,
-    backgroundColor: colors.card,
     borderRadius: 24,
     paddingTop: 24,
     paddingBottom: 20,
     paddingHorizontal: 22,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
     elevation: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 10 },
@@ -2049,14 +2105,11 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   updateCard: {
     width: '100%',
     maxWidth: 340,
-    backgroundColor: colors.card,
     borderRadius: 24,
     paddingTop: 24,
     paddingBottom: 20,
     paddingHorizontal: 22,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
     elevation: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 10 },

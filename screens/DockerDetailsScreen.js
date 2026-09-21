@@ -974,9 +974,12 @@ export default function DockerDetailsScreen({ navigation, route }) {
     return sum.toFixed(1);
   }, [dockers]);
 
-  // 过滤与排序
-  
-  const filteredComposeProjects = useMemo(() => {
+  // Compose 堆栈：背景列表（不绑定搜索词，保持背景完整下潜）与前置搜索结果列表
+  const backgroundComposeProjects = useMemo(() => {
+    return [...composeProjects];
+  }, [composeProjects]);
+
+  const searchedComposeProjects = useMemo(() => {
     let list = [...composeProjects];
     if (composeSearchQuery.trim()) {
       const q = composeSearchQuery.toLowerCase();
@@ -987,7 +990,32 @@ export default function DockerDetailsScreen({ navigation, route }) {
 
   const composeRunningCount = useMemo(() => composeProjects.filter(p => p.status === 'running').length, [composeProjects]);
 
-  const processedDockers = useMemo(() => {
+  // 容器：背景列表（仅按状态和排序规则过滤，绝不随搜索词过滤，保持背景完整下潜）
+  const backgroundDockers = useMemo(() => {
+    let list = [...dockers];
+    if (statusFilter === 'running') {
+      list = list.filter(d => d.status === 'running');
+    } else if (statusFilter === 'stopped') {
+      list = list.filter(d => d.status !== 'running');
+    } else if (statusFilter === 'updates') {
+      list = list.filter(d => d.update_available);
+    }
+
+    list.sort((a, b) => {
+      if (sortRule === 'status') return (a.status === 'running' ? -1 : 1) - (b.status === 'running' ? -1 : 1);
+      if (sortRule === 'cpu') {
+        const cpuA = parseFloat(String(a.cpu || '').replace('%', '')) || 0;
+        const cpuB = parseFloat(String(b.cpu || '').replace('%', '')) || 0;
+        return cpuB - cpuA;
+      }
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+
+    return list;
+  }, [dockers, statusFilter, sortRule]);
+
+  // 容器：搜索结果列表（仅在前置悬浮搜索框下方展示）
+  const searchedDockers = useMemo(() => {
     let list = [...dockers];
     if (statusFilter === 'running') {
       list = list.filter(d => d.status === 'running');
@@ -1409,39 +1437,48 @@ export default function DockerDetailsScreen({ navigation, route }) {
               </View>
             </View>
 
-            {/* 常规状态下的搜索岛 */}
-            <Animated.View style={[styles.stickyIslandWrapper, { opacity: staticSearchOpacity }]}>
+            {/* 常规状态下的搜索岛与停泊舱 */}
+            <View style={styles.stickyIslandWrapper}>
               <GlassView border={true} style={styles.floatingIslandCard}>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
-                  onPress={handleFocusSearch}
-                >
-                  <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
-                    <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
-                    <Text style={{ fontSize: 13, color: colors.muted, flex: 1 }}>
-                      搜索 Compose 项目或服务...
+                {isSearchFocused ? (
+                  <View style={[styles.searchDockPlaceholder, { marginBottom: 0 }]}>
+                    <Sparkles size={14} color={colors.accent} style={{ marginRight: 6 }} />
+                    <Text style={styles.searchDockPlaceholderText}>
+                      搜索中枢已激活 · 正在检索 Compose 堆栈
                     </Text>
                   </View>
-
+                ) : (
                   <TouchableOpacity
-                    style={styles.newStackBtn}
-                    onPress={() => {
-                      setNewStackName('');
-                      setNewStackModalVisible(true);
-                    }}
-                    activeOpacity={0.8}
+                    activeOpacity={0.85}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                    onPress={handleFocusSearch}
                   >
-                    <Plus size={15} color="#ffffff" style={{ marginRight: 4 }} />
-                    <Text style={styles.newStackBtnText}>新建堆栈</Text>
+                    <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
+                      <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
+                      <Text style={{ fontSize: 13, color: colors.muted, flex: 1 }}>
+                        搜索 Compose 项目或服务...
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.newStackBtn}
+                      onPress={() => {
+                        setNewStackName('');
+                        setNewStackModalVisible(true);
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Plus size={15} color="#ffffff" style={{ marginRight: 4 }} />
+                      <Text style={styles.newStackBtnText}>新建堆栈</Text>
+                    </TouchableOpacity>
                   </TouchableOpacity>
-                </TouchableOpacity>
+                )}
               </GlassView>
-            </Animated.View>
+            </View>
 
             {/* Compose 堆栈列表 */}
             <View style={styles.cardsListSection}>
-              {filteredComposeProjects.map(renderComposeItem)}
+              {backgroundComposeProjects.map(renderComposeItem)}
 
               {filteredComposeProjects.length === 0 && !composeLoading && (
                 <View style={styles.emptyContainer}>
@@ -1510,21 +1547,30 @@ export default function DockerDetailsScreen({ navigation, route }) {
               </View>
             </View>
 
-            {/* 常规状态下的搜索岛 */}
-            <Animated.View style={[styles.stickyIslandWrapper, { opacity: staticSearchOpacity }]}>
+            {/* 常规状态下的搜索岛与停泊舱 */}
+            <View style={styles.stickyIslandWrapper}>
               <GlassView border={true} style={styles.floatingIslandCard}>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={styles.searchBoxRow}
-                  onPress={handleFocusSearch}
-                >
-                  <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
-                    <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
-                    <Text style={{ fontSize: 13, color: colors.muted, flex: 1 }}>
-                      搜索容器名称、镜像或端口...
+                {isSearchFocused ? (
+                  <View style={styles.searchDockPlaceholder}>
+                    <Sparkles size={14} color={colors.accent} style={{ marginRight: 6 }} />
+                    <Text style={styles.searchDockPlaceholderText}>
+                      搜索中枢已激活 · 正在全域检索容器
                     </Text>
                   </View>
-                </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.searchBoxRow}
+                    onPress={handleFocusSearch}
+                  >
+                    <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
+                      <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
+                      <Text style={{ fontSize: 13, color: colors.muted, flex: 1 }}>
+                        搜索容器名称、镜像或端口...
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
 
                 {/* 筛选标签条：扩大点击与横滑判定区域 */}
                 <View style={styles.filterRow}>
@@ -1626,13 +1672,13 @@ export default function DockerDetailsScreen({ navigation, route }) {
                   </ScrollView>
                 </View>
               </GlassView>
-            </Animated.View>
+            </View>
 
             {/* 容器卡片列表 */}
             <View style={styles.cardsListSection}>
-              {processedDockers.map(renderDockerItem)}
+              {backgroundDockers.map(renderDockerItem)}
 
-              {processedDockers.length === 0 ? (
+              {backgroundDockers.length === 0 ? (
                 <View style={styles.emptyContainer}>
                   <Box size={42} color={colors.muted} style={{ marginBottom: 12 }} />
                   <Text style={styles.emptyTitle}>未匹配到任何容器</Text>
@@ -1744,8 +1790,8 @@ export default function DockerDetailsScreen({ navigation, route }) {
             showsVerticalScrollIndicator={false}
           >
             {dockerMode === 'compose' ? (
-              filteredComposeProjects.length > 0 ? (
-                filteredComposeProjects.map(renderComposeItem)
+              searchedComposeProjects.length > 0 ? (
+                searchedComposeProjects.map(renderComposeItem)
               ) : (
                 <View style={styles.searchEmptyCard}>
                   <Search size={32} color={colors.muted} style={{ marginBottom: 8 }} />
@@ -1754,8 +1800,8 @@ export default function DockerDetailsScreen({ navigation, route }) {
                 </View>
               )
             ) : (
-              processedDockers.length > 0 ? (
-                processedDockers.map(renderDockerItem)
+              searchedDockers.length > 0 ? (
+                searchedDockers.map(renderDockerItem)
               ) : (
                 <View style={styles.searchEmptyCard}>
                   <Search size={32} color={colors.muted} style={{ marginBottom: 8 }} />
@@ -2361,6 +2407,23 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: isDark ? 0.2 : 0.04,
     shadowRadius: 3,
+  },
+  searchDockPlaceholder: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: isDark ? 'rgba(56, 189, 248, 0.08)' : 'rgba(2, 132, 199, 0.06)',
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(56, 189, 248, 0.3)' : 'rgba(2, 132, 199, 0.25)',
+    borderStyle: 'dashed',
+    marginBottom: 10,
+  },
+  searchDockPlaceholderText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.accent,
   },
   searchInput: {
     flex: 1,
