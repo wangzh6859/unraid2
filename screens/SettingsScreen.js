@@ -39,6 +39,29 @@ import {
 } from '../utils/dockerWebUiManager';
 
 const APP_RELEASE_CHANGELOGS = {
+  '1.5.255': `【v1.5.255 实时更新日志与全链路细节打磨】
+📝 1. 软件更新日志体系全面实时化：
+   - 设置页面更新日志、检查更新弹窗与 GitHub Release 实时对齐当前版本；
+   - 彻底修复日志版本号与内容滞后、显示旧版本更新说明的问题。
+🐳 2. Docker Compose 堆栈稳定性修复：
+   - 彻底修复切换 Compose 堆栈标签页时由状态初始化顺序引起的闪退崩溃问题；
+   - 全面加入搜索词防御性安全检查，确保全生命周期稳定运行。
+🎨 3. 搜索模块纯净质感统一：
+   - 彻底清除 Docker、虚拟机、文件管理页面在位搜索模块的白色矩形方框；
+   - 消除外层多余描边与底色，输入框与分类标签完美融入页面背景。
+📱 4. 解决底部 Dock 栏遮挡二级详情页内容：
+   - CPU、GPU、内存、网速、SMART 详情页底部内边距统一增加至 120px，彻底预留悬浮 Dock 栏避让空间，所有进程与监控数据均可完整向上滚动查阅。`,
+  '1.5.254': `【v1.5.254 Compose崩溃修复、清除搜索白框与Dock避让】
+🐳 1. 彻底修复 Docker Compose 页面打不开及崩溃闪退（修复状态生命周期顺序）。
+🎨 2. 彻底清除 Docker、虚拟机、文件管理页面的白色矩形框，视觉通透统一。
+📱 3. 解决 CPU、GPU、内存、网速详情拉到底部被 Dock 栏遮挡的问题。`,
+  '1.5.253': `【v1.5.253 虚拟机与文件搜索崩溃修复、清除设置白框】
+🔧 1. 补全 Sparkles 图标导入，修复虚拟机和文件页面点击搜索闪退红屏。
+🎨 2. 设置页面全面复原标准卡片，彻底根除双层白边与底色方块。`,
+  '1.5.252': `【v1.5.252 搜索原位微光停泊舱与弹窗毛玻璃拟态】
+🚀 1. 搜索框上浮后原位注入极富科技感的微光停泊舱，杜绝空白空洞。
+🛡️ 2. 背景全量卡片与搜索结果彻底解耦，沉降底板稳固虚化。
+✨ 3. 设置页面 5 大核心操作弹窗全面升级原生高斯模糊与拟态卡片。`,
   '1.5.0': `【v1.5.0 全新毛玻璃拟态视觉基座与通透 Dock】
 💎 1. 全新 Glassmorphism 毛玻璃视觉设计语言（第一阶段）：
    - 官方集成 expo-blur 原生高斯模糊硬件加速引擎与亚克力微光漫反射描边。
@@ -206,7 +229,11 @@ export default function SettingsScreen({ navigation }) {
 
       const rawBody = (data.body || '').trim();
       const versionKey = (latestTag || '').replace(/^v/i, '');
-      const specificLog = APP_RELEASE_CHANGELOGS[versionKey] || APP_RELEASE_CHANGELOGS[appVersion] || '';
+      const specificLog = APP_RELEASE_CHANGELOGS[versionKey]
+        || APP_RELEASE_CHANGELOGS[appVersion]
+        || APP_RELEASE_CHANGELOGS['1.5.255']
+        || APP_RELEASE_CHANGELOGS['1.5.254']
+        || '';
       const displayBody = (rawBody.length > 25 && !rawBody.includes('包含多项功能更新')) ? rawBody : (specificLog || rawBody || '包含多项功能更新与体验优化。');
 
       const hasUpdate = isNewerVersion(latestTag, appVersion);
@@ -1413,7 +1440,12 @@ export default function SettingsScreen({ navigation }) {
             activeOpacity={0.7}
             onPress={() => {
               const versionKey = (appVersion || '').replace(/^v/i, '');
-              const log = APP_RELEASE_CHANGELOGS[versionKey] || APP_RELEASE_CHANGELOGS['1.4.0'] || APP_RELEASE_CHANGELOGS['1.3.1'];
+              const log = APP_RELEASE_CHANGELOGS[versionKey]
+                || APP_RELEASE_CHANGELOGS[appVersion]
+                || APP_RELEASE_CHANGELOGS['1.5.255']
+                || APP_RELEASE_CHANGELOGS['1.5.254']
+                || APP_RELEASE_CHANGELOGS['1.5.0']
+                || Object.values(APP_RELEASE_CHANGELOGS)[0];
               showConfirm({
                 type: 'info',
                 title: `v${appVersion} 版本更新详情`,
