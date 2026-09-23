@@ -305,7 +305,7 @@ export default function SmartDetailsScreen({ route }) {
 
 const createStyles = (colors) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 16, paddingBottom: 50 },
+  content: { padding: 16, paddingBottom: 120 },
   center: { flex: 1, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center', padding: 20 },
   loadingText: { marginTop: 12, fontSize: 14, color: colors.muted },
 

@@ -97,7 +97,7 @@ export default function VmDetailsScreen({ navigation }) {
     extrapolate: 'clamp',
   });
 
-  const hasSearchQuery = searchQuery.trim().length > 0;
+  const hasSearchQuery = (searchQuery || '').trim().length > 0;
 
   // Modern Confirmation Dialog state
   const [confirmModal, setConfirmModal] = useState({
@@ -512,7 +512,7 @@ export default function VmDetailsScreen({ navigation }) {
 
           {/* 常规状态下的搜索岛与停泊舱 */}
           <View style={styles.stickyIslandWrapper}>
-            <GlassView border={true} style={styles.floatingIslandCard}>
+            <View style={styles.searchSection}>
               {isSearchFocused ? (
                 <View style={styles.searchDockPlaceholder}>
                   <Sparkles size={14} color={colors.pink} style={{ marginRight: 6 }} />
@@ -567,7 +567,7 @@ export default function VmDetailsScreen({ navigation }) {
                   </Text>
                 </TouchableOpacity>
               </View>
-            </GlassView>
+            </View>
           </View>
 
           {/* 虚拟机卡片列表 */}
@@ -885,19 +885,14 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   stickyIslandFocused: {
     zIndex: 120,
   },
+  searchSection: {
+    paddingTop: 2,
+    paddingBottom: 2,
+  },
   floatingIslandCard: {
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 10,
-    borderWidth: 1,
-    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: isDark ? 0.25 : 0.06,
-    shadowRadius: 10,
-    elevation: 4,
-    overflow: 'hidden',
+    paddingHorizontal: 0,
+    paddingTop: 2,
+    paddingBottom: 2,
   },
   floatingIslandCardFocused: {
     borderColor: isDark ? 'rgba(56, 189, 248, 0.4)' : 'rgba(14, 165, 233, 0.35)',
@@ -927,16 +922,17 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#ffffff',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : colors.card,
     borderRadius: 14,
     paddingHorizontal: 12,
     height: 42,
     borderWidth: 1,
-    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
+    borderColor: colors.cardBorder,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: isDark ? 0.2 : 0.04,
+    shadowOpacity: isDark ? 0.15 : 0.04,
     shadowRadius: 3,
+    elevation: 1,
   },
   searchDockPlaceholder: {
     flexDirection: 'row',

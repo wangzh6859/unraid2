@@ -458,7 +458,7 @@ function createStyles(colors, isDark) {
     },
     content: {
       padding: 16,
-      paddingBottom: 36,
+      paddingBottom: 120,
     },
     topCard: {
       backgroundColor: colors.card,

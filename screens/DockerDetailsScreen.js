@@ -30,6 +30,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [composeSearchQuery, setComposeSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'running' | 'stopped'
   const [sortRule, setSortRule] = useState('name'); // 'name' | 'status' | 'cpu' // 'status' | 'name' | 'cpu'
   const [openingDocker, setOpeningDocker] = useState(null);
@@ -115,14 +116,13 @@ export default function DockerDetailsScreen({ navigation, route }) {
     extrapolate: 'clamp',
   });
 
-  const hasSearchQuery = dockerMode === 'compose' ? composeSearchQuery.trim().length > 0 : searchQuery.trim().length > 0;
+  const hasSearchQuery = dockerMode === 'compose' ? (composeSearchQuery || '').trim().length > 0 : (searchQuery || '').trim().length > 0;
   const [checkingUpdates, setCheckingUpdates] = useState(false);
 
   // Docker Compose 状态
   const [composeProjects, setComposeProjects] = useState([]);
   const [composeLoading, setComposeLoading] = useState(false);
   const [composeActionLoading, setComposeActionLoading] = useState({});
-  const [composeSearchQuery, setComposeSearchQuery] = useState('');
 
   // YAML 编辑器弹窗
   const [yamlModalVisible, setYamlModalVisible] = useState(false);
@@ -981,7 +981,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
 
   const searchedComposeProjects = useMemo(() => {
     let list = [...composeProjects];
-    if (composeSearchQuery.trim()) {
+    if ((composeSearchQuery || '').trim()) {
       const q = composeSearchQuery.toLowerCase();
       list = list.filter(p => (p.name || '').toLowerCase().includes(q) || (p.services || []).some(s => s.toLowerCase().includes(q)));
     }
@@ -1025,7 +1025,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
       list = list.filter(d => d.update_available);
     }
 
-    if (searchQuery.trim()) {
+    if ((searchQuery || '').trim()) {
       const q = searchQuery.toLowerCase();
       list = list.filter(d => (d.name || '').toLowerCase().includes(q) || String(d.port || '').includes(q));
     }
@@ -1439,7 +1439,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
 
             {/* 常规状态下的搜索岛与停泊舱 */}
             <View style={styles.stickyIslandWrapper}>
-              <GlassView border={true} style={styles.floatingIslandCard}>
+              <View style={styles.searchSection}>
                 {isSearchFocused ? (
                   <View style={[styles.searchDockPlaceholder, { marginBottom: 0 }]}>
                     <Sparkles size={14} color={colors.accent} style={{ marginRight: 6 }} />
@@ -1473,7 +1473,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
                     </TouchableOpacity>
                   </TouchableOpacity>
                 )}
-              </GlassView>
+              </View>
             </View>
 
             {/* Compose 堆栈列表 */}
@@ -1549,7 +1549,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
 
             {/* 常规状态下的搜索岛与停泊舱 */}
             <View style={styles.stickyIslandWrapper}>
-              <GlassView border={true} style={styles.floatingIslandCard}>
+              <View style={styles.searchSection}>
                 {isSearchFocused ? (
                   <View style={styles.searchDockPlaceholder}>
                     <Sparkles size={14} color={colors.accent} style={{ marginRight: 6 }} />
@@ -1671,7 +1671,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
                     </TouchableOpacity>
                   </ScrollView>
                 </View>
-              </GlassView>
+              </View>
             </View>
 
             {/* 容器卡片列表 */}
@@ -2355,19 +2355,14 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   stickyIslandFocused: {
     zIndex: 120,
   },
+  searchSection: {
+    paddingTop: 2,
+    paddingBottom: 2,
+  },
   floatingIslandCard: {
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 10,
-    borderWidth: 1,
-    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: isDark ? 0.25 : 0.06,
-    shadowRadius: 10,
-    elevation: 4,
-    overflow: 'hidden',
+    paddingHorizontal: 0,
+    paddingTop: 2,
+    paddingBottom: 2,
   },
   floatingIslandCardFocused: {
     borderColor: isDark ? 'rgba(56, 189, 248, 0.4)' : 'rgba(14, 165, 233, 0.35)',
@@ -2397,16 +2392,17 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#ffffff',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : colors.card,
     borderRadius: 14,
     paddingHorizontal: 12,
     height: 42,
     borderWidth: 1,
-    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
+    borderColor: colors.cardBorder,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: isDark ? 0.2 : 0.04,
+    shadowOpacity: isDark ? 0.15 : 0.04,
     shadowRadius: 3,
+    elevation: 1,
   },
   searchDockPlaceholder: {
     flexDirection: 'row',

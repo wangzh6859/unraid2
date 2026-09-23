@@ -211,7 +211,7 @@ export default function FilesScreen({ navigation }) {
     extrapolate: 'clamp',
   });
 
-  const hasSearchQuery = searchQuery.trim().length > 0;
+  const hasSearchQuery = (searchQuery || '').trim().length > 0;
 
   // Selection & UI Modals
   const [multiSelect, setMultiSelect] = useState(false);
@@ -1821,7 +1821,7 @@ export default function FilesScreen({ navigation }) {
   // 文件：前置悬浮搜索结果列表
   const searchedFiles = useMemo(() => {
     let list = [...fileList];
-    if (searchQuery.trim()) {
+    if ((searchQuery || '').trim()) {
       const q = searchQuery.toLowerCase();
       list = list.filter(f => f.name.toLowerCase().includes(q));
     }
@@ -2013,7 +2013,7 @@ export default function FilesScreen({ navigation }) {
 
           {/* 常规状态下的搜索岛与停泊舱 */}
           <View style={styles.stickyIslandWrapper}>
-            <GlassView border={true} style={styles.floatingIslandCard}>
+            <View style={styles.searchSection}>
               {isSearchFocused ? (
                 <View style={[styles.searchDockPlaceholder, { marginBottom: 0 }]}>
                   <Sparkles size={14} color={colors.accent} style={{ marginRight: 6 }} />
@@ -2049,7 +2049,7 @@ export default function FilesScreen({ navigation }) {
                   </TouchableOpacity>
                 </TouchableOpacity>
               )}
-            </GlassView>
+            </View>
           </View>
 
           {/* 文件条目列表 */}
@@ -2983,19 +2983,14 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     backgroundColor: 'transparent',
     zIndex: 20,
   },
+  searchSection: {
+    paddingTop: 2,
+    paddingBottom: 2,
+  },
   floatingIslandCard: {
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 10,
-    borderWidth: 1,
-    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: isDark ? 0.25 : 0.06,
-    shadowRadius: 10,
-    elevation: 4,
-    overflow: 'hidden',
+    paddingHorizontal: 0,
+    paddingTop: 2,
+    paddingBottom: 2,
   },
   islandNavRow: {
     flexDirection: 'row',
@@ -3060,12 +3055,12 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#ffffff',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : colors.card,
     borderRadius: 12,
     paddingHorizontal: 10,
     height: 38,
     borderWidth: 1,
-    borderColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.06)',
+    borderColor: colors.cardBorder,
   },
   searchDockPlaceholder: {
     flex: 1,
