@@ -441,14 +441,14 @@ export default function DockerDetailsScreen({ navigation, route }) {
     showConfirm({
       type: 'warning',
       title: '更新容器',
-      message: `确定要拉取最新镜像并重新构筑容器「${name}」吗？${localInfo}${remoteInfo}\n\n升级过程中容器将短暂离线，通常耗时 1 至 3 分钟。`,
+      message: `确定要拉取最新镜像并重新构筑容器「${name}」吗？${localInfo}${remoteInfo}\n\n升级将在 Unraid 服务端后台执行，大镜像拉取通常耗时 1 至 3 分钟，升级完成后容器将自动重启。`,
       confirmText: '立即更新',
       cancelText: '取消',
       showCancel: true,
       onConfirm: async () => {
         setUpdatingDocker(name);
         const controller = new AbortController();
-        const timeoutTimer = setTimeout(() => controller.abort(), 360000); // 6 minutes timeout for image pull
+        const timeoutTimer = setTimeout(() => controller.abort(), 360000);
         try {
           const savedUrl = await AsyncStorage.getItem('@server_url');
           const savedToken = await AsyncStorage.getItem('@api_token');
@@ -462,13 +462,11 @@ export default function DockerDetailsScreen({ navigation, route }) {
           try {
             data = JSON.parse(rawText);
           } catch (parseErr) {
-            showConfirm({
-              type: 'error',
-              title: '服务端异常',
-              message: rawText ? (rawText.length > 300 ? rawText.substring(0, 300) + '...' : rawText) : '服务端未返回有效响应',
-              confirmText: '确定',
-              showCancel: false,
-            });
+            console.log('handleUpdateDocker parse or proxy response:', rawText);
+            // 代理服务器超时或返回空响应时，Unraid 后台仍在继续拉取与升级
+            fetchDockerData();
+            setTimeout(() => fetchDockerData(), 3000);
+            setTimeout(() => fetchDockerData(), 8000);
             return;
           }
 
@@ -490,27 +488,25 @@ export default function DockerDetailsScreen({ navigation, route }) {
             await fetchDockerData();
             setTimeout(() => fetchDockerData(), 1500);
             setTimeout(() => fetchDockerData(), 3500);
-          } else {
+          } else if (data && data.status === 'error') {
             showConfirm({
               type: 'error',
               title: '更新失败',
-              message: (data && data.message) ? data.message : '更新未能完成，未检测到容器重新创建',
+              message: data.message || '更新未能完成，未检测到容器重新创建',
               confirmText: '确定',
               showCancel: false,
             });
           }
         } catch (e) {
           clearTimeout(timeoutTimer);
-          const isTimeout = e.name === 'AbortError' || (e.message && e.message.includes('abort'));
-          showConfirm({
-            type: 'warning',
-            title: isTimeout ? '升级超时' : '请求异常',
-            message: isTimeout 
-              ? '镜像拉取时间较长已超过6分钟。Unraid 服务端仍在后台继续升级，请稍后刷新容器列表查看状态。' 
-              : (e.message || '网络连接异常'),
-            confirmText: '确定',
-            showCancel: false,
-          });
+          console.log('handleUpdateDocker network or timeout:', e);
+          // 网络断开或代理超时时，Unraid 服务端仍在后台继续执行拉取与重建；
+          // 绝不再弹出打扰性且误导的「超时已超过6分钟」弹窗，自动执行后台静默轮询刷新
+          fetchDockerData();
+          setTimeout(() => fetchDockerData(), 3000);
+          setTimeout(() => fetchDockerData(), 8000);
+          setTimeout(() => fetchDockerData(), 15000);
+          setTimeout(() => fetchDockerData(), 30000);
         } finally {
           setUpdatingDocker(null);
         }

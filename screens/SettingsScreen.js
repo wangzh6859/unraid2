@@ -39,6 +39,12 @@ import {
 } from '../utils/dockerWebUiManager';
 
 const APP_RELEASE_CHANGELOGS = {
+  '1.5.258': `【v1.5.258 优化Docker升级体验与彻底清除日志乱码】
+🐳 1. 彻底优化 Docker 容器升级体验：
+   - 彻底移除误导且打扰的「镜像拉取已超过6分钟」超时弹窗；
+   - 适配反向代理与慢速网络连接中断场景，转为后台静默安全轮询刷新，容器升级完成后自动呈现最新状态。
+📝 2. 全面修复历史版本日志乱码：
+   - 彻底解决 GitHub Releases 历史发版记录中的字符编码乱码问题，全量校准 v1.3.203 及 v1.5.245 ~ v1.5.257 所有版本更新日志。`,
   '1.5.257': `【v1.5.257 紧急修复虚拟机页面崩溃】
 🔧 1. 紧急修复虚拟机页面崩溃：
    - 在 VmDetailsScreen 头部 React 导入中补充 useEffect 声明，彻底根治进入虚拟机页面时抛出 ReferenceError: Property 'useEffect' doesn't exist 的红屏报错。`,
@@ -257,6 +263,7 @@ export default function SettingsScreen({ navigation }) {
       const versionKey = (latestTag || '').replace(/^v/i, '');
       const specificLog = APP_RELEASE_CHANGELOGS[versionKey]
         || APP_RELEASE_CHANGELOGS[appVersion]
+        || APP_RELEASE_CHANGELOGS['1.5.258']
         || APP_RELEASE_CHANGELOGS['1.5.257']
         || APP_RELEASE_CHANGELOGS['1.5.256']
         || APP_RELEASE_CHANGELOGS['1.5.255']
@@ -1470,6 +1477,7 @@ export default function SettingsScreen({ navigation }) {
               const versionKey = (appVersion || '').replace(/^v/i, '');
               const log = APP_RELEASE_CHANGELOGS[versionKey]
                 || APP_RELEASE_CHANGELOGS[appVersion]
+                || APP_RELEASE_CHANGELOGS['1.5.258']
                 || APP_RELEASE_CHANGELOGS['1.5.257']
                 || APP_RELEASE_CHANGELOGS['1.5.256']
                 || APP_RELEASE_CHANGELOGS['1.5.255']
