@@ -4,6 +4,15 @@
 
 ---
 
+## [v1.5.257] - 2026-09-23
+> **核心主题**：紧急修复虚拟机页面 useEffect 导入缺失导致的启动红屏崩溃。
+
+### 🔧 1. 紧急修复虚拟机页面崩溃
+- **根因分析**：在 `screens/VmDetailsScreen.js` 中引入底层绝对状态同步守卫 `useEffect` 时，顶部 React 解构导入中未声明 `useEffect`，导致进入虚拟机页面时抛出 `ReferenceError: Property 'useEffect' doesn't exist` 红屏崩溃；
+- **修复方案**：在 `screens/VmDetailsScreen.js` 头部 React 导入中补充 `useEffect`，彻底根除崩溃问题。
+
+---
+
 ## [v1.5.256] - 2026-09-23
 > **核心主题**：彻底根治 Docker Compose 页面崩溃；杜绝搜索快速连击导致的页面持续下沉缩小 UI 假死 bug；历史版本更新日志全链路补齐校准。
 

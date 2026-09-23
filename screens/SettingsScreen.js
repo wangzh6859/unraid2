@@ -39,6 +39,9 @@ import {
 } from '../utils/dockerWebUiManager';
 
 const APP_RELEASE_CHANGELOGS = {
+  '1.5.257': `【v1.5.257 紧急修复虚拟机页面崩溃】
+🔧 1. 紧急修复虚拟机页面崩溃：
+   - 在 VmDetailsScreen 头部 React 导入中补充 useEffect 声明，彻底根治进入虚拟机页面时抛出 ReferenceError: Property 'useEffect' doesn't exist 的红屏报错。`,
   '1.5.256': `【v1.5.256 彻底修复Compose崩溃、杜绝搜索快速连击假死与全版本日志校准】
 🐳 1. Docker Compose 堆栈稳定性彻底修复：
    - 将 DockerDetailsScreen 中缺失的 filteredComposeProjects 替换为 backgroundComposeProjects，并补充防御性兜底别名；
@@ -254,6 +257,7 @@ export default function SettingsScreen({ navigation }) {
       const versionKey = (latestTag || '').replace(/^v/i, '');
       const specificLog = APP_RELEASE_CHANGELOGS[versionKey]
         || APP_RELEASE_CHANGELOGS[appVersion]
+        || APP_RELEASE_CHANGELOGS['1.5.257']
         || APP_RELEASE_CHANGELOGS['1.5.256']
         || APP_RELEASE_CHANGELOGS['1.5.255']
         || APP_RELEASE_CHANGELOGS['1.5.254']
@@ -1466,6 +1470,7 @@ export default function SettingsScreen({ navigation }) {
               const versionKey = (appVersion || '').replace(/^v/i, '');
               const log = APP_RELEASE_CHANGELOGS[versionKey]
                 || APP_RELEASE_CHANGELOGS[appVersion]
+                || APP_RELEASE_CHANGELOGS['1.5.257']
                 || APP_RELEASE_CHANGELOGS['1.5.256']
                 || APP_RELEASE_CHANGELOGS['1.5.255']
                 || APP_RELEASE_CHANGELOGS['1.5.254']
