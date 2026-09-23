@@ -10,7 +10,7 @@ import {
   Folder, Server, Key, File, ChevronLeft, HardDrive, Plus, ArrowDownUp,
   FolderPlus, UploadCloud, DownloadCloud, X, Download, Pencil, Copy, MoveRight,
   Trash2, CheckCircle, Circle, ArrowUp, FolderOpen, Info, Pause, Play,
-  RefreshCw, Settings, Check, Search, Filter, Archive,
+  RefreshCw, Settings, Check, Search, Filter, Archive, Sparkles,
 } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';

@@ -1032,141 +1032,135 @@ export default function SettingsScreen({ navigation }) {
 
         {/* Unraid Core Server Card */}
         <Text style={styles.sectionTitle}>主控连接凭证</Text>
-        <GlassView border={true} borderRadius={20} style={styles.glassCard}>
-        <TouchableOpacity style={styles.row} onPress={editServerUrl}>
-          <View style={styles.iconBox}>
-            <Server color={colors.accent} size={22} />
-          </View>
-          <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>服务器地址</Text>
-            <Text style={styles.rowSub} numberOfLines={1}>{unraidUrl || '未设置'}</Text>
-          </View>
-          <Text style={styles.editHint}>修改</Text>
-        </TouchableOpacity>
+        <View style={styles.card}>
+          <TouchableOpacity style={styles.row} onPress={editServerUrl}>
+            <View style={styles.iconBox}>
+              <Server color={colors.accent} size={22} />
+            </View>
+            <View style={styles.infoBox}>
+              <Text style={styles.rowTitle}>服务器地址</Text>
+              <Text style={styles.rowSub} numberOfLines={1}>{unraidUrl || '未设置'}</Text>
+            </View>
+            <Text style={styles.editHint}>修改</Text>
+          </TouchableOpacity>
 
-        <View style={styles.divider} />
+          <View style={styles.divider} />
 
-        <TouchableOpacity style={styles.row} onPress={editApiToken}>
-          <View style={styles.iconBox}>
-            <Key color={colors.purple} size={22} />
-          </View>
-          <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>统一 API Token</Text>
-            <Text style={styles.rowSub} numberOfLines={1}>{apiToken ? '••••••••' : '未设置'}</Text>
-          </View>
-          <Text style={styles.editHint}>修改</Text>
-        </TouchableOpacity>
+          <TouchableOpacity style={styles.row} onPress={editApiToken}>
+            <View style={styles.iconBox}>
+              <Key color={colors.purple} size={22} />
+            </View>
+            <View style={styles.infoBox}>
+              <Text style={styles.rowTitle}>统一 API Token</Text>
+              <Text style={styles.rowSub} numberOfLines={1}>{apiToken ? '••••••••' : '未设置'}</Text>
+            </View>
+            <Text style={styles.editHint}>修改</Text>
+          </TouchableOpacity>
 
-        <View style={styles.divider} />
+          <View style={styles.divider} />
 
-        <TouchableOpacity style={styles.row} onPress={handleUnraidLogout}>
-          <View style={styles.iconBox}>
-            <LogOut color={colors.red} size={22} />
-          </View>
-          <View style={styles.infoBox}>
-            <Text style={[styles.rowTitle, { color: colors.red }]}>清除凭据</Text>
-            <Text style={styles.rowSub}>清除本地保存的 API 访问凭据</Text>
-          </View>
-        </TouchableOpacity>
-      </GlassView>
+          <TouchableOpacity style={styles.row} onPress={handleUnraidLogout}>
+            <View style={styles.iconBox}>
+              <LogOut color={colors.red} size={22} />
+            </View>
+            <View style={styles.infoBox}>
+              <Text style={[styles.rowTitle, { color: colors.red }]}>清除凭据</Text>
+              <Text style={styles.rowSub}>清除本地保存的 API 访问凭据</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
 
-      {/* Server Power Controls Card */}
-      <Text style={styles.sectionTitle}>服务器电源控制</Text>
-      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
-        <TouchableOpacity style={styles.row} onPress={handleServerReboot} disabled={powerLoading}>
-          <View style={styles.iconBox}>
-            <RotateCw color={colors.amber} size={22} />
-          </View>
-          <View style={styles.infoBox}>
-            <Text style={[styles.rowTitle, { color: colors.amber }]}>重启服务器 (Reboot)</Text>
-            <Text style={styles.rowSub}>安全重启 Unraid 主机与容器系统</Text>
-          </View>
-          <View style={styles.powerActionTag}>
-            <Text style={[styles.powerActionTagText, { color: colors.amber }]}>执行</Text>
-          </View>
-        </TouchableOpacity>
+        {/* Server Power Controls Card */}
+        <Text style={styles.sectionTitle}>服务器电源控制</Text>
+        <View style={styles.card}>
+          <TouchableOpacity style={styles.row} onPress={handleServerReboot} disabled={powerLoading}>
+            <View style={styles.iconBox}>
+              <RotateCw color={colors.amber} size={22} />
+            </View>
+            <View style={styles.infoBox}>
+              <Text style={[styles.rowTitle, { color: colors.amber }]}>重启服务器 (Reboot)</Text>
+              <Text style={styles.rowSub}>安全重启 Unraid 主机与容器系统</Text>
+            </View>
+            <Text style={[styles.editHint, { color: colors.amber }]}>重启</Text>
+          </TouchableOpacity>
 
-        <View style={styles.divider} />
+          <View style={styles.divider} />
 
-        <TouchableOpacity style={styles.row} onPress={handleServerPoweroff} disabled={powerLoading}>
-          <View style={styles.iconBox}>
-            <Power color={colors.red} size={22} />
-          </View>
-          <View style={styles.infoBox}>
-            <Text style={[styles.rowTitle, { color: colors.red }]}>关闭服务器 (Poweroff)</Text>
-            <Text style={styles.rowSub}>安全卸载存储池并切断电源</Text>
-          </View>
-          <View style={[styles.powerActionTag, { borderColor: 'rgba(239, 68, 68, 0.3)', backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
-            <Text style={[styles.powerActionTagText, { color: colors.red }]}>关机</Text>
-          </View>
-        </TouchableOpacity>
-      </GlassView>
+          <TouchableOpacity style={styles.row} onPress={handleServerPoweroff} disabled={powerLoading}>
+            <View style={styles.iconBox}>
+              <Power color={colors.red} size={22} />
+            </View>
+            <View style={styles.infoBox}>
+              <Text style={[styles.rowTitle, { color: colors.red }]}>关闭服务器 (Poweroff)</Text>
+              <Text style={styles.rowSub}>安全卸载存储池并切断电源</Text>
+            </View>
+            <Text style={[styles.editHint, { color: colors.red }]}>关机</Text>
+          </TouchableOpacity>
+        </View>
 
-      {/* Wake-on-LAN Remote Wake Card */}
-      <Text style={styles.sectionTitle}>网络唤醒 (Wake-on-LAN)</Text>
-      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
-        <TouchableOpacity style={styles.row} onPress={editWolMac}>
-          <View style={styles.iconBox}>
-            <Zap color={colors.accent} size={22} />
-          </View>
-          <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>服务器物理 MAC</Text>
-            <Text style={styles.rowSub} numberOfLines={1}>
-              {wolMac ? formatMacAddress(wolMac) : '未检测到 (联网刷新自动同步)'}
-            </Text>
-          </View>
-          <Text style={styles.editHint}>修改</Text>
-        </TouchableOpacity>
+        {/* Wake-on-LAN Remote Wake Card */}
+        <Text style={styles.sectionTitle}>网络唤醒 (Wake-on-LAN)</Text>
+        <View style={styles.card}>
+          <TouchableOpacity style={styles.row} onPress={editWolMac}>
+            <View style={styles.iconBox}>
+              <Zap color={colors.accent} size={22} />
+            </View>
+            <View style={styles.infoBox}>
+              <Text style={styles.rowTitle}>服务器物理 MAC</Text>
+              <Text style={styles.rowSub} numberOfLines={1}>
+                {wolMac ? formatMacAddress(wolMac) : '未检测到 (联网刷新自动同步)'}
+              </Text>
+            </View>
+            <Text style={styles.editHint}>修改</Text>
+          </TouchableOpacity>
 
-        <View style={styles.divider} />
+          <View style={styles.divider} />
 
-        <TouchableOpacity style={styles.row} onPress={editWolBroadcastIp}>
-          <View style={styles.iconBox}>
-            <Radio color={colors.green} size={22} />
-          </View>
-          <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>局域网广播 IP</Text>
-            <Text style={styles.rowSub} numberOfLines={1}>{wolBroadcastIp || '255.255.255.255'}</Text>
-          </View>
-          <Text style={styles.editHint}>修改</Text>
-        </TouchableOpacity>
+          <TouchableOpacity style={styles.row} onPress={editWolBroadcastIp}>
+            <View style={styles.iconBox}>
+              <Radio color={colors.green} size={22} />
+            </View>
+            <View style={styles.infoBox}>
+              <Text style={styles.rowTitle}>局域网广播 IP</Text>
+              <Text style={styles.rowSub} numberOfLines={1}>{wolBroadcastIp || '255.255.255.255'}</Text>
+            </View>
+            <Text style={styles.editHint}>修改</Text>
+          </TouchableOpacity>
 
-        <View style={styles.divider} />
+          <View style={styles.divider} />
 
-        <TouchableOpacity style={styles.row} onPress={editWolPort}>
-          <View style={styles.iconBox}>
-            <Key color={colors.purple} size={22} />
-          </View>
-          <View style={styles.infoBox}>
-            <Text style={styles.rowTitle}>唤醒端口 (UDP)</Text>
-            <Text style={styles.rowSub} numberOfLines={1}>端口 {wolPort || 9}</Text>
-          </View>
-          <Text style={styles.editHint}>修改</Text>
-        </TouchableOpacity>
+          <TouchableOpacity style={styles.row} onPress={editWolPort}>
+            <View style={styles.iconBox}>
+              <Key color={colors.purple} size={22} />
+            </View>
+            <View style={styles.infoBox}>
+              <Text style={styles.rowTitle}>唤醒端口 (UDP)</Text>
+              <Text style={styles.rowSub} numberOfLines={1}>端口 {wolPort || 9}</Text>
+            </View>
+            <Text style={styles.editHint}>修改</Text>
+          </TouchableOpacity>
 
-        <View style={styles.divider} />
+          <View style={styles.divider} />
 
-        <TouchableOpacity style={styles.row} onPress={handleTestWol} disabled={wolTesting}>
-          <View style={styles.iconBox}>
-            <Zap color={colors.amber} size={22} />
-          </View>
-          <View style={styles.infoBox}>
-            <Text style={[styles.rowTitle, { color: colors.amber }]}>立即测试唤醒包</Text>
-            <Text style={styles.rowSub}>向局域网广播 UDP 魔术包测试路由连通</Text>
-          </View>
-          <View style={[styles.powerActionTag, { borderColor: 'rgba(245, 158, 11, 0.3)', backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}>
+          <TouchableOpacity style={styles.row} onPress={handleTestWol} disabled={wolTesting}>
+            <View style={styles.iconBox}>
+              <Zap color={colors.amber} size={22} />
+            </View>
+            <View style={styles.infoBox}>
+              <Text style={[styles.rowTitle, { color: colors.amber }]}>立即测试唤醒包</Text>
+              <Text style={styles.rowSub}>向局域网广播 UDP 魔术包测试路由连通</Text>
+            </View>
             {wolTesting ? (
               <ActivityIndicator color={colors.amber} size="small" />
             ) : (
-              <Text style={[styles.powerActionTagText, { color: colors.amber }]}>测试</Text>
+              <Text style={[styles.editHint, { color: colors.amber }]}>测试</Text>
             )}
-          </View>
-        </TouchableOpacity>
-      </GlassView>
+          </TouchableOpacity>
+        </View>
 
       {/* Docker Reverse Proxy & WebUI Jump */}
       <Text style={styles.sectionTitle}>Docker 反代与 Web 界面</Text>
-      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
+      <View style={styles.card}>
         <View style={styles.row}>
           <View style={styles.iconBox}>
             <Globe color={colors.accent} size={20} />
@@ -1216,11 +1210,11 @@ export default function SettingsScreen({ navigation }) {
           </View>
           <Text style={styles.editHint}>管理</Text>
         </TouchableOpacity>
-      </GlassView>
+      </View>
 
       {/* Security & Biometrics */}
       <Text style={styles.sectionTitle}>安全防护与生物识别</Text>
-      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
+      <View style={styles.card}>
         <View style={styles.row}>
           <View style={styles.iconBox}>
             <Fingerprint color={colors.accent} size={20} />
@@ -1258,11 +1252,11 @@ export default function SettingsScreen({ navigation }) {
             thumbColor={'#ffffff'}
           />
         </View>
-      </GlassView>
+      </View>
 
       {/* Background Transfer & Foreground Service */}
       <Text style={styles.sectionTitle}>传输与后台保活</Text>
-      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
+      <View style={styles.card}>
         <View style={styles.row}>
           <View style={styles.iconBox}>
             <Activity color={colors.green || '#10b981'} size={20} />
@@ -1280,11 +1274,11 @@ export default function SettingsScreen({ navigation }) {
             thumbColor={'#ffffff'}
           />
         </View>
-      </GlassView>
+      </View>
 
       {/* Appearance & Themes */}
       <Text style={styles.sectionTitle}>外观与沉浸显示</Text>
-      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
+      <View style={styles.card}>
         <View style={styles.row}>
           <View style={styles.iconBox}>
             {isDark ? <Moon color={colors.purple} size={20} /> : <Sun color={colors.amber} size={20} />}
@@ -1300,11 +1294,11 @@ export default function SettingsScreen({ navigation }) {
             thumbColor={'#ffffff'}
           />
         </View>
-      </GlassView>
+      </View>
 
       {/* Download Directory */}
       <Text style={styles.sectionTitle}>本地存储与下载</Text>
-      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
+      <View style={styles.card}>
         <View style={styles.row}>
           <View style={styles.iconBox}>
             <FolderDown color={colors.accent} size={20} />
@@ -1327,11 +1321,11 @@ export default function SettingsScreen({ navigation }) {
             <Text style={styles.miniBtnText}>恢复应用内置</Text>
           </TouchableOpacity>
         </View>
-      </GlassView>
+      </View>
 
       {/* Preview Cache Management */}
       <Text style={styles.sectionTitle}>即时预览缓存</Text>
-      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
+      <View style={styles.card}>
         <View style={styles.row}>
           <View style={styles.iconBox}>
             <HardDrive color={colors.green} size={20} />
@@ -1381,11 +1375,11 @@ export default function SettingsScreen({ navigation }) {
             <Text style={styles.rowSub}>即刻释放手机存储空间</Text>
           </View>
         </TouchableOpacity>
-      </GlassView>
+      </View>
 
       {/* Architecture & Protocol */}
       <Text style={styles.sectionTitle}>底层核心架构</Text>
-      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
+      <View style={styles.card}>
         <View style={styles.row}>
           <View style={styles.iconBox}>
             <ShieldCheck color={colors.accent} size={20} />
@@ -1405,11 +1399,11 @@ export default function SettingsScreen({ navigation }) {
             <Text style={styles.rowSub}>RFC 7233 HTTP 206 Partial Content 分片流</Text>
           </View>
         </View>
-      </GlassView>
+      </View>
 
       {/* Software Version & In-App Update */}
       <Text style={styles.sectionTitle}>软件版本与在线更新</Text>
-      <GlassView border={true} borderRadius={20} style={styles.glassCard}>
+      <View style={styles.card}>
         <View style={styles.row}>
           <View style={styles.iconBox}>
             <Sparkles color={colors.accent} size={20} />
@@ -1482,7 +1476,7 @@ export default function SettingsScreen({ navigation }) {
             )}
           </TouchableOpacity>
         </View>
-      </GlassView>
+      </View>
 
       {/* Server Config Input Modal */}
       <Modal visible={serverEditVisible} transparent animationType="fade" onRequestClose={() => setServerEditVisible(false)} statusBarTranslucent>
@@ -1922,15 +1916,16 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     marginTop: 18,
     letterSpacing: 0.2,
   },
-  glassCard: {
+  card: {
+    backgroundColor: colors.card,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: isDark ? 'rgba(255, 255, 255, 0.10)' : 'rgba(0, 0, 0, 0.06)',
+    borderColor: colors.cardBorder,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: isDark ? 0.25 : 0.05,
-    shadowRadius: 10,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: isDark ? 0.25 : 0.04,
+    shadowRadius: 8,
+    elevation: 2,
     overflow: 'hidden',
     marginBottom: 4,
   },
@@ -1974,19 +1969,6 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     fontWeight: 'bold',
   },
 
-  powerActionTag: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
-    backgroundColor: 'rgba(245, 158, 11, 0.1)',
-  },
-  powerActionTagText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-
   divider: {
     height: 1,
     backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
@@ -2003,12 +1985,12 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
+    backgroundColor: colors.cardSecondary,
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
+    borderColor: colors.cardBorder,
   },
   miniBtnText: {
     color: colors.textStrong,

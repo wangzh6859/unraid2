@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   Monitor, RotateCw, Play, Power, Pause, Zap, Cpu, Database,
-  Search, X, Check, ArrowUpDown, ShieldAlert, ChevronLeft
+  Search, X, Check, ArrowUpDown, ShieldAlert, ChevronLeft, Sparkles,
 } from 'lucide-react-native';
 import { useTheme } from '../ThemeContext';
 import Svg, { Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
