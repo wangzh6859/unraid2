@@ -42,8 +42,28 @@ export default function DockerDetailsScreen({ navigation, route }) {
   const focusedSearchInputRef = useRef(null);
   const searchAnim = useRef(new Animated.Value(0)).current;
 
+  // 搜索聚焦与退出的状态引用及防抖时间戳，杜绝并发竞态与快速连击
+  const isSearchFocusedRef = useRef(false);
+  const searchFocusTimestampRef = useRef(0);
+
+  // 绝对状态守卫：无论何时 isSearchFocused 为 false，强行重置 searchAnim 为 0，杜绝缩放下沉假死卡滞
+  useEffect(() => {
+    if (!isSearchFocused) {
+      searchAnim.stopAnimation();
+      searchAnim.setValue(0);
+      isSearchFocusedRef.current = false;
+    } else {
+      isSearchFocusedRef.current = true;
+    }
+  }, [isSearchFocused]);
+
   const handleFocusSearch = () => {
+    if (isSearchFocusedRef.current) return;
+    isSearchFocusedRef.current = true;
+    searchFocusTimestampRef.current = Date.now();
     setIsSearchFocused(true);
+
+    searchAnim.stopAnimation();
     Animated.timing(searchAnim, {
       toValue: 1,
       duration: 260,
@@ -56,19 +76,35 @@ export default function DockerDetailsScreen({ navigation, route }) {
   };
 
   const handleExitSearch = () => {
+    // 防误触与连击屏蔽：进入搜索前 300ms 忽略退出点击，杜绝双击穿透立即触发退出
+    if (Date.now() - searchFocusTimestampRef.current < 300) {
+      return;
+    }
+    if (!isSearchFocusedRef.current) {
+      setIsSearchFocused(false);
+      searchAnim.stopAnimation();
+      searchAnim.setValue(0);
+      return;
+    }
+    isSearchFocusedRef.current = false;
+
     Keyboard.dismiss();
     focusedSearchInputRef.current?.blur();
     searchInputRef.current?.blur();
     composeSearchInputRef.current?.blur();
+
+    searchAnim.stopAnimation();
     Animated.timing(searchAnim, {
       toValue: 0,
       duration: 240,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-    }).start(() => {
-      setIsSearchFocused(false);
-      setSearchQuery('');
-      setComposeSearchQuery('');
+    }).start(({ finished }) => {
+      if (finished) {
+        setIsSearchFocused(false);
+        setSearchQuery('');
+        setComposeSearchQuery('');
+      }
     });
   };
 
@@ -978,6 +1014,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
   const backgroundComposeProjects = useMemo(() => {
     return [...composeProjects];
   }, [composeProjects]);
+  const filteredComposeProjects = backgroundComposeProjects; // 防御性兜底别名，确保历史及派生引用绝不报错
 
   const searchedComposeProjects = useMemo(() => {
     let list = [...composeProjects];
@@ -1452,6 +1489,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
                     activeOpacity={0.85}
                     style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
                     onPress={handleFocusSearch}
+                    disabled={isSearchFocused}
                   >
                     <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
                       <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />
@@ -1480,7 +1518,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
             <View style={styles.cardsListSection}>
               {backgroundComposeProjects.map(renderComposeItem)}
 
-              {filteredComposeProjects.length === 0 && !composeLoading && (
+              {backgroundComposeProjects.length === 0 && !composeLoading && (
                 <View style={styles.emptyContainer}>
                   <Layers size={42} color={colors.muted} style={{ marginBottom: 12 }} />
                   <Text style={styles.emptyTitle}>暂无 Compose 堆栈</Text>
@@ -1562,6 +1600,7 @@ export default function DockerDetailsScreen({ navigation, route }) {
                     activeOpacity={0.85}
                     style={styles.searchBoxRow}
                     onPress={handleFocusSearch}
+                    disabled={isSearchFocused}
                   >
                     <View style={[styles.searchBox, { flex: 1, marginBottom: 0 }]}>
                       <Search size={15} color={colors.sub} style={{ marginRight: 8 }} />

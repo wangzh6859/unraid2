@@ -147,8 +147,28 @@ export default function FilesScreen({ navigation }) {
   const focusedSearchInputRef = useRef(null);
   const searchAnim = useRef(new Animated.Value(0)).current;
 
+  // 搜索聚焦与退出的状态引用及防抖时间戳，杜绝并发竞态与快速连击
+  const isSearchFocusedRef = useRef(false);
+  const searchFocusTimestampRef = useRef(0);
+
+  // 绝对状态守卫：无论何时 isSearchFocused 为 false，强行重置 searchAnim 为 0，杜绝缩放下沉假死卡滞
+  useEffect(() => {
+    if (!isSearchFocused) {
+      searchAnim.stopAnimation();
+      searchAnim.setValue(0);
+      isSearchFocusedRef.current = false;
+    } else {
+      isSearchFocusedRef.current = true;
+    }
+  }, [isSearchFocused]);
+
   const handleFocusSearch = () => {
+    if (isSearchFocusedRef.current) return;
+    isSearchFocusedRef.current = true;
+    searchFocusTimestampRef.current = Date.now();
     setIsSearchFocused(true);
+
+    searchAnim.stopAnimation();
     Animated.timing(searchAnim, {
       toValue: 1,
       duration: 260,
@@ -161,17 +181,33 @@ export default function FilesScreen({ navigation }) {
   };
 
   const handleExitSearch = () => {
+    // 防误触与连击屏蔽：进入搜索前 300ms 忽略退出点击，杜绝双击穿透立即触发退出
+    if (Date.now() - searchFocusTimestampRef.current < 300) {
+      return;
+    }
+    if (!isSearchFocusedRef.current) {
+      setIsSearchFocused(false);
+      searchAnim.stopAnimation();
+      searchAnim.setValue(0);
+      return;
+    }
+    isSearchFocusedRef.current = false;
+
     Keyboard.dismiss();
     focusedSearchInputRef.current?.blur();
     searchInputRef.current?.blur();
+
+    searchAnim.stopAnimation();
     Animated.timing(searchAnim, {
       toValue: 0,
       duration: 240,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-    }).start(() => {
-      setIsSearchFocused(false);
-      setSearchQuery('');
+    }).start(({ finished }) => {
+      if (finished) {
+        setIsSearchFocused(false);
+        setSearchQuery('');
+      }
     });
   };
 
@@ -1817,6 +1853,7 @@ export default function FilesScreen({ navigation }) {
     });
     return list;
   }, [fileList, sortBy]);
+  const filteredFiles = backgroundFiles; // 防御性兜底别名，避免多选操作抛出未定义异常
 
   // 文件：前置悬浮搜索结果列表
   const searchedFiles = useMemo(() => {
@@ -2026,6 +2063,7 @@ export default function FilesScreen({ navigation }) {
                   activeOpacity={0.85}
                   style={styles.islandSearchRow}
                   onPress={handleFocusSearch}
+                  disabled={isSearchFocused}
                 >
                   <View style={styles.searchBox}>
                     <Search color={colors.sub} size={15} style={{ marginRight: 8 }} />

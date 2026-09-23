@@ -4,6 +4,30 @@
 
 ---
 
+## [v1.5.256] - 2026-09-23
+> **核心主题**：彻底根治 Docker Compose 页面崩溃；杜绝搜索快速连击导致的页面持续下沉缩小 UI 假死 bug；历史版本更新日志全链路补齐校准。
+
+### 🐳 1. Docker Compose 堆栈稳定性彻底修复
+- **根因分析**：在 `DockerDetailsScreen.js` 空状态组件渲染处引用了已重构解耦的旧变量 `filteredComposeProjects`，导致切换至 Compose 堆栈标签页时抛出 `ReferenceError: Property 'filteredComposeProjects' doesn't exist` 导致红屏报错闪退；
+- **修复方案**：将 `filteredComposeProjects` 修正为与背景渲染一致的 `backgroundComposeProjects`，并在定义处同步声明防御性兜底别名 `const filteredComposeProjects = backgroundComposeProjects;`，确保历史及派生引用稳定安全。
+
+### 🔍 2. 搜索框快速连击与防竞态彻底加固
+- **根因分析**：连续快速点击搜索框触发并发竞态条件，导致 `isSearchFocused` 被中断退出动画置为 `false`，但新触发的聚焦动画将 `searchAnim` 推进并停留在 `1`；界面返回常规卡片渲染，但由于 `searchAnim === 1`，主内容容器的 `pageSinkTranslateY: 52` 和 `pageSinkScale: 0.94` 永久生效，导致界面卡死在下沉缩小状态；
+- **修复方案**：
+  - **动画互斥与清理**：在 Docker、虚拟机、文件管理三大页面的 `handleFocusSearch` 与 `handleExitSearch` 中全面引入 `searchAnim.stopAnimation()`，杜绝未完动画与新动画交叠；
+  - **快速误触屏蔽防抖**：进入搜索前 300ms 忽略背景退出的点击事件，杜绝快速双击搜索栏时背景遮罩立即捕获第二次点击引发的连环退出并发；
+  - **动画完成守卫**：在 `handleExitSearch` 回调中仅在 `finished === true` 时才执行重置，避免中断回调污染状态；
+  - **底层绝对状态同步钩子**：引入 `useEffect(() => { if (!isSearchFocused) { searchAnim.stopAnimation(); searchAnim.setValue(0); } }, [isSearchFocused])`，从 React 状态机底层保证只要退出搜索，动画数值绝对强制归零，物理级杜绝微缩下沉假死；
+  - **按钮禁用防御**：在常规搜索框的 `TouchableOpacity` 上补充 `disabled={isSearchFocused}`。
+
+### 📁 3. 文件管理页面多选异常防御
+- 在 `FilesScreen.js` 中补充 `const filteredFiles = backgroundFiles;` 别名定义，彻底避免全选/取消全选操作因旧变量缺失而抛出未定义异常。
+
+### 📝 4. 历史版本更新日志全量补齐校准
+- 全面整理补充 `CHANGELOG.md`、`SettingsScreen.js` 以及 GitHub Release 历史发布说明中 `v1.5.250` ~ `v1.5.256` 每一个版本的详细更新记录，彻底清除历史旧文案。
+
+---
+
 ## [v1.5.255] - 2026-09-23
 > **核心主题**：更新日志全链路实时化；彻底修复 Docker Compose 闪退；全面清除三大页面搜索白框；彻底解决二级监控详情页底部 Dock 栏遮挡。
 
@@ -22,6 +46,23 @@
 - **修复方案**：移除外层的 `<GlassView>`，将其替换为纯透明布局容器 `<View style={styles.searchSection}>`；搜索框本身保留精致且统一的卡片边框规范，下方的分类标签（全部、运行中、已停止）直接置于页面背景上平滑滚动，杜绝多余的矩形白块，界面通透统一。
 
 ### 📱 4. 解决首页 CPU、GPU、内存、网速详情拉到底部被 Dock 栏遮挡
+- **根因分析**：二级详情页面中 ScrollView 内容容器的底部内边距为 `paddingBottom: 36`，小于悬浮 Dock 栏与安全区的高度，导致拉到最底部的进程项（如 `kswapd0` 进程）、网卡项等被软件底部 Dock 栏遮挡；
+- **修复方案**：将所有二级监控详情页（CPU、GPU、内存、网络、磁盘 SMART）的底部留白统一增加至 `paddingBottom: 120`，确保所有内容均可完整滑动至 Dock 栏上方查看。
+
+---
+
+## [v1.5.254] - 2026-09-23
+> **核心主题**：修复 Docker Compose 页面打不开闪退；清除三大页面搜索白框；解决二级监控详情页底部 Dock 栏遮挡。
+
+### 🐳 1. 修复 Docker Compose 页面打不开及崩溃闪退
+- **根因分析**：`DockerDetailsScreen.js` 中的 `composeSearchQuery` 状态定义位置滞后于 `hasSearchQuery` 计算逻辑，当切换至 Compose 堆栈标签页时，重新渲染立即执行了 `composeSearchQuery.trim()`，抛出 `TypeError: Cannot read property 'trim' of undefined` 导致红屏报错闪退；
+- **修复方案**：将 `composeSearchQuery` 状态定义提前至顶层，并为全文件所有 `.trim()` 调用加入防御性回退 `(composeSearchQuery || '').trim()`，确保切换 Compose 时顺畅渲染。
+
+### 🎨 2. 彻底清除三大页面搜索模块白色矩形外框
+- **根因分析**：此前在三大页面的在位搜索模块外层包裹了 `<GlassView border={true}>`，在 Android 系统及浅色模式下会渲染出一圈自带白底与描边的矩形卡片，加之内层的搜索输入框自身的边框，形成了“白框套白框”的突兀视觉；
+- **修复方案**：移除外层的 `<GlassView>`，将其替换为纯透明布局容器 `<View style={styles.searchSection}>`；搜索框本身保留精致且统一的卡片边框规范，下方的分类标签（全部、运行中、已停止）直接置于页面背景上平滑滚动，杜绝多余的矩形白块，界面通透统一。
+
+### 📱 3. 彻底解决二级监控详情页底部 Dock 遮挡
 - **根因分析**：二级详情页面中 ScrollView 内容容器的底部内边距为 `paddingBottom: 36`，小于悬浮 Dock 栏与安全区的高度，导致拉到最底部的进程项（如 `kswapd0` 进程）、网卡项等被软件底部 Dock 栏遮挡；
 - **修复方案**：将所有二级监控详情页（CPU、GPU、内存、网络、磁盘 SMART）的底部留白统一增加至 `paddingBottom: 120`，确保所有内容均可完整滑动至 Dock 栏上方查看。
 
@@ -50,6 +91,37 @@
 
 ### ✨ 3. 设置页面 5 大操作弹窗全面升级毛玻璃
 - 修改服务器地址、Token 等 5 大全屏弹窗全面接入硬件加速高斯模糊（`BlurView`）与拟态卡片。
+
+---
+
+## [v1.5.251] - 2026-09-21
+> **核心主题**：消除搜索动画闪烁与掉帧卡顿；从原位平滑浮升置顶；页面大幅深度沉降与景深微缩。
+
+### ⚡ 1. 动画引擎全面升级 Native Driver
+- 针对用户反馈“搜索框闪现、退出卡顿”，动画引擎全面切换至 `useNativeDriver: true`，消除 JS 线程阻塞引起的闪烁与退出卡顿。
+
+### 🚀 2. 搜索岛原位平滑浮升置顶
+- 搜索岛从列表真实坐标计算位移（`SEARCH_START_OFFSET`），物理级平滑上升至顶部，彻底告别突兀闪现。
+
+### 🌊 3. 页面大幅深度沉降与景深微缩
+- 主容器绑定 `52px` 大幅平滑下沉与 `0.94` 景深微缩，搭配退出时的平滑三次贝塞尔（`cubic`）缓动曲线，打造极致自然景深层次。
+
+### 🎯 4. 搜索结果前置解耦呈现
+- 仅在有搜索输入内容时在搜索框下方渲染匹配结果卡片，无输入时保持沉降虚化背景，杜绝突兀交叠。
+
+---
+
+## [v1.5.250] - 2026-09-21
+> **核心主题**：全新浮动搜索岛设计；景深沉降模糊系统；状态栏重叠与安全区深度适配。
+
+### 🌟 1. 浮动搜索岛架构
+- Docker、虚拟机、文件页面统一引入置顶浮动搜索岛，辅以青色/主题色微光卡片与毛玻璃高斯模糊。
+
+### 🌫️ 2. 全局沉降虚化遮罩
+- 点击搜索时激活沉浸式模糊背景（`BlurView`），点击背景空白区域随时平滑退出。
+
+### 📱 3. 状态栏避让与安全区适配
+- 精准适配各种异形屏与挖孔屏顶部安全区高度，杜绝搜索框与状态栏重合遮挡。
 
 ---
 

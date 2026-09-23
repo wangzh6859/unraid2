@@ -39,6 +39,19 @@ import {
 } from '../utils/dockerWebUiManager';
 
 const APP_RELEASE_CHANGELOGS = {
+  '1.5.256': `【v1.5.256 彻底修复Compose崩溃、杜绝搜索快速连击假死与全版本日志校准】
+🐳 1. Docker Compose 堆栈稳定性彻底修复：
+   - 将 DockerDetailsScreen 中缺失的 filteredComposeProjects 替换为 backgroundComposeProjects，并补充防御性兜底别名；
+   - 彻底根治切换至 Compose 堆栈标签页时抛出 ReferenceError 导致的红屏闪退崩溃。
+🔍 2. 搜索框快速连击与防竞态彻底加固：
+   - 在 Docker、虚拟机、文件管理三大页面中，引入引用状态守卫（isSearchFocusedRef）与动画中断清理（stopAnimation）；
+   - 增加 300ms 快速误触屏蔽防抖，杜绝快速双击时背景遮罩立即捕获第二次点击引发的连环退出并发；
+   - 引入底层绝对状态同步钩子（useEffect 保证只要 !isSearchFocused，searchAnim 必定强制归零），物理级杜绝由于连续快速点击导致界面永久卡滞在 52px 下沉与 0.94 景深微缩的状态；
+   - 在常规搜索输入栏外层增加 disabled={isSearchFocused} 防御判定，彻底解决连击 bug。
+📁 3. 文件管理页面异常防御：
+   - 补充 filteredFiles 别名定义，彻底避免文件批量多选操作抛出未定义异常。
+📝 4. 历史版本更新日志全量补齐校准：
+   - 在应用设置、本地日志与 GitHub Release 发布记录中，全面补齐与修正 v1.5.250 ~ v1.5.256 每一个版本的详细更新内容，彻底清除历史旧文案。`,
   '1.5.255': `【v1.5.255 实时更新日志与全链路细节打磨】
 📝 1. 软件更新日志体系全面实时化：
    - 设置页面更新日志、检查更新弹窗与 GitHub Release 实时对齐当前版本；
@@ -52,16 +65,26 @@ const APP_RELEASE_CHANGELOGS = {
 📱 4. 解决底部 Dock 栏遮挡二级详情页内容：
    - CPU、GPU、内存、网速、SMART 详情页底部内边距统一增加至 120px，彻底预留悬浮 Dock 栏避让空间，所有进程与监控数据均可完整向上滚动查阅。`,
   '1.5.254': `【v1.5.254 Compose崩溃修复、清除搜索白框与Dock避让】
-🐳 1. 彻底修复 Docker Compose 页面打不开及崩溃闪退（修复状态生命周期顺序）。
+🐳 1. 彻底修复 Docker Compose 页面打不开及崩溃闪退（修复 composeSearchQuery 状态生命周期顺序）。
 🎨 2. 彻底清除 Docker、虚拟机、文件管理页面的白色矩形框，视觉通透统一。
 📱 3. 解决 CPU、GPU、内存、网速详情拉到底部被 Dock 栏遮挡的问题。`,
   '1.5.253': `【v1.5.253 虚拟机与文件搜索崩溃修复、清除设置白框】
 🔧 1. 补全 Sparkles 图标导入，修复虚拟机和文件页面点击搜索闪退红屏。
-🎨 2. 设置页面全面复原标准卡片，彻底根除双层白边与底色方块。`,
+🎨 2. 设置页面全面复原标准卡片，彻底根除双层白边与底色方块。
+⚡ 3. 优化电源控制栏指示标签，移除重启/关机操作右侧的药丸边框方块。`,
   '1.5.252': `【v1.5.252 搜索原位微光停泊舱与弹窗毛玻璃拟态】
-🚀 1. 搜索框上浮后原位注入极富科技感的微光停泊舱，杜绝空白空洞。
-🛡️ 2. 背景全量卡片与搜索结果彻底解耦，沉降底板稳固虚化。
+🚀 1. 搜索框上浮后原位注入极富科技感的微光停泊舱（Docking Bay），杜绝空白空洞。
+🛡️ 2. 背景全量卡片与搜索结果彻底解耦，沉降底板稳固虚化，仅在搜索框正下方规整浮现匹配卡片。
 ✨ 3. 设置页面 5 大核心操作弹窗全面升级原生高斯模糊与拟态卡片。`,
+  '1.5.251': `【v1.5.251 消除搜索动画闪烁、原位平滑浮升与深度沉降】
+⚡ 1. 动画引擎全面升级 Native Driver，消除 JS 线程阻塞引起的闪烁与退出卡顿。
+🚀 2. 搜索岛从原位平滑浮升置顶，杜绝突兀闪现。
+🌊 3. 主页面容器绑定 52px 深度平滑下沉与 0.94 景深微缩，搭配平滑三次贝塞尔缓动退出。
+🎯 4. 搜索结果前置解耦呈现，仅在有搜索内容时展示结果，无输入时保持沉降虚化背景。`,
+  '1.5.250': `【v1.5.250 全新浮动搜索岛设计与景深沉降模糊系统】
+🌟 1. 浮动搜索岛架构：Docker、虚拟机、文件页面统一引入置顶浮动搜索岛，辅以青色微光卡片与毛玻璃高斯模糊。
+🌫️ 2. 全局沉降虚化遮罩：点击搜索时激活沉浸式模糊背景（BlurView），点击背景空白区域随时平滑退出。
+📱 3. 状态栏避让与安全区适配：精准适配各种异形屏与挖孔屏顶部安全区高度，杜绝搜索框与状态栏重合遮挡。`,
   '1.5.0': `【v1.5.0 全新毛玻璃拟态视觉基座与通透 Dock】
 💎 1. 全新 Glassmorphism 毛玻璃视觉设计语言（第一阶段）：
    - 官方集成 expo-blur 原生高斯模糊硬件加速引擎与亚克力微光漫反射描边。
@@ -231,6 +254,7 @@ export default function SettingsScreen({ navigation }) {
       const versionKey = (latestTag || '').replace(/^v/i, '');
       const specificLog = APP_RELEASE_CHANGELOGS[versionKey]
         || APP_RELEASE_CHANGELOGS[appVersion]
+        || APP_RELEASE_CHANGELOGS['1.5.256']
         || APP_RELEASE_CHANGELOGS['1.5.255']
         || APP_RELEASE_CHANGELOGS['1.5.254']
         || '';
@@ -1442,6 +1466,7 @@ export default function SettingsScreen({ navigation }) {
               const versionKey = (appVersion || '').replace(/^v/i, '');
               const log = APP_RELEASE_CHANGELOGS[versionKey]
                 || APP_RELEASE_CHANGELOGS[appVersion]
+                || APP_RELEASE_CHANGELOGS['1.5.256']
                 || APP_RELEASE_CHANGELOGS['1.5.255']
                 || APP_RELEASE_CHANGELOGS['1.5.254']
                 || APP_RELEASE_CHANGELOGS['1.5.0']
