@@ -2091,7 +2091,7 @@ export default function FilesScreen({ navigation }) {
           </View>
 
           {/* 文件条目列表 */}
-          <View style={styles.cardsListSection}>
+          <View style={[styles.cardsListSection, multiSelect && { paddingBottom: 220 }]}>
             {isLoadingList && !isRefreshing ? (
               <View style={styles.listCenter}>
                 <ActivityIndicator size="large" color={colors.accent} />
@@ -2218,67 +2218,95 @@ export default function FilesScreen({ navigation }) {
         </Animated.View>
       )}
 
-      {/* Multi-Select Bottom Action Bar */}
+      {/* 悬浮多选操作栏 (浮动在全局 Dock 栏上方，杜绝被遮挡) */}
       {multiSelect && (
-        <View style={styles.bottomBar}>
-          <View style={styles.bottomBarTop}>
-            <Text style={styles.bottomBarCount}>已选 {selected.size} 项</Text>
-            <TouchableOpacity onPress={toggleSelectAll}>
-              <Text style={styles.bottomBarSelectAll}>
-                {selected.size === filteredFiles.length ? '取消全选' : '全选'}
-              </Text>
-            </TouchableOpacity>
-          </View>
+        <View style={styles.bottomBarWrapper} pointerEvents="box-none">
+          <GlassView
+            border={true}
+            borderRadius={22}
+            style={styles.bottomBarContainer}
+          >
+            <View style={styles.bottomBarTop}>
+              <View style={styles.bottomBarCountBadge}>
+                <Text style={styles.bottomBarCount}>已选 {selected.size} 项</Text>
+              </View>
+              <View style={styles.bottomBarTopActions}>
+                <TouchableOpacity
+                  onPress={toggleSelectAll}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.bottomBarSelectAll}>
+                    {selected.size === filteredFiles.length ? '取消全选' : '全选'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={exitMultiSelect}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  activeOpacity={0.7}
+                  style={styles.bottomBarExitBtn}
+                >
+                  <Text style={styles.bottomBarExitText}>退出</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
 
-          <View style={styles.bottomBarBtns}>
-            <TouchableOpacity style={styles.bottomBarBtn} onPress={handleBatchDownload}>
-              <Download color={colors.accent} size={22} />
-              <Text style={styles.bottomBarBtnText}>下载</Text>
-            </TouchableOpacity>
+            <View style={styles.bottomBarDivider} />
 
-            <TouchableOpacity style={styles.bottomBarBtn} onPress={handleBatchDelete}>
-              <Trash2 color={colors.red} size={22} />
-              <Text style={[styles.bottomBarBtnText, { color: colors.red }]}>删除</Text>
-            </TouchableOpacity>
+            <View style={styles.bottomBarBtns}>
+              <TouchableOpacity style={styles.bottomBarBtn} onPress={handleBatchDownload} activeOpacity={0.7}>
+                <Download color={colors.accent} size={20} />
+                <Text style={styles.bottomBarBtnText}>下载</Text>
+              </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.bottomBarBtn}
-              onPress={() => openPicker('move', fileList.filter(f => selected.has(f.path)))}
-            >
-              <MoveRight color={colors.accent} size={22} />
-              <Text style={styles.bottomBarBtnText}>移动</Text>
-            </TouchableOpacity>
+              <TouchableOpacity style={styles.bottomBarBtn} onPress={handleBatchDelete} activeOpacity={0.7}>
+                <Trash2 color={colors.red} size={20} />
+                <Text style={[styles.bottomBarBtnText, { color: colors.red }]}>删除</Text>
+              </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.bottomBarBtn}
-              onPress={() => openPicker('copy', fileList.filter(f => selected.has(f.path)))}
-            >
-              <Copy color={colors.accent} size={22} />
-              <Text style={styles.bottomBarBtnText}>复制</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.bottomBarBtn}
-              onPress={handleBatchCompress}
-            >
-              <Archive color={colors.green} size={22} />
-              <Text style={[styles.bottomBarBtnText, { color: colors.green }]}>压缩</Text>
-            </TouchableOpacity>
-
-            {selected.size === 1 && (
               <TouchableOpacity
                 style={styles.bottomBarBtn}
-                onPress={() => {
-                  const target = fileList.find(f => selected.has(f.path));
-                  exitMultiSelect();
-                  setDetailItem(target);
-                }}
+                onPress={() => openPicker('move', fileList.filter(f => selected.has(f.path)))}
+                activeOpacity={0.7}
               >
-                <Info color={colors.amber} size={22} />
-                <Text style={styles.bottomBarBtnText}>详情</Text>
+                <MoveRight color={colors.accent} size={20} />
+                <Text style={styles.bottomBarBtnText}>移动</Text>
               </TouchableOpacity>
-            )}
-          </View>
+
+              <TouchableOpacity
+                style={styles.bottomBarBtn}
+                onPress={() => openPicker('copy', fileList.filter(f => selected.has(f.path)))}
+                activeOpacity={0.7}
+              >
+                <Copy color={colors.accent} size={20} />
+                <Text style={styles.bottomBarBtnText}>复制</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.bottomBarBtn}
+                onPress={handleBatchCompress}
+                activeOpacity={0.7}
+              >
+                <Archive color={colors.green} size={20} />
+                <Text style={[styles.bottomBarBtnText, { color: colors.green }]}>压缩</Text>
+              </TouchableOpacity>
+
+              {selected.size === 1 && (
+                <TouchableOpacity
+                  style={styles.bottomBarBtn}
+                  onPress={() => {
+                    const target = fileList.find(f => selected.has(f.path));
+                    exitMultiSelect();
+                    setDetailItem(target);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Info color={colors.amber} size={20} />
+                  <Text style={styles.bottomBarBtnText}>详情</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </GlassView>
         </View>
       )}
 
@@ -3154,14 +3182,89 @@ const createStyles = (colors, isDark) => StyleSheet.create({
   fileSize: { color: colors.sub, fontSize: 12 },
   fileDate: { color: colors.muted, fontSize: 11 },
 
-  // Bottom action bar
-  bottomBar: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.divider, paddingTop: 8, paddingBottom: Platform.OS === 'ios' ? 24 : 12, paddingHorizontal: 12, elevation: 8 },
-  bottomBarTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4, marginBottom: 8 },
-  bottomBarCount: { color: colors.text, fontSize: 13, fontWeight: 'bold' },
-  bottomBarSelectAll: { color: colors.accent, fontSize: 14, fontWeight: 'bold' },
-  bottomBarBtns: { flexDirection: 'row', justifyContent: 'space-around' },
-  bottomBarBtn: { alignItems: 'center', paddingVertical: 6, paddingHorizontal: 12 },
-  bottomBarBtnText: { color: colors.text, fontSize: 12, marginTop: 4, fontWeight: 'bold' },
+  // Floating bottom action bar (positioned cleanly above CustomFloatingTabBar)
+  bottomBarWrapper: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    bottom: Platform.OS === 'ios' ? 96 : 86,
+    zIndex: 95,
+    alignItems: 'center',
+  },
+  bottomBarContainer: {
+    width: '100%',
+    borderRadius: 22,
+    paddingTop: 8,
+    paddingBottom: 8,
+    paddingHorizontal: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: isDark ? 0.35 : 0.15,
+    shadowRadius: 14,
+    elevation: 10,
+    backgroundColor: isDark ? 'rgba(30, 41, 59, 0.94)' : 'rgba(255, 255, 255, 0.95)',
+  },
+  bottomBarTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+  },
+  bottomBarCountBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+    backgroundColor: isDark ? 'rgba(56, 189, 248, 0.15)' : 'rgba(14, 165, 233, 0.12)',
+  },
+  bottomBarCount: {
+    color: colors.accent,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  bottomBarTopActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  bottomBarSelectAll: {
+    color: colors.accent,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  bottomBarExitBtn: {
+    marginLeft: 14,
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+  },
+  bottomBarExitText: {
+    color: colors.muted,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  bottomBarDivider: {
+    height: 1,
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+    marginVertical: 4,
+  },
+  bottomBarBtns: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingTop: 2,
+  },
+  bottomBarBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    minWidth: 44,
+  },
+  bottomBarBtnText: {
+    color: colors.textStrong,
+    fontSize: 11,
+    marginTop: 3,
+    fontWeight: '600',
+  },
 
   // Overlays & Dialogs
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'flex-end' },
