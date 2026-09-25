@@ -32,8 +32,9 @@ export default function GlassView({
   // 全局统一模糊强度：优先传入值，其次全局标准 65
   const effectiveIntensity = intensity ?? glassTokens.intensity ?? 65;
 
-  // 提取传入 style 中的圆角与边框配置
+  // 提取传入 style 中的圆角与边框配置，剥离外层 backgroundColor 避免盖死 BlurView 模糊层
   const flattenedStyle = StyleSheet.flatten(style) || {};
+  const { backgroundColor: _ignoredBg, ...cleanStyle } = flattenedStyle;
   const effectiveRadius = borderRadius ?? flattenedStyle.borderRadius ?? 0;
   const effectiveBorderColor = borderColor || glassTokens.border || (isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(226, 232, 240, 0.85)');
 
@@ -47,7 +48,7 @@ export default function GlassView({
       borderWidth: StyleSheet.hairlineWidth || 1,
       borderColor: effectiveBorderColor,
     },
-    style,
+    cleanStyle,
   ];
 
   // 全局统一色相与透明度（默认 0.78 严谨对齐）

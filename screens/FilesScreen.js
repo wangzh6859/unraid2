@@ -3201,8 +3201,8 @@ const createStyles = (colors, isDark) => StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: isDark ? 0.35 : 0.15,
     shadowRadius: 14,
-    elevation: 10,
-    backgroundColor: isDark ? 'rgba(30, 41, 59, 0.94)' : 'rgba(255, 255, 255, 0.95)',
+    elevation: 8,
+    overflow: 'hidden',
   },
   bottomBarTop: {
     flexDirection: 'row',
